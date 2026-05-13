@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+venv/
+env/
+.venv/
+painel.db
+*.db-wal
+*.db-shm
+backups/
+*.tar.gz
+*.log
+.DS_Store
+*.pyc
+instance/

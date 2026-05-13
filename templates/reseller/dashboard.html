@@ -1,0 +1,81 @@
+{% extends 'base.html' %}
+{% block title %}Dashboard — {{ panel_name }}{% endblock %}
+{% block page_title %}<i class="fas fa-tachometer-alt me-2"></i>Dashboard{% endblock %}
+
+{% block content %}
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="card stat-card h-100" style="border-left:4px solid var(--accent)">
+      <div class="card-body">
+        <div class="fs-3 fw-bold">{{ stats.total_ssh }}</div>
+        <small class="text-muted">Meus Usuários</small>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card stat-card h-100" style="border-left:4px solid #198754">
+      <div class="card-body">
+        <div class="fs-3 fw-bold">{{ stats.total_resellers }}</div>
+        <small class="text-muted">Minhas Revendas</small>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card stat-card h-100" style="border-left:4px solid {{ 'dc3545' if stats.days_panel <= 3 else ('ffc107' if stats.days_panel <= 7 else '0dcaf0') }}">
+      <div class="card-body">
+        <div class="fs-3 fw-bold {{ 'text-danger' if stats.days_panel <= 3 else ('text-warning' if stats.days_panel <= 7 else '') }}">{{ stats.days_panel }}d</div>
+        <small class="text-muted">Painel vence em</small>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card stat-card h-100" style="border-left:4px solid #6f42c1">
+      <div class="card-body">
+        <div class="fs-3 fw-bold">{{ stats.accounts_used }}/{{ stats.account_limit }}</div>
+        <small class="text-muted">Contas usadas</small>
+        <div class="progress progress-sm mt-2">
+          <div class="progress-bar bg-primary" style="width:{{ ((stats.accounts_used/stats.account_limit)*100)|int if stats.account_limit > 0 else 0 }}%"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-md-6">
+    <div class="card">
+      <div class="card-header fw-semibold"><i class="fas fa-bolt me-2 text-warning"></i>Ações rápidas</div>
+      <div class="card-body d-grid gap-2">
+        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createUserModal">
+          <i class="fas fa-user-plus me-2"></i>Criar Usuário SSH
+        </button>
+        <button class="btn btn-warning text-dark" data-bs-toggle="modal" data-bs-target="#createTestModal">
+          <i class="fas fa-clock me-2"></i>Criar Teste
+        </button>
+        <a href="{{ url_for('resellers_list') }}" class="btn btn-outline-success">
+          <i class="fas fa-user-plus me-2"></i>Gerenciar Revendas
+        </a>
+      </div>
+    </div>
+  </div>
+
+  {% if expiring %}
+  <div class="col-md-6">
+    <div class="card">
+      <div class="card-header fw-semibold"><i class="fas fa-exclamation-triangle me-2 text-danger"></i>Vencendo em breve</div>
+      <div class="list-group list-group-flush">
+        {% for u in expiring[:5] %}
+        {% set d = days_until(u.expires_at) %}
+        <div class="list-group-item d-flex justify-content-between align-items-center">
+          <span>{{ u.username }}</span>
+          <span class="badge {{ 'bg-danger' if d <= 0 else ('bg-warning text-dark' if d <= 3 else 'bg-secondary') }}">{{ d }}d</span>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+{% include 'shared/_create_user_modals.html' %}
+{% endblock %}

@@ -1,0 +1,246 @@
+{% extends 'base.html' %}
+{% block title %}Servidores — {{ panel_name }}{% endblock %}
+{% block page_title %}<i class="fas fa-server me-2"></i>Servidores SSH{% endblock %}
+
+{% block content %}
+<div class="d-flex gap-2 mb-3">
+  <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addServerModal">
+    <i class="fas fa-plus me-2"></i>Adicionar Servidor
+  </button>
+</div>
+
+<div class="row g-3" id="serverCards">
+  {% for srv in servers %}
+  <div class="col-md-6 col-lg-4" id="scard_{{ srv.id }}">
+    <div class="card h-100">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong><i class="fas fa-server me-2 text-primary"></i>{{ srv.name }}</strong>
+        <span class="badge {{ 'bg-success' if srv.status == 'active' else 'bg-danger' }}">{{ srv.status }}</span>
+      </div>
+      <div class="card-body">
+        <div class="mb-2">
+          <small class="text-muted">IP:</small> <code>{{ srv.ip }}:{{ srv.module_port }}</code>
+        </div>
+        <div class="mb-3">
+          <small class="text-muted">Token:</small> <code class="small">{{ srv.auth_token[:12] }}…</code>
+        </div>
+
+        <!-- Real-time stats -->
+        <div class="mb-2">
+          <div class="d-flex justify-content-between small mb-1">
+            <span>CPU</span>
+            <span id="cpu_{{ srv.id }}">—</span>
+          </div>
+          <div class="progress progress-sm mb-2">
+            <div class="progress-bar bg-info" id="cpubar_{{ srv.id }}" style="width:0%"></div>
+          </div>
+          <div class="d-flex justify-content-between small mb-1">
+            <span>RAM</span>
+            <span id="mem_{{ srv.id }}">—</span>
+          </div>
+          <div class="progress progress-sm">
+            <div class="progress-bar bg-warning" id="membar_{{ srv.id }}" style="width:0%"></div>
+          </div>
+        </div>
+      </div>
+      <div class="card-footer d-flex flex-wrap gap-1">
+        <button class="btn btn-sm btn-outline-primary" onclick="installModules({{ srv.id }})">
+          <i class="fas fa-upload me-1"></i>Instalar Módulos
+        </button>
+        <button class="btn btn-sm btn-outline-success" onclick="syncServer({{ srv.id }})">
+          <i class="fas fa-sync me-1"></i>Sincronizar
+        </button>
+        <button class="btn btn-sm btn-outline-warning text-warning" data-bs-toggle="modal" data-bs-target="#cmdModal_{{ srv.id }}">
+          <i class="fas fa-terminal me-1"></i>Comando
+        </button>
+        <button class="btn btn-sm btn-outline-danger" onclick="deleteServer({{ srv.id }}, '{{ srv.name }}')">
+          <i class="fas fa-trash"></i>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Command modal for this server -->
+  <div class="modal fade" id="cmdModal_{{ srv.id }}" tabindex="-1">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h6 class="modal-title"><i class="fas fa-terminal me-2"></i>Comando — {{ srv.name }}</h6>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label">Comando predefinido</label>
+            <select id="preset_{{ srv.id }}" class="form-select" onchange="setPreset({{ srv.id }})">
+              <option value="">Selecione...</option>
+              <option value="iptables -F">iptables -F (limpar firewall)</option>
+              <option value="reboot">reboot</option>
+              <option value="systemctl restart xray">restart xray</option>
+              <option value="systemctl restart v2ray">restart v2ray</option>
+              <option value="df -h">df -h (disco)</option>
+              <option value="free -m">free -m (memória)</option>
+              <option value="uptime">uptime</option>
+              <option value="who">who (usuários online)</option>
+              <option value="netstat -tlnp">netstat (portas)</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Ou comando manual</label>
+            <input type="text" id="cmd_{{ srv.id }}" class="form-control font-monospace" placeholder="comando...">
+          </div>
+          <div id="cmdOut_{{ srv.id }}" class="mt-2" style="display:none">
+            <pre class="p-2 rounded small" style="background:rgba(0,0,0,.3);max-height:200px;overflow:auto" id="cmdOutPre_{{ srv.id }}"></pre>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-warning text-dark" onclick="runCommand({{ srv.id }})">
+            <i class="fas fa-play me-2"></i>Executar
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <div class="col-12">
+    <div class="text-center text-muted py-5">
+      <i class="fas fa-server fa-3x mb-3 opacity-25"></i>
+      <p>Nenhum servidor configurado. Adicione um servidor para começar.</p>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- Add Server Modal -->
+<div class="modal fade" id="addServerModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fas fa-plus me-2"></i>Adicionar Servidor</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Nome</label>
+            <input type="text" id="as_name" class="form-control" placeholder="Servidor SP">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">IP</label>
+            <input type="text" id="as_ip" class="form-control" placeholder="192.168.1.100">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Porta do módulo</label>
+            <input type="number" id="as_port" class="form-control" value="6969">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Usuário root</label>
+            <input type="text" id="as_user" class="form-control" value="root">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Senha root (SSH)</label>
+            <input type="password" id="as_pass" class="form-control" placeholder="Para instalar módulos">
+          </div>
+          <div class="col-12">
+            <label class="form-label">Token de autenticação</label>
+            <div class="input-group">
+              <input type="text" id="as_token" class="form-control font-monospace" placeholder="Token gerado automaticamente">
+              <button class="btn btn-outline-secondary" onclick="genToken()"><i class="fas fa-random"></i></button>
+            </div>
+            <small class="text-muted">Este token será configurado no modulo.py do servidor.</small>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" class="btn btn-primary" onclick="submitAddServer()">
+          <i class="fas fa-plus me-2"></i>Adicionar
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Generate random token on load
+function genToken() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let token = '';
+  for (let i = 0; i < 24; i++) token += chars[Math.floor(Math.random()*chars.length)];
+  document.getElementById('as_token').value = token;
+}
+genToken();
+
+function submitAddServer() {
+  apiPost('/servers/add', {
+    name: document.getElementById('as_name').value,
+    ip: document.getElementById('as_ip').value,
+    module_port: document.getElementById('as_port').value,
+    root_user: document.getElementById('as_user').value,
+    root_password: document.getElementById('as_pass').value,
+    auth_token: document.getElementById('as_token').value,
+  }, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (d.success) setTimeout(() => location.reload(), 800);
+  });
+}
+
+function deleteServer(id, name) {
+  if (!confirm(`Remover servidor "${name}"?`)) return;
+  apiPost(`/servers/delete/${id}`, {}, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (d.success) document.getElementById('scard_' + id)?.remove();
+  });
+}
+
+function installModules(id) {
+  if (!confirm('Instalar/atualizar módulos no servidor? Isso usará SSH para enviar os arquivos.')) return;
+  showToast('Instalando módulos...', 'info');
+  apiPost(`/servers/install_modules/${id}`, {}, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+  });
+}
+
+function syncServer(id) {
+  if (!confirm('Sincronizar todos os usuários ativos com este servidor?')) return;
+  showToast('Sincronizando...', 'info');
+  apiPost(`/servers/sync/${id}`, {}, d => {
+    showToast(`${d.message} (${d.users_count || 0} usuários)`, d.success ? 'success' : 'danger');
+  });
+}
+
+function setPreset(id) {
+  const val = document.getElementById('preset_' + id).value;
+  if (val) document.getElementById('cmd_' + id).value = val;
+}
+
+function runCommand(id) {
+  const cmd = document.getElementById('cmd_' + id).value.trim();
+  if (!cmd) return;
+  apiPost(`/servers/command/${id}`, {command: cmd}, d => {
+    const outDiv = document.getElementById('cmdOut_' + id);
+    const outPre = document.getElementById('cmdOutPre_' + id);
+    outDiv.style.display = 'block';
+    outPre.textContent = d.output || d.message || 'Sem output';
+  });
+}
+
+// SSE stats for each server
+{% for srv in servers %}
+(function() {
+  const sid = {{ srv.id }};
+  const es = new EventSource(`/servers/stats/${sid}`);
+  es.onmessage = function(e) {
+    const d = JSON.parse(e.data);
+    if (d.error) return;
+    document.getElementById(`cpu_${sid}`).textContent = d.cpu.toFixed(1) + '%';
+    document.getElementById(`cpubar_${sid}`).style.width = d.cpu + '%';
+    if (d.mem_total > 0) {
+      const pct = ((d.mem_used/d.mem_total)*100).toFixed(1);
+      document.getElementById(`mem_${sid}`).textContent = `${d.mem_used}/${d.mem_total} MB (${pct}%)`;
+      document.getElementById(`membar_${sid}`).style.width = pct + '%';
+    }
+  };
+})();
+{% endfor %}
+</script>
+{% endblock %}

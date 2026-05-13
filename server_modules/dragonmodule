@@ -1,0 +1,257 @@
+#!/bin/bash
+# dragonmodule — SSH/V2Ray user management for Painel Master
+export PATH=$PATH:/usr/sbin
+
+get_config_file() {
+    if [ -f /usr/local/etc/xray/config.json ]; then
+        echo "/usr/local/etc/xray/config.json"
+    elif [ -f /etc/v2ray/config.json ]; then
+        echo "/etc/v2ray/config.json"
+    else
+        echo "/usr/local/etc/xray/config.json"
+    fi
+}
+
+createssh(){
+    username=$1
+    password=$2
+    dias=$3
+    sshlimiter=$4
+    removessh $username 2>/dev/null
+    dias=$(($dias+1))
+    final=$(date "+%Y-%m-%d" -d "+$dias days")
+    pass=$(perl -e 'print crypt($ARGV[0], "password")' $password)
+    useradd -e $final -M -s /bin/false -p $pass $username
+    echo "$password" > /etc/SSHPlus/senha/$username
+    grep -v "^$username " /root/usuarios.db > /tmp/ph 2>/dev/null
+    echo "$username $sshlimiter" >> /root/usuarios.db
+    echo "CRIADOCOMSUCESSO"
+}
+
+createsshteste(){
+    folder_path="/etc/DragonPanel"
+    pass=$(perl -e 'print crypt($ARGV[0], "password")' "$2")
+    final=$(date "+%Y-%m-%d" -d "+2 days")
+    useradd -e "$final" -M -s /bin/false -p "$pass" "$1"
+    username="$1"
+
+    generate_random_string() {
+        local length="$1"
+        local chars="0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+        echo $(head /dev/urandom | tr -dc "$chars" | head -c "$length")
+    }
+
+    random_string=$(generate_random_string 10)
+    password="$2"
+    dias="$3"
+    sshlimiter="$4"
+
+    script_path="$folder_path/${random_string}_${username}.sh"
+    [ ! -d "$folder_path" ] && mkdir -p "$folder_path"
+
+    cat > "$script_path" << SCRIPT
+#!/bin/bash
+usermod -p \$(openssl passwd -1 'poneicavao2930') $username
+pkill -u "$username" 2>/dev/null
+userdel --force "$username" 2>/dev/null
+grep -v "^$username " /root/usuarios.db > /tmp/ph 2>/dev/null; cat /tmp/ph > /root/usuarios.db
+rm -f /etc/SSHPlus/senha/$username
+rm -f "$script_path"
+SCRIPT
+
+    chmod +x "$script_path"
+    nohup bash -c "sleep $(($dias * 60)) && $script_path" > /dev/null 2>&1 &
+    echo "CRIADOCOMSUCESSO"
+}
+
+createv2teste(){
+    folder_path="/etc/DragonPanel"
+    pass=$(perl -e 'print crypt($ARGV[0], "password")' "$3")
+    final=$(date "+%Y-%m-%d" -d "+2 days")
+    useradd -e "$final" -M -s /bin/false -p "$pass" "$2"
+    username="$2"
+    uuid="$1"
+
+    generate_random_string() {
+        local length="$1"
+        local chars="0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+        echo $(head /dev/urandom | tr -dc "$chars" | head -c "$length")
+    }
+
+    random_string=$(generate_random_string 10)
+    password="$3"
+    dias="$4"
+    sshlimiter="$5"
+
+    script_path="$folder_path/${random_string}_${username}.sh"
+    [ ! -d "$folder_path" ] && mkdir -p "$folder_path"
+
+    cat > "$script_path" << SCRIPT
+#!/bin/bash
+/root/dragonmodule v2raydel $uuid
+usermod -p \$(openssl passwd -1 'poneicavao2930') $username
+pkill -u "$username" 2>/dev/null
+userdel --force "$username" 2>/dev/null
+grep -v "^$username " /root/usuarios.db > /tmp/ph 2>/dev/null; cat /tmp/ph > /root/usuarios.db
+rm -f /etc/SSHPlus/senha/$username
+rm -f "$script_path"
+SCRIPT
+
+    chmod +x "$script_path"
+    nohup bash -c "sleep $(($dias * 60)) && $script_path" > /dev/null 2>&1 &
+    echo "CRIADOCOMSUCESSO"
+}
+
+removessh(){
+    USR_EX=$1
+    _getUserEx() {
+        grep "^$1:x:" /etc/passwd | cut -d ':' -f 1 | wc -c | tr -dc '0-9'
+    }
+    if [ -z "${USR_EX}" ]; then
+        echo "Especifique um usuario."
+    elif [ "$USR_EX" = "root" ]; then
+        echo "Operacao nao permitida no root."
+    else
+        USER_COUNT=$(_getUserEx $USR_EX)
+        if [ "$USER_COUNT" -gt 0 ]; then
+            usermod -p $(openssl passwd -1 'poneicavao2930') $USR_EX 2>/dev/null
+            pkill -u $USR_EX 2>/dev/null || true
+            userdel $USR_EX 2>/dev/null
+            grep -v "^$USR_EX " /root/usuarios.db > /tmp/ph 2>/dev/null
+            cat /tmp/ph > /root/usuarios.db
+            rm -f /etc/SSHPlus/senha/$USR_EX
+            rm -f /etc/usuarios/$USR_EX
+        fi
+        echo "REMOVIDOCOMSUCESSO"
+    fi
+}
+
+timedata(){
+    usuario=$1
+    dias=$2
+    finaldate=$(date "+%Y-%m-%d" -d "+$dias days")
+    chage -E $finaldate $usuario
+    echo "RENOVADOCOMSUCESSO"
+}
+
+v2rayadd() {
+    uuid="$1"
+    ssh_user="$2"
+    senha="$3"
+    validade="$4"
+    limite="$5"
+    email="$ssh_user"
+
+    config_files=(
+        "/usr/local/etc/xray/config.json"
+        "/etc/v2ray/config.json"
+    )
+
+    for config_file in "${config_files[@]}"; do
+        [ -f "$config_file" ] || continue
+
+        if ! jq -e '.inbounds[]? | select(.protocol=="vless")' "$config_file" > /dev/null 2>&1; then
+            continue
+        fi
+
+        if jq -e --arg id "$uuid" --arg email "$email" '
+            .inbounds[]? | select(.protocol=="vless")
+            | .settings.clients[]? | select(.id==$id or .email==$email)
+        ' "$config_file" > /dev/null 2>&1; then
+            echo "UUID ou email ja existe"
+            continue
+        fi
+
+        tmp="${config_file}.tmp"
+        jq --arg id "$uuid" --arg email "$email" '
+            .inbounds = (.inbounds | map(
+                if .protocol == "vless" then
+                    .settings.clients = ((.settings.clients // []) + [{id:$id, alterId:0, email:$email}])
+                else . end
+            ))
+        ' "$config_file" > "$tmp" && mv "$tmp" "$config_file"
+    done
+
+    systemctl restart xray 2>/dev/null || true
+    systemctl restart v2ray 2>/dev/null || true
+
+    echo "1"
+    createssh "$ssh_user" "$senha" "$validade" "$limite"
+}
+
+v2rayaddteste() {
+    uuid="$1"
+    email="$2"
+    senha="$3"
+    validade="$4"
+    limite="$5"
+    config_file=$(get_config_file)
+
+    [ -f "$config_file" ] || { echo "Config nao encontrada"; return 1; }
+
+    inbound_index=$(jq -r '.inbounds | to_entries[] | select(.value.protocol == "vless") | .key' "$config_file" 2>/dev/null | head -1)
+    if [ -z "$inbound_index" ]; then
+        echo "Sem inbound VLESS"
+        return 1
+    fi
+
+    if jq -e ".inbounds[$inbound_index].settings.clients[]? | select(.id == \"$uuid\")" "$config_file" > /dev/null 2>&1; then
+        echo "2"
+    else
+        jq --arg id "$uuid" --arg email "$email" \
+            ".inbounds[$inbound_index].settings.clients += [{id: \$id, alterId: 0, email: \$email}]" \
+            "$config_file" > "${config_file}.tmp" && mv "${config_file}.tmp" "$config_file"
+        systemctl restart xray 2>/dev/null || true
+        echo "1"
+        createv2teste "$uuid" "$email" "$senha" "$validade" "$limite"
+    fi
+}
+
+v2raydel() {
+    uuidel="$1"
+    login="$2"
+
+    config_files=(
+        "/usr/local/etc/xray/config.json"
+        "/etc/v2ray/config.json"
+    )
+
+    found=0
+    for config_file in "${config_files[@]}"; do
+        [ -f "$config_file" ] || continue
+
+        if jq -e --arg id "$uuidel" '
+            .inbounds[]? | select(.protocol=="vless")
+            | .settings.clients[]? | select(.id==$id)
+        ' "$config_file" > /dev/null 2>&1; then
+
+            tmp="${config_file}.tmp"
+            jq --arg id "$uuidel" '
+                .inbounds = (.inbounds | map(
+                    if .protocol == "vless" then
+                        .settings.clients = ((.settings.clients // []) | map(select(.id != $id)))
+                    else . end
+                ))
+            ' "$config_file" > "$tmp" && mv "$tmp" "$config_file"
+            found=1
+        fi
+    done
+
+    if [ "$found" -eq 1 ]; then
+        systemctl restart xray 2>/dev/null || true
+        systemctl restart v2ray 2>/dev/null || true
+    fi
+
+    removessh "$login"
+}
+
+case "$1" in
+    createssh)       shift; createssh "$@" ;;
+    createsshteste)  shift; createsshteste "$@" ;;
+    removessh)       shift; removessh "$@" ;;
+    timedata)        shift; timedata "$@" ;;
+    v2rayadd)        shift; v2rayadd "$@" ;;
+    v2rayaddteste)   shift; v2rayaddteste "$@" ;;
+    v2raydel)        shift; v2raydel "$@" ;;
+    *) echo "Uso: $0 {createssh|createsshteste|removessh|timedata|v2rayadd|v2rayaddteste|v2raydel} [args]" ;;
+esac

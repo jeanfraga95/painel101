@@ -1,0 +1,92 @@
+{% extends 'base.html' %}
+{% block title %}Configurações — {{ panel_name }}{% endblock %}
+{% block page_title %}<i class="fas fa-cog me-2"></i>Configurações{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <div class="col-md-7">
+    <div class="card">
+      <div class="card-header fw-semibold"><i class="fas fa-paint-brush me-2"></i>Aparência do Painel</div>
+      <div class="card-body">
+        <form method="POST">
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Nome do Painel</label>
+            <input type="text" name="panel_name" class="form-control" value="{{ settings.panel_name }}">
+          </div>
+          <div class="row mb-3">
+            <div class="col-6">
+              <label class="form-label fw-semibold">Cor de destaque</label>
+              <div class="input-group">
+                <span class="input-group-text p-1">
+                  <input type="color" name="panel_color" class="form-control form-control-color border-0"
+                         value="{{ settings.panel_color }}" style="width:40px;height:34px;">
+                </span>
+                <input type="text" class="form-control" id="colorHex" value="{{ settings.panel_color }}"
+                       oninput="document.querySelector('[name=panel_color]').value=this.value">
+              </div>
+            </div>
+            <div class="col-6">
+              <label class="form-label fw-semibold">Tema</label>
+              <select name="panel_theme" class="form-select">
+                <option value="dark" {{ 'selected' if settings.panel_theme == 'dark' }}>Escuro</option>
+                <option value="light" {{ 'selected' if settings.panel_theme == 'light' }}>Claro</option>
+              </select>
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Link do Aplicativo VPN</label>
+            <input type="text" name="app_link" class="form-control"
+                   value="{{ settings.app_link }}"
+                   placeholder="https://play.google.com/...">
+            <small class="text-muted">Exibido após criar usuário/teste</small>
+          </div>
+          <div class="mb-4">
+            <label class="form-label fw-semibold">URL do CheckUser</label>
+            <input type="text" name="checkuser_url" class="form-control"
+                   value="{{ settings.checkuser_url }}"
+                   placeholder="https://exemplo.com/checkuser">
+            <small class="text-muted">
+              Endpoint compatível com DTunnel: <code>{{ request.host_url }}checkuser/{username}</code>
+            </small>
+          </div>
+          <button type="submit" class="btn btn-primary px-4">
+            <i class="fas fa-save me-2"></i>Salvar Configurações
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-5">
+    <div class="card mb-3">
+      <div class="card-header fw-semibold"><i class="fas fa-info-circle me-2"></i>Informações do Sistema</div>
+      <div class="card-body">
+        <table class="table table-sm mb-0">
+          <tr><td class="text-muted">Versão</td><td>Painel Master v1.0</td></tr>
+          <tr><td class="text-muted">CheckUser URL</td>
+            <td><code class="small">{{ request.host_url }}checkuser/&lt;user&gt;</code></td>
+          </tr>
+          <tr><td class="text-muted">Login usuário</td>
+            <td><a href="{{ url_for('user_login') }}" target="_blank">{{ url_for('user_login', _external=True) }}</a></td>
+          </tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header fw-semibold"><i class="fas fa-tools me-2"></i>CheckUser — Instalação</div>
+      <div class="card-body">
+        <p class="text-muted small">Para instalar o CheckUser em um servidor SSH, execute:</p>
+        <pre class="p-2 rounded small" style="background:rgba(0,0,0,.3)">bash &lt;(curl -sSL https://raw.githubusercontent.com/jeanfraga33/painel-master/main/server_modules/checkuser_install.sh)</pre>
+        <p class="text-muted small mt-2">Após instalado, configure a URL no campo acima.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+document.querySelector('[name=panel_color]').addEventListener('input', function() {
+  document.getElementById('colorHex').value = this.value;
+});
+</script>
+{% endblock %}

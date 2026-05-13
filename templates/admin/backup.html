@@ -1,0 +1,81 @@
+{% extends 'base.html' %}
+{% block title %}Backup — {{ panel_name }}{% endblock %}
+{% block page_title %}<i class="fas fa-database me-2"></i>Backup & Restauração{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <div class="col-md-6">
+    <div class="card">
+      <div class="card-header fw-semibold"><i class="fab fa-telegram me-2 text-info"></i>Backup automático (Telegram)</div>
+      <div class="card-body">
+        <form method="POST">
+          <input type="hidden" name="action" value="save_config">
+          <div class="mb-3">
+            <label class="form-label">Token do Bot</label>
+            <input type="text" name="bot_token" class="form-control font-monospace"
+                   value="{{ cfg.telegram_bot_token or '' }}"
+                   placeholder="123456:ABCDEFGHIJKLMNopqrstuvwxyz">
+            <small class="text-muted">Crie um bot no <a href="https://t.me/BotFather" target="_blank">@BotFather</a></small>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Chat ID</label>
+            <input type="text" name="chat_id" class="form-control font-monospace"
+                   value="{{ cfg.telegram_chat_id or '' }}"
+                   placeholder="-100123456789">
+            <small class="text-muted">Use <a href="https://t.me/userinfobot" target="_blank">@userinfobot</a> para obter seu ID</small>
+          </div>
+          <div class="mb-3 form-check form-switch">
+            <input class="form-check-input" type="checkbox" name="enabled" id="backupEnabled"
+                   {{ 'checked' if cfg.enabled }}>
+            <label class="form-check-label" for="backupEnabled">Backup automático a cada 6 horas</label>
+          </div>
+          {% if cfg.last_backup %}
+          <div class="alert alert-info py-2 small">
+            <i class="fas fa-check me-2"></i>Último backup: <strong>{{ cfg.last_backup }}</strong>
+          </div>
+          {% endif %}
+          <button type="submit" class="btn btn-primary">
+            <i class="fas fa-save me-2"></i>Salvar Configuração
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-6">
+    <div class="card mb-3">
+      <div class="card-header fw-semibold"><i class="fas fa-cloud-upload-alt me-2 text-success"></i>Fazer Backup Agora</div>
+      <div class="card-body">
+        <p class="text-muted small">Envia um backup completo do painel (banco de dados + configurações) para o Telegram configurado.</p>
+        <form method="POST">
+          <input type="hidden" name="action" value="backup_now">
+          <button type="submit" class="btn btn-success">
+            <i class="fas fa-cloud-upload-alt me-2"></i>Enviar Backup Agora
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header fw-semibold"><i class="fas fa-cloud-download-alt me-2 text-warning"></i>Restaurar Backup</div>
+      <div class="card-body">
+        <div class="alert alert-warning py-2 small">
+          <i class="fas fa-exclamation-triangle me-2"></i>
+          <strong>Atenção:</strong> A restauração irá substituir todos os dados atuais do painel. Esta ação não pode ser desfeita.
+        </div>
+        <form method="POST" enctype="multipart/form-data">
+          <input type="hidden" name="action" value="restore">
+          <div class="mb-3">
+            <label class="form-label">Arquivo de Backup (.tar.gz)</label>
+            <input type="file" name="backup_file" class="form-control" accept=".tar.gz,.gz" required>
+          </div>
+          <button type="submit" class="btn btn-warning text-dark"
+                  onclick="return confirm('Tem certeza? Os dados atuais serão substituídos.')">
+            <i class="fas fa-cloud-download-alt me-2"></i>Restaurar Backup
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

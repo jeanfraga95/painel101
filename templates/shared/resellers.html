@@ -1,0 +1,172 @@
+{% extends 'base.html' %}
+{% block title %}Revendas — {{ panel_name }}{% endblock %}
+{% block page_title %}<i class="fas fa-user-tie me-2"></i>Revendas{% endblock %}
+
+{% block content %}
+<div class="d-flex gap-2 mb-3">
+  <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createResellerModal">
+    <i class="fas fa-user-plus me-2"></i>Nova Revenda
+  </button>
+  <span class="badge bg-secondary align-self-center ms-auto">{{ resellers|length }} revenda(s)</span>
+</div>
+
+<div class="card">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0">
+        <thead class="table-secondary">
+          <tr>
+            <th>Usuário</th>
+            <th>Hierarquia</th>
+            <th>Validade</th>
+            <th>Dias</th>
+            <th>Limite contas</th>
+            <th>Usadas</th>
+            <th>Status</th>
+            <th class="text-end">Ações</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in resellers %}
+          {% set d = days_until(r.expires_at) if r.expires_at else 999 %}
+          <tr id="rrow_{{ r.id }}">
+            <td><i class="fas fa-user-tie me-1 text-muted"></i><strong>{{ r.username }}</strong></td>
+            <td>
+              {% if r.parent_id %}
+                <small class="text-muted">↳ {{ parent_map.get(r.id, '?') }}</small>
+              {% else %}
+                <span class="badge bg-secondary">raiz</span>
+              {% endif %}
+            </td>
+            <td>{{ r.expires_at[:10] if r.expires_at else '—' }}</td>
+            <td>
+              <span class="badge {{ 'bg-danger' if d <= 0 else ('bg-warning text-dark' if d <= 7 else 'bg-success') }}">
+                {{ d if d < 999 else '∞' }}d
+              </span>
+            </td>
+            <td>{{ r.account_limit }}</td>
+            <td>{{ r.accounts_used }}</td>
+            <td>
+              <span class="badge {{ 'bg-success' if r.status == 'active' else 'bg-danger' }}" id="rstatus_{{ r.id }}">
+                {{ r.status }}
+              </span>
+            </td>
+            <td class="text-end">
+              <div class="btn-group btn-group-sm">
+                {% if current_user.role == 'admin' %}
+                <button class="btn btn-outline-success" onclick="renewReseller({{ r.id }})" title="Renovar">
+                  <i class="fas fa-redo"></i>
+                </button>
+                {% endif %}
+                <button class="btn btn-outline-warning" onclick="suspendReseller({{ r.id }})" title="Suspender/Ativar">
+                  <i class="fas fa-ban"></i>
+                </button>
+                <button class="btn btn-outline-danger" onclick="deleteReseller({{ r.id }}, '{{ r.username }}')" title="Deletar">
+                  <i class="fas fa-trash"></i>
+                </button>
+              </div>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="8" class="text-center text-muted py-4">Nenhuma revenda encontrada.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Create Reseller Modal -->
+<div class="modal fade" id="createResellerModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fas fa-user-plus me-2"></i>Nova Revenda</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-3">
+          <div class="col-6">
+            <label class="form-label">Usuário</label>
+            <div class="input-group">
+              <input type="text" id="cr_username" class="form-control" placeholder="revenda1" required>
+              <button class="btn btn-outline-secondary" onclick="genResCreds()"><i class="fas fa-random"></i></button>
+            </div>
+          </div>
+          <div class="col-6">
+            <label class="form-label">Senha</label>
+            <input type="text" id="cr_password" class="form-control" placeholder="senha123" required>
+          </div>
+          <div class="col-6">
+            <label class="form-label">Validade (data)</label>
+            <input type="date" id="cr_expires" class="form-control" required>
+          </div>
+          <div class="col-6">
+            <label class="form-label">Limite de contas</label>
+            <input type="number" id="cr_limit" class="form-control" value="10" min="1">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" class="btn btn-primary" onclick="submitCreateReseller()">
+          <i class="fas fa-plus me-2"></i>Criar Revenda
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Set default expires date to 30 days from now
+document.getElementById('cr_expires').value = new Date(Date.now() + 30*86400000).toISOString().slice(0,10);
+
+function genResCreds() {
+  fetch('/api/random_credentials').then(r=>r.json()).then(d => {
+    document.getElementById('cr_username').value = 'rev_' + d.username.slice(3);
+    document.getElementById('cr_password').value = d.password;
+  });
+}
+
+function submitCreateReseller() {
+  apiPost('/resellers/create', {
+    username: document.getElementById('cr_username').value,
+    password: document.getElementById('cr_password').value,
+    expires_at: document.getElementById('cr_expires').value,
+    account_limit: document.getElementById('cr_limit').value,
+  }, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (d.success) setTimeout(() => location.reload(), 800);
+  });
+}
+
+function renewReseller(id) {
+  const days = prompt('Renovar painel da revenda por quantos dias?', '30');
+  if (!days) return;
+  apiPost(`/resellers/renew/${id}`, {days}, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (d.success) setTimeout(() => location.reload(), 800);
+  });
+}
+
+function suspendReseller(id) {
+  if (!confirm('Suspender/ativar esta revenda?')) return;
+  apiPost(`/resellers/suspend/${id}`, {}, d => {
+    showToast(d.message || 'OK', d.success ? 'success' : 'danger');
+    if (d.success) {
+      const el = document.getElementById('rstatus_' + id);
+      el.textContent = d.new_status;
+      el.className = 'badge ' + (d.new_status === 'active' ? 'bg-success' : 'bg-danger');
+    }
+  });
+}
+
+function deleteReseller(id, name) {
+  if (!confirm(`Deletar revenda "${name}"? Isso NÃO deleta os usuários SSH dela.`)) return;
+  apiPost(`/resellers/delete/${id}`, {}, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (d.success) document.getElementById('rrow_' + id)?.remove();
+  });
+}
+</script>
+{% endblock %}

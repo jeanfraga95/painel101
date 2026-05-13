@@ -1,0 +1,162 @@
+{% extends 'base.html' %}
+{% block title %}Usuários — {{ panel_name }}{% endblock %}
+{% block page_title %}<i class="fas fa-users me-2"></i>Usuários SSH{% endblock %}
+
+{% block content %}
+<!-- Filters bar -->
+<div class="card mb-3">
+  <div class="card-body py-2">
+    <form class="row g-2 align-items-end" method="GET">
+      <div class="col-md-4">
+        <input type="text" name="search" class="form-control form-control-sm" placeholder="🔍 Buscar usuário..." value="{{ search }}">
+      </div>
+      <div class="col-md-3">
+        <select name="sort" class="form-select form-select-sm">
+          <option value="expires_at" {{ 'selected' if sort=='expires_at' }}>Ordenar por vencimento</option>
+          <option value="username" {{ 'selected' if sort=='username' }}>Por nome</option>
+          <option value="connection_limit" {{ 'selected' if sort=='connection_limit' }}>Por limite</option>
+          <option value="created_at" {{ 'selected' if sort=='created_at' }}>Por criação</option>
+        </select>
+      </div>
+      <div class="col-md-3">
+        <select name="filter" class="form-select form-select-sm">
+          <option value="all" {{ 'selected' if filter_type=='all' }}>Todos</option>
+          <option value="expiring" {{ 'selected' if filter_type=='expiring' }}>Vencendo (7d)</option>
+          <option value="test" {{ 'selected' if filter_type=='test' }}>Testes</option>
+        </select>
+      </div>
+      <div class="col-auto">
+        <button class="btn btn-sm btn-primary"><i class="fas fa-filter me-1"></i>Filtrar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Action buttons -->
+<div class="d-flex gap-2 mb-3 flex-wrap">
+  <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createUserModal">
+    <i class="fas fa-user-plus me-2"></i>Novo Usuário
+  </button>
+  <button class="btn btn-warning text-dark" data-bs-toggle="modal" data-bs-target="#createTestModal">
+    <i class="fas fa-clock me-2"></i>Novo Teste
+  </button>
+  <span class="badge bg-secondary align-self-center ms-auto">{{ users|length }} usuário(s)</span>
+</div>
+
+<div class="card">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0">
+        <thead class="table-secondary">
+          <tr>
+            <th>Usuário</th>
+            <th>Vencimento</th>
+            <th>Dias</th>
+            <th>Limite</th>
+            <th>Servidor</th>
+            {% if current_user.role == 'admin' %}<th>Dono</th>{% endif %}
+            <th>Status</th>
+            <th class="text-end">Ações</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for u in users %}
+          {% set d = days_until(u.expires_at) %}
+          <tr id="row_{{ u.id }}">
+            <td>
+              <i class="fas fa-user me-1 text-muted"></i>
+              <strong>{{ u.username }}</strong>
+              {% if u.v2ray_uuid %}<span class="badge bg-info ms-1">v2ray</span>{% endif %}
+              {% if u.is_test %}<span class="badge bg-warning text-dark ms-1">teste</span>{% endif %}
+            </td>
+            <td>{{ u.expires_at[:10] }}</td>
+            <td>
+              <span class="badge {{ 'bg-danger' if d <= 0 else ('bg-warning text-dark' if d <= 3 else ('bg-secondary' if d <= 7 else 'bg-success')) }}">
+                {{ d }}d
+              </span>
+            </td>
+            <td>{{ u.connection_limit }}</td>
+            <td>
+              {% if u.server_id and u.server_id in server_map %}
+                <span class="badge bg-primary">{{ server_map[u.server_id].name }}</span>
+              {% else %}
+                <span class="text-muted">—</span>
+              {% endif %}
+            </td>
+            {% if current_user.role == 'admin' %}
+            <td><small>{{ owner_map.get(u.owner_id, '?') }}</small></td>
+            {% endif %}
+            <td>
+              <span class="badge {{ 'bg-success' if u.status == 'active' else 'bg-danger' }}" id="status_{{ u.id }}">
+                {{ u.status }}
+              </span>
+            </td>
+            <td class="text-end">
+              <div class="btn-group btn-group-sm">
+                <button class="btn btn-outline-success" onclick="renewUser({{ u.id }})" title="Renovar">
+                  <i class="fas fa-redo"></i>
+                </button>
+                <button class="btn btn-outline-warning" onclick="suspendUser({{ u.id }})" title="Suspender/Ativar">
+                  <i class="fas fa-ban"></i>
+                </button>
+                <button class="btn btn-outline-info" onclick="editUser({{ u.id }}, {{ u.connection_limit }})" title="Editar limite">
+                  <i class="fas fa-edit"></i>
+                </button>
+                <button class="btn btn-outline-danger" onclick="deleteUser({{ u.id }}, '{{ u.username }}')" title="Deletar">
+                  <i class="fas fa-trash"></i>
+                </button>
+              </div>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="8" class="text-center text-muted py-4">Nenhum usuário encontrado.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{% include 'shared/_create_user_modals.html' %}
+
+<script>
+function renewUser(id) {
+  const days = prompt('Renovar por quantos dias?', '30');
+  if (!days || isNaN(days)) return;
+  apiPost(`/users/renew/${id}`, {days}, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (d.success) setTimeout(() => location.reload(), 800);
+  });
+}
+
+function suspendUser(id) {
+  if (!confirm('Suspender/ativar este usuário?')) return;
+  apiPost(`/users/suspend/${id}`, {}, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (d.success) {
+      const el = document.getElementById('status_' + id);
+      el.textContent = d.new_status;
+      el.className = 'badge ' + (d.new_status === 'active' ? 'bg-success' : 'bg-danger');
+    }
+  });
+}
+
+function deleteUser(id, name) {
+  if (!confirm(`Deletar "${name}"? Isso também removerá do servidor SSH.`)) return;
+  apiPost(`/users/delete/${id}`, {}, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (d.success) document.getElementById('row_' + id)?.remove();
+  });
+}
+
+function editUser(id, currentLimit) {
+  const limit = prompt('Novo limite de conexões:', currentLimit);
+  if (!limit || isNaN(limit)) return;
+  // Simple update via dedicated endpoint
+  apiPost(`/users/update/${id}`, {connection_limit: limit}, d => {
+    showToast(d.message || 'Atualizado', d.success ? 'success' : 'danger');
+    if (d.success) setTimeout(() => location.reload(), 800);
+  });
+}
+</script>
+{% endblock %}
