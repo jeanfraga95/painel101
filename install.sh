@@ -11,7 +11,7 @@ BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 INSTALL_DIR="/opt/painel-master"
 SERVICE_NAME="painel-master"
-PANEL_PORT="${PANEL_PORT:-5000}"
+PANEL_PORT="${PANEL_PORT:-5052}"
 REPO_URL="https://github.com/jeanfraga33/painel-master"
 PYTHON_MIN="3.8"
 
