@@ -27,13 +27,20 @@ import server_comm as sc
 # App setup
 # ---------------------------------------------------------------------------
 
-app = Flask(__name__)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+app = Flask(
+    __name__,
+    template_folder=os.path.join(BASE_DIR, 'templates'),
+    static_folder=os.path.join(BASE_DIR, 'static'),
+)
 app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100 MB for restore
 
 TZ = pytz.timezone('America/Sao_Paulo')
 
 db.init_db()
+db.migrate_schema()
 
 # ---------------------------------------------------------------------------
 # Helpers / decorators
@@ -226,7 +233,7 @@ def users_list():
 @login_required
 def create_user():
     current_user = get_current_user()
-    servers = db.get_servers()
+    servers = db.get_servers_for_user(current_user)
 
     if request.method == 'POST':
         username = request.form.get('username', '').strip().lower()
@@ -247,6 +254,17 @@ def create_user():
             return jsonify(success=False, message='Username inválido')
 
         expires_at = (now_br() + timedelta(days=days)).strftime('%Y-%m-%d')
+
+        # Check if user already exists on the server
+        if server_id:
+            srv = db.get_server(server_id)
+            if srv:
+                chk_ok, chk_out = sc.send_command(
+                    srv['ip'], srv['module_port'], srv['auth_token'],
+                    f"id {username} 2>/dev/null && echo EXISTS || echo NOTFOUND"
+                )
+                if chk_ok and 'EXISTS' in chk_out:
+                    return jsonify(success=False, message=f'Usuário "{username}" já existe no servidor SSH. Escolha outro nome.')
 
         ok, msg, new_id = db.create_ssh_user(
             username, password, current_user['id'], server_id,
@@ -287,7 +305,7 @@ def create_user():
 @login_required
 def create_test():
     current_user = get_current_user()
-    servers = db.get_servers()
+    servers = db.get_servers_for_user(current_user)
 
     username = request.form.get('username', '').strip().lower()
     password = request.form.get('password', '').strip()
@@ -458,6 +476,7 @@ def suspend_user(user_id):
 @login_required
 def resellers_list():
     current_user = get_current_user()
+    all_servers = db.get_servers()
     if current_user['role'] == 'admin':
         resellers = db.get_resellers()
         parent_map = {}
@@ -473,8 +492,16 @@ def resellers_list():
                 p = db.get_panel_user(r['parent_id'])
                 parent_map[r['id']] = p['username'] if p else '-'
 
+    # Build server assignments map
+    server_assign_map = {}
+    for r in resellers:
+        server_assign_map[r['id']] = db.get_reseller_servers(r['id'])
+
     sort = request.args.get('sort', 'username')
-    return render_template('shared/resellers.html', resellers=resellers, parent_map=parent_map)
+    return render_template('shared/resellers.html',
+                           resellers=resellers, parent_map=parent_map,
+                           all_servers=all_servers,
+                           server_assign_map=server_assign_map)
 
 
 @app.route('/resellers/create', methods=['POST'])
@@ -498,7 +525,54 @@ def create_reseller():
     ok, msg, new_id = db.create_panel_user(
         username, password, 'reseller', current_user['id'], expires_at, account_limit
     )
+    if ok and new_id:
+        # Assign servers
+        server_ids_raw = request.form.get('server_ids', '')
+        if server_ids_raw:
+            sids = [int(x) for x in server_ids_raw.split(',') if x.strip().isdigit()]
+            db.set_reseller_servers(new_id, sids)
+        panel_url = request.host_url.rstrip('/')
+        app_link = db.get_setting('app_link', '')
+        return jsonify(success=True, message=msg, reseller={
+            'username': username,
+            'password': password,
+            'expires_at': expires_at,
+            'panel_url': panel_url,
+            'app_link': app_link,
+        })
     return jsonify(success=ok, message=msg)
+
+
+@app.route('/resellers/set_password/<int:reseller_id>', methods=['POST'])
+@login_required
+def set_reseller_password(reseller_id):
+    current_user = get_current_user()
+    r = db.get_panel_user(reseller_id)
+    if not r:
+        return jsonify(success=False, message='Revenda não encontrada')
+    if current_user['role'] != 'admin':
+        tree = db.get_all_resellers_under(current_user['id'])
+        if reseller_id not in [t['id'] for t in tree]:
+            return jsonify(success=False, message='Sem permissão')
+    new_pw = request.form.get('password', '').strip()
+    if len(new_pw) < 4:
+        return jsonify(success=False, message='Senha muito curta (mínimo 4 caracteres)')
+    db.update_panel_user(reseller_id,
+                         password_hash=db.hash_password(new_pw),
+                         password_plain=new_pw)
+    return jsonify(success=True, message='Senha alterada com sucesso')
+
+
+@app.route('/resellers/set_servers/<int:reseller_id>', methods=['POST'])
+@login_required
+def set_reseller_servers_route(reseller_id):
+    current_user = get_current_user()
+    if current_user['role'] != 'admin':
+        return jsonify(success=False, message='Apenas admin pode atribuir servidores')
+    server_ids_raw = request.form.get('server_ids', '')
+    sids = [int(x) for x in server_ids_raw.split(',') if x.strip().isdigit()]
+    db.set_reseller_servers(reseller_id, sids)
+    return jsonify(success=True, message=f'{len(sids)} servidor(es) atribuído(s)')
 
 
 @app.route('/resellers/delete/<int:reseller_id>', methods=['POST'])
@@ -573,7 +647,7 @@ def servers_list():
 def add_server():
     name = request.form.get('name', '').strip()
     ip = request.form.get('ip', '').strip()
-    module_port = int(request.form.get('module_port', 6969))
+    module_port = int(request.form.get('module_port', 7277))
     root_user = request.form.get('root_user', 'root').strip()
     root_password = request.form.get('root_password', '').strip()
     auth_token = request.form.get('auth_token', db.random_password(22)).strip()
@@ -681,7 +755,7 @@ def api_online(server_id):
     if not srv:
         return jsonify(online=[])
 
-    online = sc.get_online_users(srv['ip'], srv['module_port'], srv['auth_token'])
+    online = sc.get_online_users_ps(srv['ip'], srv['module_port'], srv['auth_token'])
 
     # Filter by permission
     if current_user['role'] != 'admin':
@@ -900,28 +974,93 @@ def user_login():
 # CheckUser API
 # ---------------------------------------------------------------------------
 
-@app.route('/checkuser/<username>')
-def checkuser(username):
-    """CheckUser API endpoint compatible with DTunnel/similar apps."""
+def _checkuser_response(username: str) -> dict:
+    """Build checkuser JSON response for a given username."""
     u = db.get_ssh_user_by_username(username)
     if not u:
-        return jsonify({
+        return {
             "username": username,
             "count_connections": 0,
             "expiry_date": "",
             "expiry_days": 0,
-            "limit_connections": 0
-        })
-
+            "expiry_time": "",
+            "limit_connections": 0,
+            "status": "Offline"
+        }
     d = days_until(u['expires_at'])
-    return jsonify({
+    try:
+        from datetime import datetime
+        exp_dt = datetime.fromisoformat(u['expires_at'])
+        expiry_time = exp_dt.strftime('%d/%m/%Y')
+    except Exception:
+        expiry_time = u['expires_at'][:10] if u['expires_at'] else ''
+
+    return {
         "username": username,
         "count_connections": 0,
-        "expiry_date": u['expires_at'],
+        "expiry_date": u['expires_at'][:10] if u['expires_at'] else '',
         "expiry_days": d,
-        "limit_connections": u['connection_limit']
-    })
+        "expiry_time": expiry_time,
+        "limit_connections": u['connection_limit'],
+        "status": "Offline"
+    }
 
+
+@app.route('/checkuser/<username>')
+def checkuser(username):
+    return jsonify(_checkuser_response(username))
+
+
+@app.route('/checkuser/')
+@app.route('/checkuser')
+def checkuser_index():
+    """DTunnel-style: /checkuser?user=USERNAME or /checkuser/"""
+    username = request.args.get('user', '').strip()
+    if not username:
+        return jsonify({"error": "missing user parameter"})
+    return jsonify(_checkuser_response(username))
+
+
+@app.route('/checkuser/dtunnel.php')
+def checkuser_dtunnel():
+    """DTunnel app format: /checkuser/dtunnel.php?user=USERNAME"""
+    username = request.args.get('user', '').strip()
+    if not username:
+        return jsonify({"error": "missing user parameter"})
+    resp = _checkuser_response(username)
+    # DTunnel expects text/html or application/json
+    return jsonify(resp)
+
+
+@app.route('/api/checkuser')
+def checkuser_api():
+    """Generic: /api/checkuser?user=USERNAME"""
+    username = request.args.get('user', request.args.get('username', '')).strip()
+    if not username:
+        return jsonify({"error": "missing user parameter"})
+    return jsonify(_checkuser_response(username))
+
+
+
+@app.route('/users/credentials/<int:user_id>')
+@login_required
+def user_credentials(user_id):
+    current_user = get_current_user()
+    u = db.get_ssh_user(user_id)
+    if not u:
+        return jsonify(success=False, message='Usuário não encontrado')
+    if current_user['role'] != 'admin':
+        tree_ids = [current_user['id']] + [s['id'] for s in db.get_all_resellers_under(current_user['id'])]
+        if u['owner_id'] not in tree_ids:
+            return jsonify(success=False, message='Sem permissão')
+    return jsonify(
+        success=True,
+        username=u['username'],
+        password=u['password'],
+        v2ray_uuid=u['v2ray_uuid'],
+        expires_at=u['expires_at'],
+        connection_limit=u['connection_limit'],
+    )
 
 # ---------------------------------------------------------------------------
 # Random generation API
@@ -954,6 +1093,38 @@ def profile():
             flash('Senha muito curta (mínimo 4 caracteres).', 'danger')
     return render_template('shared/profile.html')
 
+
+
+
+# ---------------------------------------------------------------------------
+# Dragon Core / Atlas Migration (admin only)
+# ---------------------------------------------------------------------------
+
+@app.route('/migration', methods=['GET', 'POST'])
+@admin_required
+def migration_page():
+    result = None
+    if request.method == 'POST':
+        f = request.files.get('sql_file')
+        if not f:
+            flash('Selecione um arquivo SQL.', 'warning')
+            return redirect(url_for('migration_page'))
+        try:
+            import gzip, io
+            raw = f.read()
+            if raw[:2] == b'\x1f\x8b':  # gzip magic
+                sql_content = gzip.decompress(raw).decode('latin-1', errors='replace')
+            else:
+                sql_content = raw.decode('latin-1', errors='replace')
+
+            from migration import migrate_dragon_core
+            result = migrate_dragon_core(sql_content)
+            flash(f"Migração concluída: {result['resellers']} revendas, {result['ssh_users']} usuários SSH importados.", 'success')
+        except Exception as e:
+            flash(f'Erro na migração: {e}', 'danger')
+            import traceback; traceback.print_exc()
+        return redirect(url_for('migration_page'))
+    return render_template('admin/migration.html')
 
 # ---------------------------------------------------------------------------
 # Background scheduler
@@ -989,6 +1160,6 @@ scheduler.start()
 # ---------------------------------------------------------------------------
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5052))
+    port = int(os.environ.get('PORT', 5000))
     debug = os.environ.get('DEBUG', 'false').lower() == 'true'
     app.run(host='0.0.0.0', port=port, debug=debug)

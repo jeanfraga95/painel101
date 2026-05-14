@@ -89,6 +89,9 @@ body { font-size: .9rem; }
     <a href="{{ url_for('backup_page') }}" class="nav-link {% if request.endpoint == 'backup_page' %}active{% endif %}">
       <i class="fas fa-database me-2"></i>Backup
     </a>
+    <a href="{{ url_for('migration_page') }}" class="nav-link {% if request.endpoint == 'migration_page' %}active{% endif %}">
+      <i class="fas fa-file-import me-2"></i>Migração
+    </a>
     {% endif %}
 
     <span class="nav-section">Conta</span>
@@ -167,7 +170,21 @@ function apiPost(url, data, cb) {
 
 // Copy to clipboard
 function copyText(text) {
-  navigator.clipboard.writeText(text).then(() => showToast('Copiado!', 'success'));
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text)
+      .then(() => showToast('Copiado!', 'success'))
+      .catch(() => _execCopy(text));
+  } else {
+    _execCopy(text);
+  }
+}
+function _execCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.style.position='fixed'; ta.style.opacity='0';
+  document.body.appendChild(ta); ta.focus(); ta.select();
+  try { document.execCommand('copy'); showToast('Copiado!', 'success'); }
+  catch(e) { showToast('Copie manualmente', 'warning'); }
+  document.body.removeChild(ta);
 }
 </script>
 {% block extra_js %}{% endblock %}

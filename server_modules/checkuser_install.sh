@@ -85,9 +85,14 @@ EOF
     systemctl enable checkuser
 
     echo -e "\n\e[1;32m✅ CheckUser instalado com sucesso!\e[0m"
-    echo -e "\e[1;34m🌐 URL: \e[1;36m$final_url\e[0m"
+    echo -e "\e[1;34m🌐 URL Base: \e[1;36m$final_url\e[0m"
     echo ""
-    echo -e "\e[1;33mConfigure esta URL no Painel Master em: Configurações → CheckUser URL\e[0m"
+    echo -e "\e[1;32m📋 URLs para configurar no Painel Master (Configurações → CheckUser URL):\e[0m"
+    echo -e "\e[1;33m  DTunnel app:  ${final_url}/checkuser/dtunnel.php?user=\e[0m"
+    echo -e "\e[1;33m  Navegador:    ${final_url}/checkuser/<username>\e[0m"
+    echo ""
+    echo -e "\e[1;36m⚠  Use a URL do Painel Master, não a do CheckUser externo!\e[0m"
+    echo -e "\e[1;36m   O Painel Master já tem endpoint compatível com DTunnel embutido.\e[0m"
     check_url_access "$final_url"
 
     echo -e "\nPressione Enter para continuar..."

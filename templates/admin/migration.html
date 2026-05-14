@@ -1,0 +1,83 @@
+{% extends 'base.html' %}
+{% block title %}Migração — {{ panel_name }}{% endblock %}
+{% block page_title %}<i class="fas fa-file-import me-2"></i>Migração Dragon Core / Atlas{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <div class="col-md-7">
+    <div class="card">
+      <div class="card-header fw-semibold">
+        <i class="fas fa-upload me-2 text-primary"></i>Importar banco de dados
+      </div>
+      <div class="card-body">
+        <div class="alert alert-info">
+          <i class="fas fa-info-circle me-2"></i>
+          Esta ferramenta importa revendas e usuários SSH de um backup MySQL do <strong>Dragon Core / Atlas</strong> para o Painel Master.
+          <ul class="mb-0 mt-2 small">
+            <li>Aceita arquivos <code>.sql</code> ou <code>.sql.gz</code></li>
+            <li>Revendas são importadas mantendo hierarquia (pai → filho)</li>
+            <li>Usuários SSH são vinculados à revenda correspondente</li>
+            <li>Usuários/revendas já existentes no painel são ignorados</li>
+            <li><strong>Servidores não são importados</strong> — cadastre manualmente após a migração</li>
+          </ul>
+        </div>
+
+        <div class="alert alert-warning py-2">
+          <i class="fas fa-exclamation-triangle me-2"></i>
+          <strong>Atenção:</strong> Execute a migração apenas uma vez. Rodar duas vezes pode criar duplicatas de senha.
+        </div>
+
+        <form method="POST" enctype="multipart/form-data">
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Arquivo de backup MySQL</label>
+            <input type="file" name="sql_file" class="form-control"
+                   accept=".sql,.gz,.sql.gz" required>
+            <small class="text-muted">Arquivo exportado pelo Dragon Core / Atlas (ex: <code>backup_2026-05-13_23-21.sql.gz</code>)</small>
+          </div>
+          <button type="submit" class="btn btn-primary"
+                  onclick="return confirm('Confirma importação? Usuários existentes serão ignorados.')">
+            <i class="fas fa-file-import me-2"></i>Iniciar Migração
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-5">
+    <div class="card">
+      <div class="card-header fw-semibold"><i class="fas fa-map me-2"></i>Mapeamento de dados</div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+          <thead class="table-secondary">
+            <tr><th>Dragon Core</th><th>Painel Master</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>accounts</code></td><td>Revendas (panel_users)</td></tr>
+            <tr><td><code>atribuidos.limite</code></td><td>Limite de contas</td></tr>
+            <tr><td><code>atribuidos.expira</code></td><td>Validade do painel</td></tr>
+            <tr><td><code>atribuidos.suspenso</code></td><td>Status suspensão</td></tr>
+            <tr><td><code>ssh_accounts.login/senha</code></td><td>Usuários SSH</td></tr>
+            <tr><td><code>ssh_accounts.expira</code></td><td>Validade do usuário</td></tr>
+            <tr><td><code>ssh_accounts.uuid</code></td><td>UUID V2Ray</td></tr>
+            <tr><td><code>ssh_accounts.limite</code></td><td>Limite conexões</td></tr>
+            <tr><td><code>categorias</code></td><td>Não importado (manual)</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card mt-3">
+      <div class="card-header fw-semibold"><i class="fas fa-check-circle me-2 text-success"></i>Após a migração</div>
+      <div class="card-body small text-muted">
+        <ol class="mb-0">
+          <li>Cadastre os servidores SSH em <strong>Servidores</strong></li>
+          <li>Instale os módulos em cada servidor</li>
+          <li>Atribua servidores às revendas em <strong>Revendas</strong></li>
+          <li>Sincronize os usuários com cada servidor</li>
+          <li>Oriente as revendas a trocar as senhas</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -93,6 +93,9 @@
             </td>
             <td class="text-end">
               <div class="btn-group btn-group-sm">
+                <button class="btn btn-outline-primary" onclick="viewCredentials({{ u.id }})" title="Ver senha/UUID">
+                  <i class="fas fa-key"></i>
+                </button>
                 <button class="btn btn-outline-success" onclick="renewUser({{ u.id }})" title="Renovar">
                   <i class="fas fa-redo"></i>
                 </button>
@@ -152,11 +155,73 @@ function deleteUser(id, name) {
 function editUser(id, currentLimit) {
   const limit = prompt('Novo limite de conexões:', currentLimit);
   if (!limit || isNaN(limit)) return;
-  // Simple update via dedicated endpoint
   apiPost(`/users/update/${id}`, {connection_limit: limit}, d => {
     showToast(d.message || 'Atualizado', d.success ? 'success' : 'danger');
     if (d.success) setTimeout(() => location.reload(), 800);
   });
 }
+
+function viewCredentials(id) {
+  fetch(`/users/credentials/${id}`)
+    .then(r => r.json())
+    .then(d => {
+      if (!d.success) { showToast(d.message, 'danger'); return; }
+      const appLink = '{{ settings.app_link }}';
+      const uuidLine = d.v2ray_uuid
+        ? `<div class="mt-2"><small class="text-muted">UUID V2Ray:</small><br>
+           <code class="small text-info text-break">${d.v2ray_uuid}</code></div>` : '';
+      const appLine = appLink
+        ? `<div class="mt-2"><small class="text-muted">App:</small> <a href="${appLink}" target="_blank" class="small">${appLink}</a></div>` : '';
+
+      let copyText = `👤 Usuário: ${d.username}
+🔐 Senha: ${d.password}
+📅 Validade: ${d.expires_at}
+🔢 Limite: ${d.connection_limit}`;
+      if (d.v2ray_uuid) copyText += `
+🆔 UUID: ${d.v2ray_uuid}`;
+      if (appLink) copyText += `
+🔗 App: ${appLink}`;
+
+      document.getElementById('credBody').innerHTML = `
+        <table class="table table-sm mb-2">
+          <tr><td class="text-muted w-50">Usuário</td><td><strong>${d.username}</strong></td></tr>
+          <tr><td class="text-muted">Senha</td><td><code>${d.password}</code></td></tr>
+          <tr><td class="text-muted">Validade</td><td>${d.expires_at ? d.expires_at.slice(0,10) : '—'}</td></tr>
+          <tr><td class="text-muted">Limite</td><td>${d.connection_limit} conexões</td></tr>
+        </table>
+        ${uuidLine}${appLine}`;
+      document.getElementById('credCopyBtn').onclick = () => {
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(copyText).then(() => showToast('Copiado!', 'success'));
+        } else {
+          const ta = document.createElement('textarea');
+          ta.value = copyText; ta.style.position='fixed'; ta.style.opacity='0';
+          document.body.appendChild(ta); ta.focus(); ta.select();
+          document.execCommand('copy'); document.body.removeChild(ta);
+          showToast('Copiado!', 'success');
+        }
+      };
+      new bootstrap.Modal(document.getElementById('credModal')).show();
+    });
+}
 </script>
+
+<!-- Credentials Modal -->
+<div class="modal fade" id="credModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h6 class="modal-title"><i class="fas fa-key me-2"></i>Credenciais do Usuário</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="credBody"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-success w-100" id="credCopyBtn">
+          <i class="fas fa-copy me-2"></i>Copiar tudo
+        </button>
+        <button type="button" class="btn btn-secondary w-100" data-bs-dismiss="modal">Fechar</button>
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}

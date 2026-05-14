@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS panel_users (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     username            TEXT    NOT NULL COLLATE NOCASE,
     password_hash       TEXT    NOT NULL,
+    password_plain      TEXT    DEFAULT '',
     role                TEXT    NOT NULL DEFAULT 'reseller',
     parent_id           INTEGER,
     created_at          TEXT    DEFAULT (datetime('now')),
@@ -71,11 +72,19 @@ CREATE TABLE IF NOT EXISTS ssh_users (
     FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS reseller_servers (
+    reseller_id INTEGER NOT NULL,
+    server_id   INTEGER NOT NULL,
+    PRIMARY KEY (reseller_id, server_id),
+    FOREIGN KEY (reseller_id) REFERENCES panel_users(id) ON DELETE CASCADE,
+    FOREIGN KEY (server_id)   REFERENCES servers(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS servers (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     name          TEXT    NOT NULL,
     ip            TEXT    NOT NULL,
-    module_port   INTEGER DEFAULT 6969,
+    module_port   INTEGER DEFAULT 7277,
     root_user     TEXT    DEFAULT 'root',
     root_password TEXT,
     auth_token    TEXT    NOT NULL,
@@ -234,9 +243,9 @@ def create_panel_user(username: str, password: str, role: str, parent_id: int,
     try:
         cur = conn.execute(
             """INSERT INTO panel_users 
-               (username, password_hash, role, parent_id, expires_at, account_limit)
-               VALUES (?,?,?,?,?,?)""",
-            (username.lower(), hash_password(password), role, parent_id, expires_at, account_limit)
+               (username, password_hash, password_plain, role, parent_id, expires_at, account_limit)
+               VALUES (?,?,?,?,?,?,?)""",
+            (username.lower(), hash_password(password), password, role, parent_id, expires_at, account_limit)
         )
         new_id = cur.lastrowid
         # Decrement parent's account_limit
@@ -526,5 +535,89 @@ def set_backup_config(bot_token: str, chat_id: str, enabled: int):
 def update_last_backup(dt: str):
     conn = get_db()
     conn.execute("UPDATE backup_config SET last_backup=? WHERE id=1", (dt,))
+    conn.commit()
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Reseller server assignments
+# ---------------------------------------------------------------------------
+
+def get_reseller_servers(reseller_id: int) -> list:
+    """Return list of server_ids assigned to a reseller."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT server_id FROM reseller_servers WHERE reseller_id=?",
+        (reseller_id,)
+    ).fetchall()
+    conn.close()
+    return [r['server_id'] for r in rows]
+
+
+def set_reseller_servers(reseller_id: int, server_ids: list):
+    """Replace all server assignments for a reseller."""
+    conn = get_db()
+    conn.execute("DELETE FROM reseller_servers WHERE reseller_id=?", (reseller_id,))
+    for sid in server_ids:
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO reseller_servers (reseller_id, server_id) VALUES (?,?)",
+                (reseller_id, sid)
+            )
+        except Exception:
+            pass
+    conn.commit()
+    conn.close()
+
+
+def get_servers_for_user(panel_user) -> list:
+    """Return servers available to a panel user (admin=all, reseller=assigned)."""
+    conn = get_db()
+    if panel_user['role'] == 'admin':
+        rows = conn.execute("SELECT * FROM servers ORDER BY name").fetchall()
+        conn.close()
+        return rows
+    
+    server_ids = get_reseller_servers(panel_user['id'])
+    if not server_ids:
+        # walk up hierarchy
+        parent_id = panel_user['parent_id']
+        while parent_id:
+            server_ids = get_reseller_servers(parent_id)
+            if server_ids:
+                break
+            parent = conn.execute("SELECT parent_id FROM panel_users WHERE id=?", (parent_id,)).fetchone()
+            parent_id = parent['parent_id'] if parent else None
+    
+    if not server_ids:
+        conn.close()
+        return []
+    
+    placeholders = ','.join('?' * len(server_ids))
+    rows = conn.execute(
+        f"SELECT * FROM servers WHERE id IN ({placeholders}) ORDER BY name",
+        server_ids
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def migrate_schema():
+    """Run schema migrations for existing databases (adds columns if missing)."""
+    conn = get_db()
+    # Add password_plain if missing
+    try:
+        conn.execute("ALTER TABLE panel_users ADD COLUMN password_plain TEXT DEFAULT ''")
+        conn.commit()
+    except Exception:
+        pass
+    # Create reseller_servers if missing
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS reseller_servers (
+            reseller_id INTEGER NOT NULL,
+            server_id   INTEGER NOT NULL,
+            PRIMARY KEY (reseller_id, server_id)
+        );
+    """)
     conn.commit()
     conn.close()

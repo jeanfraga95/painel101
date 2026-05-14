@@ -82,9 +82,9 @@ def create_ssh_user_on_server(ip: str, port: int, auth_token: str,
                                username: str, password: str, days: int,
                                limit: int, uuid: str = None) -> tuple:
     if uuid:
-        cmd = f"/root/dragonmodule v2rayadd {uuid} {username} {password} {days} {limit}"
+        cmd = f"/root/pmaster_agent v2rayadd {uuid} {username} {password} {days} {limit}"
     else:
-        cmd = f"/root/dragonmodule createssh {username} {password} {days} {limit}"
+        cmd = f"/root/pmaster_agent createssh {username} {password} {days} {limit}"
     return send_command(ip, port, auth_token, cmd)
 
 
@@ -92,24 +92,24 @@ def create_test_user_on_server(ip: str, port: int, auth_token: str,
                                 username: str, password: str, minutes: int,
                                 limit: int, uuid: str = None) -> tuple:
     if uuid:
-        cmd = f"/root/dragonmodule v2rayaddteste {uuid} {username} {password} {minutes} {limit}"
+        cmd = f"/root/pmaster_agent v2rayaddteste {uuid} {username} {password} {minutes} {limit}"
     else:
-        cmd = f"/root/dragonmodule createsshteste {username} {password} {minutes} {limit}"
+        cmd = f"/root/pmaster_agent createsshteste {username} {password} {minutes} {limit}"
     return send_command(ip, port, auth_token, cmd)
 
 
 def delete_user_on_server(ip: str, port: int, auth_token: str,
                            username: str, uuid: str = None) -> tuple:
     if uuid:
-        cmd = f"/root/dragonmodule v2raydel {uuid} {username}"
+        cmd = f"/root/pmaster_agent v2raydel {uuid} {username}"
     else:
-        cmd = f"/root/dragonmodule removessh {username}"
+        cmd = f"/root/pmaster_agent removessh {username}"
     return send_command(ip, port, auth_token, cmd)
 
 
 def renew_user_on_server(ip: str, port: int, auth_token: str,
                           username: str, days: int) -> tuple:
-    cmd = f"/root/dragonmodule timedata {username} {days}"
+    cmd = f"/root/pmaster_agent timedata {username} {days}"
     return send_command(ip, port, auth_token, cmd)
 
 
@@ -146,11 +146,11 @@ def install_modules_ssh(ip: str, root_user: str, root_password: str, auth_token:
     """Use paramiko to upload module files to the SSH server."""
     modules_dir = os.path.join(os.path.dirname(__file__), 'server_modules')
     files_to_upload = [
-        ('modulo.py', '/root/modulo.py'),
-        ('dragonmodule', '/root/dragonmodule'),
-        ('sincronizar.py', '/root/sincronizar.py'),
-        ('delete.py', '/root/delete.py'),
-        ('verificador.py', '/root/verificador.py'),
+        ('pmaster_module.py', '/root/pmaster_module.py'),
+        ('pmaster_agent', '/root/pmaster_agent'),
+        ('pmaster_sync.py', '/root/pmaster_sync.py'),
+        ('pmaster_delete.py', '/root/pmaster_delete.py'),
+        ('pmaster_watchdog.py', '/root/pmaster_watchdog.py'),
     ]
 
     try:
@@ -163,7 +163,7 @@ def install_modules_ssh(ip: str, root_user: str, root_password: str, auth_token:
             local_path = os.path.join(modules_dir, local_name)
             if os.path.exists(local_path):
                 # Replace auth token in modulo.py
-                if local_name == 'modulo.py':
+                if local_name == 'pmaster_module.py':
                     with open(local_path, 'r') as f:
                         content = f.read()
                     content = content.replace('REPLACE_AUTH_TOKEN', auth_token)
@@ -173,14 +173,14 @@ def install_modules_ssh(ip: str, root_user: str, root_password: str, auth_token:
 
         # Make dragonmodule executable, start modulo.py, set up cron
         commands = [
-            "chmod +x /root/dragonmodule",
-            "chmod +x /root/modulo.py",
+            "chmod +x /root/pmaster_agent",
+            "chmod +x /root/pmaster_module.py",
             "mkdir -p /etc/SSHPlus/senha /etc/DragonPanel",
             "touch /root/usuarios.db",
-            "pkill -f modulo.py || true",
-            "nohup python3 /root/modulo.py > /root/modulo.log 2>&1 &",
+            "pkill -f pmaster_module.py || true",
+            "nohup python3 /root/pmaster_module.py > /root/pmaster_module.log 2>&1 &",
             # Cron to keep modulo.py alive
-            "(crontab -l 2>/dev/null | grep -v verificador.py; echo '* * * * * python3 /root/verificador.py') | crontab -",
+            "(crontab -l 2>/dev/null | grep -v verificador.py; echo '* * * * * python3 /root/pmaster_watchdog.py') | crontab -",
         ]
         for cmd in commands:
             ssh.exec_command(cmd)
@@ -190,3 +190,45 @@ def install_modules_ssh(ip: str, root_user: str, root_password: str, auth_token:
         return True, 'Módulos instalados com sucesso'
     except Exception as e:
         return False, str(e)
+
+
+def get_online_users_ps(ip: str, port: int, auth_token: str) -> list:
+    """Return usernames currently connected via SSH/OpenVPN/Dropbear.
+    Uses ps-based method like Dragon Core (more reliable than 'who').
+    """
+    cmd = (
+        "ps -x 2>/dev/null | grep sshd | grep -v root | grep priv | awk '{print $1}' | "
+        "while read pid; do cat /proc/$pid/status 2>/dev/null | grep -i 'name\|ppid' ; done | "
+        "grep -A1 sshd | grep -v sshd | head -100 ; "
+        # fallback: who output
+        "who 2>/dev/null | awk '{print $1}' | sort -u"
+    )
+    # Simpler and more reliable: get sshd child processes usernames
+    cmd2 = (
+        "ps aux | grep -E 'sshd:.+@' | grep -v grep | awk '{print $1}' | sort -u"
+    )
+    ok, out = send_command(ip, port, auth_token, cmd2)
+    if not ok or not out.strip():
+        # fallback to who
+        ok2, out2 = send_command(ip, port, auth_token, "who | awk '{print $1}' | sort -u")
+        if ok2 and out2.strip():
+            return [u.strip() for u in out2.splitlines() if u.strip() and u.strip() != 'root']
+        return []
+    users = [u.strip() for u in out.splitlines() if u.strip() and u.strip() not in ('root', 'sshd')]
+    return users
+
+
+def get_server_online_count(ip: str, port: int, auth_token: str) -> dict:
+    """Return total online count (SSH + OpenVPN + Dropbear) like Dragon Core script."""
+    cmd = (
+        "ssh_count=$(ps -x 2>/dev/null | grep sshd | grep -v root | grep priv | wc -l); "
+        "ovpn_count=0; [ -e /etc/openvpn/openvpn-status.log ] && ovpn_count=$(grep -c '10.8.0' /etc/openvpn/openvpn-status.log 2>/dev/null || echo 0); "
+        "drp_count=0; if [ -e /etc/default/dropbear ]; then drp=$(ps aux | grep dropbear | grep -v grep | wc -l); drp_count=$((drp - 1)); fi; "
+        "total=$((ssh_count + ovpn_count + drp_count)); echo $total"
+    )
+    ok, out = send_command(ip, port, auth_token, cmd)
+    try:
+        total = int(out.strip())
+    except Exception:
+        total = 0
+    return {'total': total, 'error': None if ok else out}

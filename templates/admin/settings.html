@@ -41,12 +41,14 @@
             <small class="text-muted">Exibido após criar usuário/teste</small>
           </div>
           <div class="mb-4">
-            <label class="form-label fw-semibold">URL do CheckUser</label>
+            <label class="form-label fw-semibold">URL do CheckUser (exibida no app)</label>
             <input type="text" name="checkuser_url" class="form-control"
                    value="{{ settings.checkuser_url }}"
-                   placeholder="https://exemplo.com/checkuser">
+                   placeholder="{{ request.host_url }}checkuser/dtunnel.php?user=">
             <small class="text-muted">
-              Endpoint compatível com DTunnel: <code>{{ request.host_url }}checkuser/{username}</code>
+              Cole aqui a URL que será exibida para os usuários colocarem no aplicativo VPN.<br>
+              <strong>DTunnel:</strong> use <code>{{ request.host_url }}checkuser/dtunnel.php?user=</code><br>
+              <strong>Outros:</strong> use <code>{{ request.host_url }}checkuser/&lt;username&gt;</code>
             </small>
           </div>
           <button type="submit" class="btn btn-primary px-4">
@@ -63,8 +65,15 @@
       <div class="card-body">
         <table class="table table-sm mb-0">
           <tr><td class="text-muted">Versão</td><td>Painel Master v1.0</td></tr>
-          <tr><td class="text-muted">CheckUser URL</td>
-            <td><code class="small">{{ request.host_url }}checkuser/&lt;user&gt;</code></td>
+          <tr><td class="text-muted">CheckUser (DTunnel)</td>
+            <td>
+              <code class="small d-block">{{ request.host_url }}checkuser/dtunnel.php?user=</code>
+              <code class="small d-block text-muted">{{ request.host_url }}checkuser/&lt;user&gt;</code>
+              <button class="btn btn-xs btn-sm btn-outline-secondary mt-1"
+                      onclick="copyText('{{ request.host_url }}checkuser/dtunnel.php?user=')">
+                <i class="fas fa-copy me-1"></i>Copiar URL DTunnel
+              </button>
+            </td>
           </tr>
           <tr><td class="text-muted">Login usuário</td>
             <td><a href="{{ url_for('user_login') }}" target="_blank">{{ url_for('user_login', _external=True) }}</a></td>

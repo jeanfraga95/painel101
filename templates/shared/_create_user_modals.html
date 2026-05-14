@@ -196,7 +196,31 @@ function showResult(data) {
 }
 
 function copyResult() {
-  navigator.clipboard.writeText(lastResultText).then(() => showToast('Copiado!', 'success'));
+  // Try modern clipboard API first, fallback to execCommand for HTTP contexts
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(lastResultText)
+      .then(() => showToast('Copiado!', 'success'))
+      .catch(() => execCopy());
+  } else {
+    execCopy();
+  }
+}
+
+function execCopy() {
+  const ta = document.createElement('textarea');
+  ta.value = lastResultText;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  try {
+    document.execCommand('copy');
+    showToast('Copiado!', 'success');
+  } catch(e) {
+    showToast('Copie manualmente o texto acima', 'warning');
+  }
+  document.body.removeChild(ta);
 }
 
 function submitCreateUser() {

@@ -3,7 +3,7 @@
 {% block page_title %}<i class="fas fa-user-tie me-2"></i>Revendas{% endblock %}
 
 {% block content %}
-<div class="d-flex gap-2 mb-3">
+<div class="d-flex gap-2 mb-3 flex-wrap">
   <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createResellerModal">
     <i class="fas fa-user-plus me-2"></i>Nova Revenda
   </button>
@@ -20,8 +20,9 @@
             <th>Hierarquia</th>
             <th>Validade</th>
             <th>Dias</th>
-            <th>Limite contas</th>
+            <th>Limite</th>
             <th>Usadas</th>
+            <th>Servidores</th>
             <th>Status</th>
             <th class="text-end">Ações</th>
           </tr>
@@ -47,6 +48,13 @@
             <td>{{ r.account_limit }}</td>
             <td>{{ r.accounts_used }}</td>
             <td>
+              {% if server_assign_map and r.id in server_assign_map and server_assign_map[r.id] %}
+                <span class="badge bg-info">{{ server_assign_map[r.id]|length }} servidor(es)</span>
+              {% else %}
+                <span class="badge bg-secondary">nenhum</span>
+              {% endif %}
+            </td>
+            <td>
               <span class="badge {{ 'bg-success' if r.status == 'active' else 'bg-danger' }}" id="rstatus_{{ r.id }}">
                 {{ r.status }}
               </span>
@@ -54,8 +62,21 @@
             <td class="text-end">
               <div class="btn-group btn-group-sm">
                 {% if current_user.role == 'admin' %}
+                <button class="btn btn-outline-info" title="Alterar senha"
+                        onclick="openChangePw({{ r.id }}, '{{ r.username }}')">
+                  <i class="fas fa-key"></i>
+                </button>
+                <button class="btn btn-outline-secondary" title="Atribuir servidores"
+                        onclick="openServers({{ r.id }}, '{{ r.username }}', {{ server_assign_map.get(r.id, [])|tojson }})">
+                  <i class="fas fa-server"></i>
+                </button>
                 <button class="btn btn-outline-success" onclick="renewReseller({{ r.id }})" title="Renovar">
                   <i class="fas fa-redo"></i>
+                </button>
+                {% else %}
+                <button class="btn btn-outline-info" title="Alterar senha"
+                        onclick="openChangePw({{ r.id }}, '{{ r.username }}')">
+                  <i class="fas fa-key"></i>
                 </button>
                 {% endif %}
                 <button class="btn btn-outline-warning" onclick="suspendReseller({{ r.id }})" title="Suspender/Ativar">
@@ -68,7 +89,7 @@
             </td>
           </tr>
           {% else %}
-          <tr><td colspan="8" class="text-center text-muted py-4">Nenhuma revenda encontrada.</td></tr>
+          <tr><td colspan="9" class="text-center text-muted py-4">Nenhuma revenda encontrada.</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -78,7 +99,7 @@
 
 <!-- Create Reseller Modal -->
 <div class="modal fade" id="createResellerModal" tabindex="-1">
-  <div class="modal-dialog">
+  <div class="modal-dialog modal-lg">
     <div class="modal-content">
       <div class="modal-header">
         <h5 class="modal-title"><i class="fas fa-user-plus me-2"></i>Nova Revenda</h5>
@@ -105,6 +126,22 @@
             <label class="form-label">Limite de contas</label>
             <input type="number" id="cr_limit" class="form-control" value="10" min="1">
           </div>
+          {% if all_servers %}
+          <div class="col-12">
+            <label class="form-label">Servidores disponíveis <small class="text-muted">(selecione os que esta revenda pode usar)</small></label>
+            <div class="border rounded p-2" id="cr_servers_wrap">
+              {% for s in all_servers %}
+              <div class="form-check">
+                <input class="form-check-input cr_server_cb" type="checkbox"
+                       value="{{ s.id }}" id="cr_srv_{{ s.id }}">
+                <label class="form-check-label" for="cr_srv_{{ s.id }}">
+                  {{ s.name }} <small class="text-muted">({{ s.ip }})</small>
+                </label>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
         </div>
       </div>
       <div class="modal-footer">
@@ -117,8 +154,89 @@
   </div>
 </div>
 
+<!-- Change Password Modal -->
+<div class="modal fade" id="changePwModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h6 class="modal-title"><i class="fas fa-key me-2"></i>Alterar Senha — <span id="cpw_name"></span></h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="cpw_id">
+        <div class="mb-2">
+          <label class="form-label">Nova senha</label>
+          <input type="text" id="cpw_pw" class="form-control" placeholder="Mínimo 4 caracteres">
+        </div>
+        <button class="btn btn-sm btn-outline-secondary" onclick="genPw()">
+          <i class="fas fa-random me-1"></i>Gerar senha
+        </button>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" class="btn btn-primary" onclick="submitChangePw()">Salvar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Assign Servers Modal -->
+<div class="modal fade" id="serversModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h6 class="modal-title"><i class="fas fa-server me-2"></i>Servidores — <span id="srv_name"></span></h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="srv_body">
+        {% if all_servers %}
+          {% for s in all_servers %}
+          <div class="form-check">
+            <input class="form-check-input srv_cb" type="checkbox"
+                   value="{{ s.id }}" id="srv_chk_{{ s.id }}">
+            <label class="form-check-label" for="srv_chk_{{ s.id }}">
+              {{ s.name }} <small class="text-muted">({{ s.ip }})</small>
+            </label>
+          </div>
+          {% endfor %}
+        {% else %}
+          <p class="text-muted">Nenhum servidor cadastrado. Adicione servidores primeiro.</p>
+        {% endif %}
+      </div>
+      <div class="modal-footer">
+        <input type="hidden" id="srv_reseller_id">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" class="btn btn-primary" onclick="submitServers()">
+          <i class="fas fa-save me-2"></i>Salvar
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Reseller Created Result Modal -->
+<div class="modal fade" id="resellerResultModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header bg-success text-white">
+        <h6 class="modal-title"><i class="fas fa-check-circle me-2"></i>Revenda criada!</h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="resellerResultBody"></div>
+      <div class="modal-footer flex-column gap-2">
+        <button type="button" class="btn btn-success w-100" onclick="copyResellerResult()">
+          <i class="fas fa-copy me-2"></i>Copiar dados
+        </button>
+        <button type="button" class="btn btn-secondary w-100" data-bs-dismiss="modal">Fechar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
-// Set default expires date to 30 days from now
+let lastResellerText = '';
+
+// Set default expires date
 document.getElementById('cr_expires').value = new Date(Date.now() + 30*86400000).toISOString().slice(0,10);
 
 function genResCreds() {
@@ -129,14 +247,87 @@ function genResCreds() {
 }
 
 function submitCreateReseller() {
+  const serverIds = [...document.querySelectorAll('.cr_server_cb:checked')].map(c => c.value).join(',');
   apiPost('/resellers/create', {
     username: document.getElementById('cr_username').value,
     password: document.getElementById('cr_password').value,
     expires_at: document.getElementById('cr_expires').value,
     account_limit: document.getElementById('cr_limit').value,
+    server_ids: serverIds,
   }, d => {
+    if (d.success && d.reseller) {
+      const r = d.reseller;
+      const appLine = r.app_link ? `\n🔗 App: ${r.app_link}` : '';
+      lastResellerText = `👤 Usuário: ${r.username}\n🔐 Senha: ${r.password}\n📅 Validade: ${r.expires_at}\n🌐 Painel: ${r.panel_url}${appLine}`;
+      document.getElementById('resellerResultBody').innerHTML = `
+        <div class="font-monospace small p-2 rounded" style="background:rgba(0,0,0,.2)">
+          <div><b>Usuário:</b> ${r.username}</div>
+          <div><b>Senha:</b> ${r.password}</div>
+          <div><b>Validade:</b> ${r.expires_at}</div>
+          <div><b>Painel:</b> <a href="${r.panel_url}" target="_blank">${r.panel_url}</a></div>
+          ${r.app_link ? `<div><b>App:</b> <a href="${r.app_link}" target="_blank">${r.app_link}</a></div>` : ''}
+        </div>`;
+      bootstrap.Modal.getInstance(document.getElementById('createResellerModal'))?.hide();
+      new bootstrap.Modal(document.getElementById('resellerResultModal')).show();
+      setTimeout(() => location.reload(), 4000);
+    } else {
+      showToast(d.message, 'danger');
+    }
+  });
+}
+
+function copyResellerResult() {
+  navigator.clipboard.writeText(lastResellerText)
+    .then(() => showToast('Copiado!', 'success'))
+    .catch(() => {
+      // fallback
+      const ta = document.createElement('textarea');
+      ta.value = lastResellerText;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      showToast('Copiado!', 'success');
+    });
+}
+
+function openChangePw(id, name) {
+  document.getElementById('cpw_id').value = id;
+  document.getElementById('cpw_name').textContent = name;
+  document.getElementById('cpw_pw').value = '';
+  new bootstrap.Modal(document.getElementById('changePwModal')).show();
+}
+
+function genPw() {
+  fetch('/api/random_credentials').then(r=>r.json()).then(d => {
+    document.getElementById('cpw_pw').value = d.password;
+  });
+}
+
+function submitChangePw() {
+  const id = document.getElementById('cpw_id').value;
+  const pw = document.getElementById('cpw_pw').value;
+  apiPost(`/resellers/set_password/${id}`, {password: pw}, d => {
     showToast(d.message, d.success ? 'success' : 'danger');
-    if (d.success) setTimeout(() => location.reload(), 800);
+    if (d.success) bootstrap.Modal.getInstance(document.getElementById('changePwModal'))?.hide();
+  });
+}
+
+function openServers(id, name, assigned) {
+  document.getElementById('srv_reseller_id').value = id;
+  document.getElementById('srv_name').textContent = name;
+  document.querySelectorAll('.srv_cb').forEach(cb => {
+    cb.checked = assigned.includes(parseInt(cb.value));
+  });
+  new bootstrap.Modal(document.getElementById('serversModal')).show();
+}
+
+function submitServers() {
+  const id = document.getElementById('srv_reseller_id').value;
+  const sids = [...document.querySelectorAll('.srv_cb:checked')].map(c=>c.value).join(',');
+  apiPost(`/resellers/set_servers/${id}`, {server_ids: sids}, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (d.success) { bootstrap.Modal.getInstance(document.getElementById('serversModal'))?.hide(); setTimeout(()=>location.reload(),800); }
   });
 }
 
