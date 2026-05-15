@@ -198,7 +198,7 @@ def get_online_users_ps(ip: str, port: int, auth_token: str) -> list:
     """
     cmd = (
         "ps -x 2>/dev/null | grep sshd | grep -v root | grep priv | awk '{print $1}' | "
-        "while read pid; do cat /proc/$pid/status 2>/dev/null | grep -i 'name\|ppid' ; done | "
+        "while read pid; do cat /proc/$pid/status 2>/dev/null | grep -iE 'name|ppid' ; done | "
         "grep -A1 sshd | grep -v sshd | head -100 ; "
         # fallback: who output
         "who 2>/dev/null | awk '{print $1}' | sort -u"
@@ -232,3 +232,81 @@ def get_server_online_count(ip: str, port: int, auth_token: str) -> dict:
     except Exception:
         total = 0
     return {'total': total, 'error': None if ok else out}
+
+
+
+def get_online_users_robust(ip: str, port: int, auth_token: str) -> list:
+    """Robust online detection — three methods tried in order:
+    1) /opt/sshplus/plugin-sync --monitor-users  (JSON username->count)
+    2) ps aux sshd: user@ pattern  (same process tree top shows as sshd: user1)
+    3) who fallback
+    """
+    import json as _json
+
+    # ── Method 1: plugin-sync ──────────────────────────────────────────────
+    ok, out = send_command(ip, port, auth_token,
+                           "/opt/sshplus/plugin-sync --monitor-users 2>/dev/null")
+    if ok and out.strip().startswith('{'):
+        try:
+            data = _json.loads(out.strip())
+            result = [
+                {'username': u, 'connections': int(c)}
+                for u, c in data.items()
+                if u and u not in ('root', 'sshd')
+            ]
+            if result:
+                return result
+        except Exception:
+            pass
+
+    # ── Method 2: ps sshd: user@pts  (visible in top as "sshd: user1") ────
+    cmd_ps = (
+        r"ps aux 2>/dev/null | grep -E 'sshd: [^/]+@' | grep -v grep | "
+        r"awk '{print $1}' | grep -v '^root$' | sort | uniq -c | "
+        r"awk '{print $2 \":\" $1}'"
+    )
+    ok2, out2 = send_command(ip, port, auth_token, cmd_ps)
+    result = []
+    if ok2 and out2.strip():
+        for line in out2.strip().splitlines():
+            line = line.strip()
+            if ':' in line:
+                uname, count = line.rsplit(':', 1)
+                uname = uname.strip()
+                if uname and uname not in ('root', 'sshd'):
+                    try:
+                        result.append({'username': uname, 'connections': int(count.strip())})
+                    except ValueError:
+                        pass
+        if result:
+            return result
+
+    # ── Method 3: who fallback ─────────────────────────────────────────────
+    cmd_who = (
+        r"who 2>/dev/null | awk '{print $1}' | grep -v '^root$' | "
+        r"sort | uniq -c | awk '{print $2 \":\" $1}'"
+    )
+    ok3, out3 = send_command(ip, port, auth_token, cmd_who)
+    if ok3 and out3.strip():
+        for line in out3.strip().splitlines():
+            line = line.strip()
+            if ':' in line:
+                uname, count = line.rsplit(':', 1)
+                uname = uname.strip()
+                if uname and uname != 'root':
+                    try:
+                        result.append({'username': uname, 'connections': int(count.strip())})
+                    except ValueError:
+                        pass
+
+    return result
+
+
+def count_user_connections_on_server(ip: str, port: int, auth_token: str, username: str) -> int:
+    """Count active sessions for a specific user."""
+    cmd = f"who 2>/dev/null | grep -c '^{username} ' || echo 0"
+    ok, out = send_command(ip, port, auth_token, cmd)
+    try:
+        return max(0, int(out.strip()))
+    except Exception:
+        return 0

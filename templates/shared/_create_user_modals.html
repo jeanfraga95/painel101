@@ -196,31 +196,53 @@ function showResult(data) {
 }
 
 function copyResult() {
-  // Try modern clipboard API first, fallback to execCommand for HTTP contexts
-  if (navigator.clipboard && window.isSecureContext) {
-    navigator.clipboard.writeText(lastResultText)
-      .then(() => showToast('Copiado!', 'success'))
-      .catch(() => execCopy());
-  } else {
-    execCopy();
-  }
+  pmCopy(lastResultText);
 }
 
-function execCopy() {
-  const ta = document.createElement('textarea');
-  ta.value = lastResultText;
-  ta.style.position = 'fixed';
-  ta.style.opacity = '0';
-  document.body.appendChild(ta);
-  ta.focus();
-  ta.select();
-  try {
-    document.execCommand('copy');
-    showToast('Copiado!', 'success');
-  } catch(e) {
-    showToast('Copie manualmente o texto acima', 'warning');
+function pmCopy(text) {
+  // Strategy 1: Modern Clipboard API (Chrome, Edge, Firefox 63+, Safari 13.1+)
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+    navigator.clipboard.writeText(text)
+      .then(() => showToast('Copiado! ✓', 'success'))
+      .catch(() => pmCopyLegacy(text));
+    return;
   }
-  document.body.removeChild(ta);
+  pmCopyLegacy(text);
+}
+
+function pmCopyLegacy(text) {
+  // Strategy 2: execCommand (works on HTTP, older browsers, iOS Safari workaround)
+  const el = document.createElement('textarea');
+  el.value = text;
+  el.setAttribute('readonly', '');
+  el.style.cssText = 'position:absolute;left:-9999px;top:-9999px;opacity:0;width:1px;height:1px';
+  document.body.appendChild(el);
+
+  // iOS Safari needs this
+  const isIOS = navigator.userAgent.match(/ipad|iphone/i);
+  if (isIOS) {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    el.setSelectionRange(0, 999999);
+  } else {
+    el.focus();
+    el.select();
+    el.setSelectionRange(0, 999999);
+  }
+
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch(e) { ok = false; }
+  document.body.removeChild(el);
+
+  if (ok) {
+    showToast('Copiado! ✓', 'success');
+  } else {
+    // Strategy 3: show text in a prompt so user can manually copy
+    window.prompt('Copie o texto abaixo (Ctrl+C / Cmd+C):', text);
+  }
 }
 
 function submitCreateUser() {

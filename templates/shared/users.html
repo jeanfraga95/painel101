@@ -18,13 +18,27 @@
           <option value="created_at" {{ 'selected' if sort=='created_at' }}>Por criação</option>
         </select>
       </div>
-      <div class="col-md-3">
+      <div class="col-md-2">
         <select name="filter" class="form-select form-select-sm">
           <option value="all" {{ 'selected' if filter_type=='all' }}>Todos</option>
           <option value="expiring" {{ 'selected' if filter_type=='expiring' }}>Vencendo (7d)</option>
+          <option value="expiring3" {{ 'selected' if filter_type=='expiring3' }}>Vencendo (3d)</option>
+          <option value="expired" {{ 'selected' if filter_type=='expired' }}>Já vencidos</option>
           <option value="test" {{ 'selected' if filter_type=='test' }}>Testes</option>
         </select>
       </div>
+      {% if all_resellers %}
+      <div class="col-md-3">
+        <select name="owner_id" class="form-select form-select-sm">
+          <option value="">Todos os donos</option>
+          {% for r in all_resellers %}
+          <option value="{{ r.id }}" {{ 'selected' if owner_filter == r.id|string }}>
+            {{ r.username }} {% if r.role == 'admin' %}(admin){% endif %}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endif %}
       <div class="col-auto">
         <button class="btn btn-sm btn-primary"><i class="fas fa-filter me-1"></i>Filtrar</button>
       </div>
@@ -124,11 +138,11 @@
 
 <script>
 function renewUser(id) {
-  const days = prompt('Renovar por quantos dias?', '30');
-  if (!days || isNaN(days)) return;
-  apiPost(`/users/renew/${id}`, {days}, d => {
+  const days = prompt('Adicionar quantos dias ao vencimento?', '30');
+  if (!days || isNaN(days) || parseInt(days) < 1) return;
+  apiPost(`/users/renew/${id}`, {days: parseInt(days)}, d => {
     showToast(d.message, d.success ? 'success' : 'danger');
-    if (d.success) setTimeout(() => location.reload(), 800);
+    if (d.success) setTimeout(() => location.reload(), 1000);
   });
 }
 
@@ -155,7 +169,10 @@ function deleteUser(id, name) {
 function editUser(id, currentLimit) {
   const limit = prompt('Novo limite de conexões:', currentLimit);
   if (!limit || isNaN(limit)) return;
-  apiPost(`/users/update/${id}`, {connection_limit: limit}, d => {
+  const newPass = prompt('Nova senha (deixe em branco para não alterar):');
+  const body = {connection_limit: limit};
+  if (newPass && newPass.trim()) body.password = newPass.trim();
+  apiPost(`/users/update/${id}`, body, d => {
     showToast(d.message || 'Atualizado', d.success ? 'success' : 'danger');
     if (d.success) setTimeout(() => location.reload(), 800);
   });
@@ -190,17 +207,7 @@ function viewCredentials(id) {
           <tr><td class="text-muted">Limite</td><td>${d.connection_limit} conexões</td></tr>
         </table>
         ${uuidLine}${appLine}`;
-      document.getElementById('credCopyBtn').onclick = () => {
-        if (navigator.clipboard && window.isSecureContext) {
-          navigator.clipboard.writeText(copyText).then(() => showToast('Copiado!', 'success'));
-        } else {
-          const ta = document.createElement('textarea');
-          ta.value = copyText; ta.style.position='fixed'; ta.style.opacity='0';
-          document.body.appendChild(ta); ta.focus(); ta.select();
-          document.execCommand('copy'); document.body.removeChild(ta);
-          showToast('Copiado!', 'success');
-        }
-      };
+      document.getElementById('credCopyBtn').onclick = () => pmCopyGlobal(copyText);
       new bootstrap.Modal(document.getElementById('credModal')).show();
     });
 }

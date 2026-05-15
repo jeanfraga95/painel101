@@ -45,7 +45,7 @@
                 {{ d if d < 999 else '∞' }}d
               </span>
             </td>
-            <td>{{ r.account_limit }}</td>
+            <td>{{ '∞' if r.account_limit == -1 else r.account_limit }}</td>
             <td>{{ r.accounts_used }}</td>
             <td>
               {% if server_assign_map and r.id in server_assign_map and server_assign_map[r.id] %}
@@ -61,24 +61,23 @@
             </td>
             <td class="text-end">
               <div class="btn-group btn-group-sm">
-                {% if current_user.role == 'admin' %}
                 <button class="btn btn-outline-info" title="Alterar senha"
                         onclick="openChangePw({{ r.id }}, '{{ r.username }}')">
                   <i class="fas fa-key"></i>
                 </button>
+                {% if current_user.role == 'admin' %}
                 <button class="btn btn-outline-secondary" title="Atribuir servidores"
                         onclick="openServers({{ r.id }}, '{{ r.username }}', {{ server_assign_map.get(r.id, [])|tojson }})">
                   <i class="fas fa-server"></i>
                 </button>
-                <button class="btn btn-outline-success" onclick="renewReseller({{ r.id }})" title="Renovar">
-                  <i class="fas fa-redo"></i>
-                </button>
-                {% else %}
-                <button class="btn btn-outline-info" title="Alterar senha"
-                        onclick="openChangePw({{ r.id }}, '{{ r.username }}')">
-                  <i class="fas fa-key"></i>
+                <button class="btn btn-outline-primary" title="Transferir revenda"
+                        onclick="openTransfer({{ r.id }}, '{{ r.username }}')">
+                  <i class="fas fa-exchange-alt"></i>
                 </button>
                 {% endif %}
+                <button class="btn btn-outline-success" onclick="renewReseller({{ r.id }})" title="Renovar painel">
+                  <i class="fas fa-redo"></i>
+                </button>
                 <button class="btn btn-outline-warning" onclick="suspendReseller({{ r.id }})" title="Suspender/Ativar">
                   <i class="fas fa-ban"></i>
                 </button>
@@ -124,7 +123,19 @@
           </div>
           <div class="col-6">
             <label class="form-label">Limite de contas</label>
-            <input type="number" id="cr_limit" class="form-control" value="10" min="1">
+            <div class="input-group">
+              <input type="number" id="cr_limit" class="form-control" value="10" min="1">
+              {% if current_user.role == 'admin' %}
+              <div class="input-group-text">
+                <input class="form-check-input mt-0 me-1" type="checkbox" id="cr_unlimited"
+                       onchange="toggleUnlimited(this)">
+                <label class="form-check-label" for="cr_unlimited">Ilimitado</label>
+              </div>
+              {% endif %}
+            </div>
+            {% if current_user.role != 'admin' %}
+            <small class="text-muted">Disponível: {{ (current_user.account_limit - current_user.accounts_used) if current_user.account_limit != -1 else '∞' }}</small>
+            {% endif %}
           </div>
           {% if all_servers %}
           <div class="col-12">
@@ -239,6 +250,13 @@ let lastResellerText = '';
 // Set default expires date
 document.getElementById('cr_expires').value = new Date(Date.now() + 30*86400000).toISOString().slice(0,10);
 
+function toggleUnlimited(cb) {
+  const limitInput = document.getElementById('cr_limit');
+  limitInput.disabled = cb.checked;
+  if (cb.checked) limitInput.value = '∞';
+  else limitInput.value = 10;
+}
+
 function genResCreds() {
   fetch('/api/random_credentials').then(r=>r.json()).then(d => {
     document.getElementById('cr_username').value = 'rev_' + d.username.slice(3);
@@ -248,11 +266,14 @@ function genResCreds() {
 
 function submitCreateReseller() {
   const serverIds = [...document.querySelectorAll('.cr_server_cb:checked')].map(c => c.value).join(',');
+  const unlimitedEl = document.getElementById('cr_unlimited');
+  const isUnlimited = unlimitedEl && unlimitedEl.checked;
   apiPost('/resellers/create', {
     username: document.getElementById('cr_username').value,
     password: document.getElementById('cr_password').value,
     expires_at: document.getElementById('cr_expires').value,
-    account_limit: document.getElementById('cr_limit').value,
+    account_limit: isUnlimited ? -1 : document.getElementById('cr_limit').value,
+    unlimited: isUnlimited ? '1' : '0',
     server_ids: serverIds,
   }, d => {
     if (d.success && d.reseller) {
@@ -277,18 +298,7 @@ function submitCreateReseller() {
 }
 
 function copyResellerResult() {
-  navigator.clipboard.writeText(lastResellerText)
-    .then(() => showToast('Copiado!', 'success'))
-    .catch(() => {
-      // fallback
-      const ta = document.createElement('textarea');
-      ta.value = lastResellerText;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-      showToast('Copiado!', 'success');
-    });
+  pmCopyGlobal(lastResellerText);
 }
 
 function openChangePw(id, name) {
@@ -332,9 +342,9 @@ function submitServers() {
 }
 
 function renewReseller(id) {
-  const days = prompt('Renovar painel da revenda por quantos dias?', '30');
-  if (!days) return;
-  apiPost(`/resellers/renew/${id}`, {days}, d => {
+  const days = prompt('Adicionar quantos dias ao vencimento da revenda?', '30');
+  if (!days || isNaN(days) || parseInt(days) < 1) return;
+  apiPost(`/resellers/renew/${id}`, {days: parseInt(days)}, d => {
     showToast(d.message, d.success ? 'success' : 'danger');
     if (d.success) setTimeout(() => location.reload(), 800);
   });
@@ -359,5 +369,49 @@ function deleteReseller(id, name) {
     if (d.success) document.getElementById('rrow_' + id)?.remove();
   });
 }
+
+// ── Transfer reseller ──────────────────────────────────────────────────────
+let _transferId = null;
+function openTransfer(id, name) {
+  _transferId = id;
+  document.getElementById('transferTitle').textContent = `Transferir "${name}"`;
+  new bootstrap.Modal(document.getElementById('transferModal')).show();
+}
+function doTransfer() {
+  const newParent = document.getElementById('transferNewParent').value;
+  const body = newParent ? {new_parent_id: newParent} : {};
+  apiPost(`/resellers/transfer/${_transferId}`, body, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (d.success) setTimeout(() => location.reload(), 1000);
+  });
+}
 </script>
+
+<!-- Transfer Reseller Modal -->
+<div class="modal fade" id="transferModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h6 class="modal-title" id="transferTitle"><i class="fas fa-exchange-alt me-2"></i>Transferir Revenda</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted small">Selecione o novo dono (pai) desta revenda. Deixe em branco para mover para o topo (direto sob o admin).</p>
+        <label class="form-label">Novo dono</label>
+        <select id="transferNewParent" class="form-select">
+          <option value="">— Topo (admin) —</option>
+          {% for r in resellers %}
+          <option value="{{ r.id }}">{{ r.username }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary w-100" onclick="doTransfer()">
+          <i class="fas fa-check me-2"></i>Transferir
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
 {% endblock %}

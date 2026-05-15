@@ -44,34 +44,50 @@ body { min-height:100vh; display:flex; align-items:center; justify-content:cente
     {% else %}
       {% set d = days_until(user_data.expires_at) %}
       <div class="text-center mb-3">
-        <div class="display-6 fw-bold {{ 'text-danger' if d <= 3 else ('text-warning' if d <= 7 else 'text-success') }}">
-          {{ d }} dias
+        <div class="fw-bold mb-1" style="font-size:1.1rem">
+          <i class="fas fa-user me-1 accent"></i>{{ user_data.username }}
         </div>
-        <div class="text-muted">até o vencimento</div>
+        {% if d < 0 %}
+        <div class="display-6 fw-bold text-danger">Expirado</div>
+        <div class="text-muted">venceu há {{ d|abs }} dia(s)</div>
+        {% else %}
+        <div class="display-6 fw-bold {{ 'text-danger' if d <= 3 else ('text-warning' if d <= 7 else 'text-success') }}">
+          {{ d }} dia(s)
+        </div>
+        <div class="text-muted">restantes</div>
+        {% endif %}
         <div class="mt-1"><small>Válido até: <strong>{{ user_data.expires_at[:10] }}</strong></small></div>
       </div>
 
       <div class="progress mb-4" style="height:10px;border-radius:10px">
         <div class="progress-bar {{ 'bg-danger' if d<=3 else ('bg-warning' if d<=7 else 'bg-success') }}"
-             style="width:{{ [100, d*3]|min }}%;border-radius:10px"></div>
+             style="width:{{ [100, [0,d*3]|max]|min }}%;border-radius:10px"></div>
       </div>
 
-      {% if qr_code and mp_init_point %}
+      {% if qr_code %}
       <div class="card mb-3" style="border-radius:12px">
         <div class="card-body text-center">
-          <h6 class="fw-semibold mb-3"><i class="fas fa-qrcode me-2"></i>Renovar agora — Pix/Cartão</h6>
-          <img src="{{ qr_code }}" alt="QR Code pagamento" class="rounded mb-3" style="max-width:180px">
-          <p class="text-muted small mb-3">Escaneie o QR Code ou clique no botão para pagar</p>
-          <a href="{{ mp_init_point }}" target="_blank" class="btn btn-success w-100 fw-semibold">
-            <i class="fas fa-credit-card me-2"></i>Pagar com Mercado Pago
-          </a>
-          <small class="text-muted mt-2 d-block">Renovação automática de 30 dias após confirmação</small>
+          <h6 class="fw-semibold mb-3"><i class="fas fa-qrcode me-2 accent"></i>Renovar agora — Pix</h6>
+          <img src="{{ qr_code }}" alt="QR Code PIX" class="rounded mb-3" style="max-width:200px">
+          <p class="text-muted small mb-2">Escaneie o QR Code <strong>ou</strong> copie o código abaixo e cole no app do seu banco</p>
+
+          {% if pix_copy_code %}
+          <div class="input-group mb-3">
+            <input type="text" class="form-control form-control-sm font-monospace text-truncate"
+                   id="pixCode" value="{{ pix_copy_code }}" readonly>
+            <button class="btn btn-outline-success btn-sm" onclick="copyPix()" id="copyBtn">
+              <i class="fas fa-copy me-1"></i>Copiar
+            </button>
+          </div>
+          {% endif %}
+
+          <small class="text-muted d-block mb-2">Renovação automática de 30 dias após confirmação</small>
         </div>
       </div>
       {% elif d <= 5 %}
       <div class="alert alert-warning text-center">
         <i class="fas fa-exclamation-triangle me-2"></i>
-        Seu acesso está próximo do vencimento. Entre em contato com seu provedor para renovar.
+        Acesso próximo do vencimento. Entre em contato com seu provedor para renovar.
       </div>
       {% else %}
       <div class="alert alert-success text-center py-2">
@@ -86,5 +102,23 @@ body { min-height:100vh; display:flex; align-items:center; justify-content:cente
   </div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+function copyPix() {
+  const el = document.getElementById('pixCode');
+  if (!el) return;
+  navigator.clipboard.writeText(el.value).then(() => {
+    const btn = document.getElementById('copyBtn');
+    btn.innerHTML = '<i class="fas fa-check me-1"></i>Copiado!';
+    btn.classList.replace('btn-outline-success', 'btn-success');
+    setTimeout(() => {
+      btn.innerHTML = '<i class="fas fa-copy me-1"></i>Copiar';
+      btn.classList.replace('btn-success', 'btn-outline-success');
+    }, 2500);
+  }).catch(() => {
+    el.select();
+    document.execCommand('copy');
+  });
+}
+</script>
 </body>
 </html>

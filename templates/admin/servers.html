@@ -3,111 +3,163 @@
 {% block page_title %}<i class="fas fa-server me-2"></i>Servidores SSH{% endblock %}
 
 {% block content %}
-<div class="d-flex gap-2 mb-3">
-  <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addServerModal">
-    <i class="fas fa-plus me-2"></i>Adicionar Servidor
-  </button>
-</div>
-
-<div class="row g-3" id="serverCards">
-  {% for srv in servers %}
-  <div class="col-md-6 col-lg-4" id="scard_{{ srv.id }}">
-    <div class="card h-100">
-      <div class="card-header d-flex justify-content-between align-items-center">
-        <strong><i class="fas fa-server me-2 text-primary"></i>{{ srv.name }}</strong>
-        <span class="badge {{ 'bg-success' if srv.status == 'active' else 'bg-danger' }}">{{ srv.status }}</span>
-      </div>
-      <div class="card-body">
-        <div class="mb-2">
-          <small class="text-muted">IP:</small> <code>{{ srv.ip }}:{{ srv.module_port }}</code>
-        </div>
-        <div class="mb-3">
-          <small class="text-muted">Token:</small> <code class="small">{{ srv.auth_token[:12] }}…</code>
-        </div>
-
-        <!-- Real-time stats -->
-        <div class="mb-2">
-          <div class="d-flex justify-content-between small mb-1">
-            <span>CPU</span>
-            <span id="cpu_{{ srv.id }}">—</span>
-          </div>
-          <div class="progress progress-sm mb-2">
-            <div class="progress-bar bg-info" id="cpubar_{{ srv.id }}" style="width:0%"></div>
-          </div>
-          <div class="d-flex justify-content-between small mb-1">
-            <span>RAM</span>
-            <span id="mem_{{ srv.id }}">—</span>
-          </div>
-          <div class="progress progress-sm">
-            <div class="progress-bar bg-warning" id="membar_{{ srv.id }}" style="width:0%"></div>
-          </div>
-        </div>
-      </div>
-      <div class="card-footer d-flex flex-wrap gap-1">
-        <button class="btn btn-sm btn-outline-primary" onclick="installModules({{ srv.id }})">
-          <i class="fas fa-upload me-1"></i>Instalar Módulos
-        </button>
-        <button class="btn btn-sm btn-outline-success" onclick="syncServer({{ srv.id }})">
-          <i class="fas fa-sync me-1"></i>Sincronizar
-        </button>
-        <button class="btn btn-sm btn-outline-warning text-warning" data-bs-toggle="modal" data-bs-target="#cmdModal_{{ srv.id }}">
-          <i class="fas fa-terminal me-1"></i>Comando
-        </button>
-        <button class="btn btn-sm btn-outline-danger" onclick="deleteServer({{ srv.id }}, '{{ srv.name }}')">
-          <i class="fas fa-trash"></i>
+<div class="row g-3 mb-3">
+  <!-- Categories panel -->
+  <div class="col-md-3">
+    <div class="card">
+      <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
+        <span><i class="fas fa-tags me-2"></i>Categorias</span>
+        <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#addCatModal">
+          <i class="fas fa-plus"></i>
         </button>
       </div>
-    </div>
-  </div>
-
-  <!-- Command modal for this server -->
-  <div class="modal fade" id="cmdModal_{{ srv.id }}" tabindex="-1">
-    <div class="modal-dialog">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h6 class="modal-title"><i class="fas fa-terminal me-2"></i>Comando — {{ srv.name }}</h6>
-          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-        </div>
-        <div class="modal-body">
-          <div class="mb-3">
-            <label class="form-label">Comando predefinido</label>
-            <select id="preset_{{ srv.id }}" class="form-select" onchange="setPreset({{ srv.id }})">
-              <option value="">Selecione...</option>
-              <option value="iptables -F">iptables -F (limpar firewall)</option>
-              <option value="reboot">reboot</option>
-              <option value="systemctl restart xray">restart xray</option>
-              <option value="systemctl restart v2ray">restart v2ray</option>
-              <option value="df -h">df -h (disco)</option>
-              <option value="free -m">free -m (memória)</option>
-              <option value="uptime">uptime</option>
-              <option value="who">who (usuários online)</option>
-              <option value="netstat -tlnp">netstat (portas)</option>
-            </select>
-          </div>
-          <div class="mb-3">
-            <label class="form-label">Ou comando manual</label>
-            <input type="text" id="cmd_{{ srv.id }}" class="form-control font-monospace" placeholder="comando...">
-          </div>
-          <div id="cmdOut_{{ srv.id }}" class="mt-2" style="display:none">
-            <pre class="p-2 rounded small" style="background:rgba(0,0,0,.3);max-height:200px;overflow:auto" id="cmdOutPre_{{ srv.id }}"></pre>
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button class="btn btn-warning text-dark" onclick="runCommand({{ srv.id }})">
-            <i class="fas fa-play me-2"></i>Executar
+      <div class="list-group list-group-flush">
+        <a href="{{ url_for('servers_list') }}" class="list-group-item list-group-item-action {% if not request.args.get('cat') %}active{% endif %}">
+          <i class="fas fa-layer-group me-2"></i>Todos os servidores
+          <span class="badge bg-secondary float-end">{{ servers|length }}</span>
+        </a>
+        {% for cat in categories %}
+        <div class="list-group-item d-flex justify-content-between align-items-center py-2">
+          <a href="{{ url_for('servers_list') }}?cat={{ cat.id }}" class="text-decoration-none flex-grow-1
+             {{ 'fw-bold text-primary' if request.args.get('cat')|int == cat.id else '' }}">
+            <i class="fas fa-tag me-2"></i>{{ cat.name }}
+          </a>
+          <button class="btn btn-xs btn-sm btn-outline-danger ms-1"
+                  onclick="deleteCategory({{ cat.id }}, '{{ cat.name }}')" title="Remover categoria">
+            <i class="fas fa-times"></i>
           </button>
         </div>
+        {% else %}
+        <div class="list-group-item text-muted small">Nenhuma categoria</div>
+        {% endfor %}
       </div>
     </div>
   </div>
-  {% else %}
-  <div class="col-12">
-    <div class="text-center text-muted py-5">
-      <i class="fas fa-server fa-3x mb-3 opacity-25"></i>
-      <p>Nenhum servidor configurado. Adicione um servidor para começar.</p>
+
+  <!-- Servers -->
+  <div class="col-md-9">
+    <div class="d-flex gap-2 mb-3">
+      <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addServerModal">
+        <i class="fas fa-plus me-2"></i>Adicionar Servidor
+      </button>
+    </div>
+
+    <div class="row g-3" id="serverCards">
+      {% set filter_cat = request.args.get('cat')|int if request.args.get('cat') else None %}
+      {% for srv in servers %}
+      {% if not filter_cat or srv.category_id == filter_cat %}
+      <div class="col-md-6" id="scard_{{ srv.id }}">
+        <div class="card h-100">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <div>
+              <strong><i class="fas fa-server me-2 text-primary"></i>{{ srv.name }}</strong>
+              {% if srv.category_id and cat_map.get(srv.category_id) %}
+              <span class="badge bg-info ms-1">{{ cat_map[srv.category_id] }}</span>
+              {% endif %}
+            </div>
+            <span class="badge {{ 'bg-success' if srv.status == 'active' else 'bg-danger' }}">{{ srv.status }}</span>
+          </div>
+          <div class="card-body">
+            <div class="mb-1"><small class="text-muted">IP:</small> <code>{{ srv.ip }}:{{ srv.module_port }}</code></div>
+            <div class="mb-3"><small class="text-muted">Token:</small> <code class="small">{{ srv.auth_token[:14] }}…</code></div>
+
+            <!-- Real-time stats -->
+            <div class="mb-1">
+              <div class="d-flex justify-content-between small mb-1">
+                <span>CPU</span><span id="cpu_{{ srv.id }}">—</span>
+              </div>
+              <div class="progress" style="height:5px" class="mb-2">
+                <div class="progress-bar bg-info" id="cpubar_{{ srv.id }}" style="width:0%"></div>
+              </div>
+              <div class="d-flex justify-content-between small mb-1 mt-1">
+                <span>RAM</span><span id="mem_{{ srv.id }}">—</span>
+              </div>
+              <div class="progress" style="height:5px">
+                <div class="progress-bar bg-warning" id="membar_{{ srv.id }}" style="width:0%"></div>
+              </div>
+            </div>
+          </div>
+          <div class="card-footer d-flex flex-wrap gap-1">
+            <button class="btn btn-sm btn-outline-secondary" onclick="openEditServer({{ srv.id }}, '{{ srv.name }}', '{{ srv.ip }}', {{ srv.module_port }}, '{{ srv.root_user }}', {{ srv.category_id or 'null' }})">
+              <i class="fas fa-edit me-1"></i>Editar
+            </button>
+            <button class="btn btn-sm btn-outline-primary" onclick="installModules({{ srv.id }})">
+              <i class="fas fa-upload me-1"></i>Módulos
+            </button>
+            <button class="btn btn-sm btn-outline-success" onclick="syncServer({{ srv.id }})">
+              <i class="fas fa-sync me-1"></i>Sincronizar
+            </button>
+            <button class="btn btn-sm btn-outline-warning text-warning" data-bs-toggle="modal" data-bs-target="#cmdModal_{{ srv.id }}">
+              <i class="fas fa-terminal me-1"></i>Comando
+            </button>
+            <button class="btn btn-sm btn-outline-danger" onclick="deleteServer({{ srv.id }}, '{{ srv.name }}')">
+              <i class="fas fa-trash"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Command modal -->
+      <div class="modal fade" id="cmdModal_{{ srv.id }}" tabindex="-1">
+        <div class="modal-dialog">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h6 class="modal-title"><i class="fas fa-terminal me-2"></i>{{ srv.name }}</h6>
+              <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+              <select id="preset_{{ srv.id }}" class="form-select mb-3" onchange="setPreset({{ srv.id }})">
+                <option value="">Selecione um comando...</option>
+                <option value="iptables -F">iptables -F (limpar regras)</option>
+                <option value="reboot">reboot</option>
+                <option value="systemctl restart xray">restart xray</option>
+                <option value="systemctl restart v2ray">restart v2ray</option>
+                <option value="df -h">df -h (disco)</option>
+                <option value="free -m">free -m (memória)</option>
+                <option value="uptime">uptime</option>
+                <option value="who">who (usuários online)</option>
+                <option value="netstat -tlnp">netstat (portas)</option>
+              </select>
+              <input type="text" id="cmd_{{ srv.id }}" class="form-control font-monospace mb-2" placeholder="Ou digite um comando...">
+              <div id="cmdOut_{{ srv.id }}" style="display:none">
+                <pre class="p-2 rounded small" style="background:rgba(0,0,0,.3);max-height:200px;overflow:auto" id="cmdOutPre_{{ srv.id }}"></pre>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-warning text-dark" onclick="runCommand({{ srv.id }})">
+                <i class="fas fa-play me-2"></i>Executar
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+      {% else %}
+      <div class="col-12 text-center text-muted py-5">
+        <i class="fas fa-server fa-3x mb-3 opacity-25"></i>
+        <p>Nenhum servidor. Adicione um para começar.</p>
+      </div>
+      {% endfor %}
     </div>
   </div>
-  {% endfor %}
+</div>
+
+<!-- Add Category Modal -->
+<div class="modal fade" id="addCatModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h6 class="modal-title"><i class="fas fa-tag me-2"></i>Nova Categoria</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="text" id="cat_name" class="form-control" placeholder="Ex: Brasil SP, EUA">
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" onclick="submitAddCat()">Criar</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- Add Server Modal -->
@@ -122,7 +174,7 @@
         <div class="row g-3">
           <div class="col-md-6">
             <label class="form-label">Nome</label>
-            <input type="text" id="as_name" class="form-control" placeholder="Servidor SP">
+            <input type="text" id="as_name" class="form-control" placeholder="Servidor SP-01">
           </div>
           <div class="col-md-6">
             <label class="form-label">IP</label>
@@ -130,7 +182,7 @@
           </div>
           <div class="col-md-4">
             <label class="form-label">Porta do módulo</label>
-            <input type="number" id="as_port" class="form-control" value="7277">
+            <input type="number" id="as_port" class="form-control" value="7270">
           </div>
           <div class="col-md-4">
             <label class="form-label">Usuário root</label>
@@ -138,15 +190,23 @@
           </div>
           <div class="col-md-4">
             <label class="form-label">Senha root (SSH)</label>
-            <input type="password" id="as_pass" class="form-control" placeholder="Para instalar módulos">
+            <input type="password" id="as_pass" class="form-control">
           </div>
-          <div class="col-12">
+          <div class="col-md-6">
+            <label class="form-label">Categoria</label>
+            <select id="as_cat" class="form-select">
+              <option value="">Sem categoria</option>
+              {% for cat in categories %}
+              <option value="{{ cat.id }}">{{ cat.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-6">
             <label class="form-label">Token de autenticação</label>
             <div class="input-group">
-              <input type="text" id="as_token" class="form-control font-monospace" placeholder="Token gerado automaticamente">
+              <input type="text" id="as_token" class="form-control font-monospace">
               <button class="btn btn-outline-secondary" onclick="genToken()"><i class="fas fa-random"></i></button>
             </div>
-            <small class="text-muted">Este token será configurado no modulo.py do servidor.</small>
           </div>
         </div>
       </div>
@@ -160,15 +220,95 @@
   </div>
 </div>
 
+<!-- Edit Server Modal -->
+<div class="modal fade" id="editServerModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fas fa-edit me-2"></i>Editar Servidor</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="es_id">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Nome</label>
+            <input type="text" id="es_name" class="form-control">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">IP</label>
+            <input type="text" id="es_ip" class="form-control">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Porta do módulo</label>
+            <input type="number" id="es_port" class="form-control">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Usuário root</label>
+            <input type="text" id="es_user" class="form-control">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Senha root (nova)</label>
+            <input type="password" id="es_pass" class="form-control" placeholder="Deixe em branco para manter">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Categoria</label>
+            <select id="es_cat" class="form-select">
+              <option value="">Sem categoria</option>
+              {% for cat in categories %}
+              <option value="{{ cat.id }}">{{ cat.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Token (deixe em branco para manter)</label>
+            <div class="input-group">
+              <input type="text" id="es_token" class="form-control font-monospace" placeholder="Manter atual">
+              <button class="btn btn-outline-secondary" onclick="genTokenEdit()"><i class="fas fa-random"></i></button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" class="btn btn-primary" onclick="submitEditServer()">
+          <i class="fas fa-save me-2"></i>Salvar
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
-// Generate random token on load
 function genToken() {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let token = '';
-  for (let i = 0; i < 24; i++) token += chars[Math.floor(Math.random()*chars.length)];
-  document.getElementById('as_token').value = token;
+  let t = '';
+  for (let i = 0; i < 24; i++) t += chars[Math.floor(Math.random()*chars.length)];
+  document.getElementById('as_token').value = t;
 }
 genToken();
+
+function genTokenEdit() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let t = '';
+  for (let i = 0; i < 24; i++) t += chars[Math.floor(Math.random()*chars.length)];
+  document.getElementById('es_token').value = t;
+}
+
+function submitAddCat() {
+  apiPost('/categories/add', {name: document.getElementById('cat_name').value}, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (d.success) setTimeout(() => location.reload(), 600);
+  });
+}
+
+function deleteCategory(id, name) {
+  if (!confirm(`Remover categoria "${name}"? Os servidores nela ficarão sem categoria.`)) return;
+  apiPost(`/categories/delete/${id}`, {}, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (d.success) setTimeout(() => location.reload(), 600);
+  });
+}
 
 function submitAddServer() {
   apiPost('/servers/add', {
@@ -177,10 +317,43 @@ function submitAddServer() {
     module_port: document.getElementById('as_port').value,
     root_user: document.getElementById('as_user').value,
     root_password: document.getElementById('as_pass').value,
+    category_id: document.getElementById('as_cat').value,
     auth_token: document.getElementById('as_token').value,
   }, d => {
     showToast(d.message, d.success ? 'success' : 'danger');
     if (d.success) setTimeout(() => location.reload(), 800);
+  });
+}
+
+function openEditServer(id, name, ip, port, user, catId) {
+  document.getElementById('es_id').value = id;
+  document.getElementById('es_name').value = name;
+  document.getElementById('es_ip').value = ip;
+  document.getElementById('es_port').value = port;
+  document.getElementById('es_user').value = user;
+  document.getElementById('es_token').value = '';
+  document.getElementById('es_pass').value = '';
+  const catSel = document.getElementById('es_cat');
+  catSel.value = catId || '';
+  new bootstrap.Modal(document.getElementById('editServerModal')).show();
+}
+
+function submitEditServer() {
+  const id = document.getElementById('es_id').value;
+  const data = {
+    name: document.getElementById('es_name').value,
+    ip: document.getElementById('es_ip').value,
+    module_port: document.getElementById('es_port').value,
+    root_user: document.getElementById('es_user').value,
+    category_id: document.getElementById('es_cat').value,
+  };
+  const pass = document.getElementById('es_pass').value;
+  if (pass) data.root_password = pass;
+  const token = document.getElementById('es_token').value;
+  if (token) data.auth_token = token;
+  apiPost(`/servers/edit/${id}`, data, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (d.success) { bootstrap.Modal.getInstance(document.getElementById('editServerModal'))?.hide(); setTimeout(() => location.reload(), 800); }
   });
 }
 
@@ -193,8 +366,8 @@ function deleteServer(id, name) {
 }
 
 function installModules(id) {
-  if (!confirm('Instalar/atualizar módulos no servidor? Isso usará SSH para enviar os arquivos.')) return;
-  showToast('Instalando módulos...', 'info');
+  if (!confirm('Instalar/atualizar módulos Painel Master no servidor via SSH?')) return;
+  showToast('Instalando módulos (porta 7270)...', 'info');
   apiPost(`/servers/install_modules/${id}`, {}, d => {
     showToast(d.message, d.success ? 'success' : 'danger');
   });
@@ -218,28 +391,32 @@ function runCommand(id) {
   if (!cmd) return;
   apiPost(`/servers/command/${id}`, {command: cmd}, d => {
     const outDiv = document.getElementById('cmdOut_' + id);
-    const outPre = document.getElementById('cmdOutPre_' + id);
     outDiv.style.display = 'block';
-    outPre.textContent = d.output || d.message || 'Sem output';
+    document.getElementById('cmdOutPre_' + id).textContent = d.output || d.message || 'Sem output';
   });
 }
 
-// SSE stats for each server
+// SSE stats
 {% for srv in servers %}
 (function() {
   const sid = {{ srv.id }};
   const es = new EventSource(`/servers/stats/${sid}`);
   es.onmessage = function(e) {
-    const d = JSON.parse(e.data);
-    if (d.error) return;
-    document.getElementById(`cpu_${sid}`).textContent = d.cpu.toFixed(1) + '%';
-    document.getElementById(`cpubar_${sid}`).style.width = d.cpu + '%';
-    if (d.mem_total > 0) {
-      const pct = ((d.mem_used/d.mem_total)*100).toFixed(1);
-      document.getElementById(`mem_${sid}`).textContent = `${d.mem_used}/${d.mem_total} MB (${pct}%)`;
-      document.getElementById(`membar_${sid}`).style.width = pct + '%';
-    }
+    try {
+      const d = JSON.parse(e.data);
+      if (d.error) return;
+      if (document.getElementById('cpu_'+sid)) {
+        document.getElementById('cpu_'+sid).textContent = d.cpu.toFixed(1) + '%';
+        document.getElementById('cpubar_'+sid).style.width = Math.min(100,d.cpu) + '%';
+        if (d.mem_total > 0) {
+          const pct = ((d.mem_used/d.mem_total)*100).toFixed(1);
+          document.getElementById('mem_'+sid).textContent = d.mem_used+'/'+ d.mem_total+' MB';
+          document.getElementById('membar_'+sid).style.width = pct + '%';
+        }
+      }
+    } catch(e) {}
   };
+  es.onerror = function() { es.close(); };
 })();
 {% endfor %}
 </script>

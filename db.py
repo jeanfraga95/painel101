@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS panel_users (
     parent_id           INTEGER,
     created_at          TEXT    DEFAULT (datetime('now')),
     expires_at          TEXT,
-    account_limit       INTEGER DEFAULT 10,
+    account_limit       INTEGER DEFAULT 10,  -- -1 = unlimited (admin only)
     accounts_used       INTEGER DEFAULT 0,
     mercadopago_token   TEXT,
     mercadopago_price   REAL    DEFAULT 0,
@@ -80,14 +80,21 @@ CREATE TABLE IF NOT EXISTS reseller_servers (
     FOREIGN KEY (server_id)   REFERENCES servers(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS server_categories (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT    NOT NULL UNIQUE,
+    created_at TEXT    DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS servers (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     name          TEXT    NOT NULL,
     ip            TEXT    NOT NULL,
-    module_port   INTEGER DEFAULT 7277,
+    module_port   INTEGER DEFAULT 7270,
     root_user     TEXT    DEFAULT 'root',
     root_password TEXT,
     auth_token    TEXT    NOT NULL,
+    category_id   INTEGER REFERENCES server_categories(id) ON DELETE SET NULL,
     status        TEXT    DEFAULT 'active',
     created_at    TEXT    DEFAULT (datetime('now'))
 );
@@ -248,11 +255,12 @@ def create_panel_user(username: str, password: str, role: str, parent_id: int,
             (username.lower(), hash_password(password), password, role, parent_id, expires_at, account_limit)
         )
         new_id = cur.lastrowid
-        # Decrement parent's account_limit
+        # Deduct the ACTUAL limit granted from parent's accounts_used
+        # (e.g. if creating a reseller with limit=90, parent loses 90 slots)
         if parent_id:
             conn.execute(
-                "UPDATE panel_users SET accounts_used = accounts_used+1 WHERE id=?",
-                (parent_id,)
+                "UPDATE panel_users SET accounts_used = accounts_used + ? WHERE id=?",
+                (account_limit, parent_id)
             )
         conn.commit()
         return True, 'Criado com sucesso', new_id
@@ -266,12 +274,32 @@ def delete_panel_user(user_id: int):
     conn = get_db()
     user = conn.execute("SELECT * FROM panel_users WHERE id=?", (user_id,)).fetchone()
     if user and user['parent_id']:
+        restore = user['account_limit'] if user['account_limit'] > 0 else 1
         conn.execute(
-            "UPDATE panel_users SET accounts_used = MAX(0, accounts_used-1) WHERE id=?",
-            (user['parent_id'],)
+            "UPDATE panel_users SET accounts_used = MAX(0, accounts_used - ?) WHERE id=?",
+            (restore, user['parent_id'])
         )
     conn.execute("DELETE FROM panel_users WHERE id=?", (user_id,))
     conn.commit()
+    conn.close()
+
+
+def renew_panel_user(user_id: int, days: int):
+    """Add days on top of current expiry for a panel user (reseller)."""
+    conn = get_db()
+    now = datetime.now(TZ)
+    user = conn.execute("SELECT * FROM panel_users WHERE id=?", (user_id,)).fetchone()
+    if user and user['expires_at']:
+        try:
+            current_exp = datetime.fromisoformat(user['expires_at'])
+            if current_exp.tzinfo is None:
+                current_exp = TZ.localize(current_exp)
+            base = max(current_exp, now)
+        except Exception:
+            base = now
+        new_exp = (base + timedelta(days=days)).strftime('%Y-%m-%d')
+        conn.execute("UPDATE panel_users SET expires_at=? WHERE id=?", (new_exp, user_id))
+        conn.commit()
     conn.close()
 
 
@@ -384,17 +412,20 @@ def delete_ssh_user(user_id: int):
 
 
 def renew_ssh_user(user_id: int, days: int):
+    """Always adds days ON TOP of current expiry (or today if already expired)."""
     conn = get_db()
     now = datetime.now(TZ)
     user = conn.execute("SELECT * FROM ssh_users WHERE id=?", (user_id,)).fetchone()
     if user:
         try:
             current_exp = datetime.fromisoformat(user['expires_at'])
-            if current_exp < now:
-                current_exp = now
+            if current_exp.tzinfo is None:
+                current_exp = TZ.localize(current_exp)
+            # Always use max(current_expiry, today) so days are added on top
+            base = max(current_exp, now)
         except Exception:
-            current_exp = now
-        new_exp = current_exp + timedelta(days=days)
+            base = now
+        new_exp = base + timedelta(days=days)
         conn.execute("UPDATE ssh_users SET expires_at=? WHERE id=?",
                      (new_exp.strftime('%Y-%m-%d'), user_id))
         conn.commit()
@@ -510,6 +541,13 @@ def update_payment_status(payment_id: str, status: str):
     conn.close()
 
 
+def delete_payment(payment_db_id: int):
+    conn = get_db()
+    conn.execute("DELETE FROM payments WHERE id=?", (payment_db_id,))
+    conn.commit()
+    conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Backup config
 # ---------------------------------------------------------------------------
@@ -620,4 +658,63 @@ def migrate_schema():
         );
     """)
     conn.commit()
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Server categories
+# ---------------------------------------------------------------------------
+
+def get_server_categories():
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM server_categories ORDER BY name").fetchall()
+    conn.close()
+    return rows
+
+def add_server_category(name: str) -> int:
+    conn = get_db()
+    cur = conn.execute("INSERT INTO server_categories (name) VALUES (?)", (name,))
+    new_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return new_id
+
+def delete_server_category(cat_id: int):
+    conn = get_db()
+    conn.execute("DELETE FROM server_categories WHERE id=?", (cat_id,))
+    conn.commit()
+    conn.close()
+
+def get_servers_by_category(cat_id: int) -> list:
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM servers WHERE category_id=? AND status='active'", (cat_id,)).fetchall()
+    conn.close()
+    return rows
+
+def update_server(server_id: int, **kwargs):
+    if not kwargs:
+        return
+    allowed = {'name', 'ip', 'module_port', 'root_user', 'root_password', 'auth_token', 'status', 'category_id'}
+    kwargs = {k: v for k, v in kwargs.items() if k in allowed}
+    if not kwargs:
+        return
+    parts = ', '.join(f"{k}=?" for k in kwargs)
+    vals = list(kwargs.values()) + [server_id]
+    conn = get_db()
+    conn.execute(f"UPDATE servers SET {parts} WHERE id=?", vals)
+    conn.commit()
+    conn.close()
+
+def migrate_schema_v2():
+    """Additional schema migrations."""
+    conn = get_db()
+    for stmt in [
+        "CREATE TABLE IF NOT EXISTS server_categories (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, created_at TEXT DEFAULT (datetime('now')))",
+        "ALTER TABLE servers ADD COLUMN category_id INTEGER REFERENCES server_categories(id) ON DELETE SET NULL",
+    ]:
+        try:
+            conn.executescript(stmt)
+            conn.commit()
+        except Exception:
+            pass
     conn.close()

@@ -8,9 +8,11 @@
   <div class="col-md-6">
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
-        <strong><i class="fas fa-server me-2 text-primary"></i>{{ srv.name }}</strong>
+        <strong><i class="fas fa-server me-2 text-primary"></i>{{ srv.name }}
+          {% if cat_map and srv.category_id %}<span class="badge bg-secondary ms-1">{{ cat_map.get(srv.category_id, '') }}</span>{% endif %}
+        </strong>
         <div class="d-flex align-items-center gap-2">
-          <span class="badge bg-success" id="online_count_{{ srv.id }}">0 online</span>
+          <span class="badge bg-success" id="online_count_{{ srv.id }}">— online</span>
           <button class="btn btn-sm btn-outline-secondary" onclick="refreshOnline({{ srv.id }})">
             <i class="fas fa-sync"></i>
           </button>
@@ -21,13 +23,15 @@
           <thead class="table-secondary">
             <tr>
               <th>Usuário</th>
+              <th>Dono</th>
               <th>Conexões</th>
               <th>Limite</th>
               <th>Uso</th>
+              <th>Vencimento</th>
             </tr>
           </thead>
           <tbody id="online_tbody_{{ srv.id }}">
-            <tr><td colspan="4" class="text-center text-muted py-3">Carregando...</td></tr>
+            <tr><td colspan="6" class="text-center text-muted py-3">Carregando...</td></tr>
           </tbody>
         </table>
       </div>
@@ -49,22 +53,26 @@ function renderOnline(serverId, data) {
   countBadge.textContent = users.length + ' online';
 
   if (users.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-3"><i class="fas fa-moon me-2"></i>Nenhum usuário online</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3"><i class="fas fa-moon me-2"></i>Nenhum usuário online</td></tr>';
     return;
   }
 
   tbody.innerHTML = users.map(u => {
-    const pct = u.limit > 0 ? Math.min(100, Math.round((u.connections / u.limit) * 100)) : 0;
+    const limit = parseInt(u.limit) || 1;
+    const conns = parseInt(u.connections) || 0;
+    const pct = Math.min(100, Math.round((conns / limit) * 100));
     const barColor = pct >= 90 ? 'bg-danger' : (pct >= 60 ? 'bg-warning' : 'bg-success');
     return `<tr>
-      <td><i class="fas fa-circle text-success me-1" style="font-size:.6rem"></i>${u.username}</td>
-      <td>${u.connections}</td>
-      <td>${u.limit}</td>
+      <td><i class="fas fa-circle text-success me-1" style="font-size:.6rem"></i><strong>${u.username}</strong></td>
+      <td><small class="text-muted">${u.owner || '—'}</small></td>
+      <td><span class="badge bg-primary">${conns}</span></td>
+      <td>${limit}</td>
       <td>
-        <div class="progress progress-sm" style="min-width:60px">
+        <div class="progress" style="height:6px;min-width:50px">
           <div class="progress-bar ${barColor}" style="width:${pct}%"></div>
         </div>
       </td>
+      <td><small>${u.expires_at || '—'}</small></td>
     </tr>`;
   }).join('');
 }
@@ -75,15 +83,15 @@ function refreshOnline(serverId) {
     .then(d => renderOnline(serverId, d))
     .catch(() => {
       document.getElementById('online_tbody_' + serverId).innerHTML =
-        '<tr><td colspan="4" class="text-center text-danger py-3"><i class="fas fa-exclamation-triangle me-2"></i>Erro ao conectar ao servidor</td></tr>';
+        '<tr><td colspan="6" class="text-center text-danger py-3"><i class="fas fa-exclamation-triangle me-2"></i>Erro ao conectar ao servidor</td></tr>';
+      document.getElementById('online_count_' + serverId).textContent = 'erro';
     });
 }
 
-// Auto-refresh every 10 seconds
 const serverIds = [{% for srv in servers %}{{ srv.id }}{% if not loop.last %},{% endif %}{% endfor %}];
 serverIds.forEach(id => {
   refreshOnline(id);
-  setInterval(() => refreshOnline(id), 10000);
+  setInterval(() => refreshOnline(id), 15000);
 });
 </script>
 {% endblock %}

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # pmaster_module.py — Painel Master HTTP command receiver
-# Port: 7277
+# Port: 7270
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import cgi
 import subprocess
@@ -42,6 +42,6 @@ class PMasterHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(('Erro: ' + str(e)).encode())
 
-server = HTTPServer(('0.0.0.0', 7277), PMasterHandler)
-print('PanelMaster module iniciado na porta 7277')
+server = HTTPServer(('0.0.0.0', 7270), PMasterHandler)
+print('PanelMaster module iniciado na porta 7270')
 server.serve_forever()

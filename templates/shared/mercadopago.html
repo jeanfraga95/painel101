@@ -61,11 +61,12 @@
               <th>Valor</th>
               <th>Status</th>
               <th>Data</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
             {% for p in payments %}
-            <tr>
+            <tr id="pay_row_{{ p.id }}">
               <td>{{ p.ssh_username or '—' }}</td>
               <td>R$ {{ '%.2f'|format(p.amount) }}</td>
               <td>
@@ -74,9 +75,16 @@
                 </span>
               </td>
               <td><small>{{ p.created_at[:16] }}</small></td>
+              <td>
+                {% if p.status == 'pending' %}
+                <button class="btn btn-sm btn-outline-danger" onclick="deletePayment({{ p.id }})" title="Excluir">
+                  <i class="fas fa-trash"></i>
+                </button>
+                {% endif %}
+              </td>
             </tr>
             {% else %}
-            <tr><td colspan="4" class="text-center text-muted py-4">Nenhum pagamento registrado.</td></tr>
+            <tr><td colspan="5" class="text-center text-muted py-4">Nenhum pagamento registrado.</td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -84,4 +92,16 @@
     </div>
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function deletePayment(id) {
+  if (!confirm('Excluir este pagamento pendente?')) return;
+  apiPost(`/mercadopago/delete/${id}`, {}, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (d.success) document.getElementById('pay_row_' + id)?.remove();
+  });
+}
+</script>
 {% endblock %}

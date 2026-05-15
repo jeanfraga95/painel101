@@ -86,7 +86,7 @@
 
 <script>
 function quickRenew(userId) {
-  const days = prompt('Quantos dias renovar?', '30');
+  const days = prompt('Adicionar quantos dias ao vencimento?', '30');
   if (!days) return;
   apiPost(`/users/renew/${userId}`, {days}, d => {
     showToast(d.message, d.success ? 'success' : 'danger');

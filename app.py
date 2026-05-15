@@ -41,6 +41,7 @@ TZ = pytz.timezone('America/Sao_Paulo')
 
 db.init_db()
 db.migrate_schema()
+db.migrate_schema_v2()
 
 # ---------------------------------------------------------------------------
 # Helpers / decorators
@@ -177,7 +178,8 @@ def dashboard():
             'accounts_used': user['accounts_used'],
             'days_panel': days_panel,
         }
-        return render_template('reseller/dashboard.html', stats=stats, expiring=expiring)
+        servers = db.get_servers_for_user(user)
+        return render_template('reseller/dashboard.html', stats=stats, expiring=expiring, servers=servers)
 
 
 # ---------------------------------------------------------------------------
@@ -208,12 +210,20 @@ def users_list():
     search = request.args.get('search', '').strip()
     filter_type = request.args.get('filter', 'all')  # all, expiring, test
 
+    owner_filter = request.args.get('owner_id', '', type=str).strip()
     users = _get_visible_users(user, sort=sort, search=search)
 
     if filter_type == 'expiring':
         users = [u for u in users if 0 <= days_until(u['expires_at']) <= 7]
+    elif filter_type == 'expiring3':
+        users = [u for u in users if 0 <= days_until(u['expires_at']) <= 3]
+    elif filter_type == 'expired':
+        users = [u for u in users if days_until(u['expires_at']) < 0]
     elif filter_type == 'test':
         users = [u for u in users if u['is_test']]
+
+    if owner_filter and owner_filter.isdigit():
+        users = [u for u in users if str(u['owner_id']) == owner_filter]
 
     servers = db.get_servers()
     server_map = {s['id']: s for s in servers}
@@ -223,10 +233,18 @@ def users_list():
     for pu in db.get_db().execute("SELECT id, username FROM panel_users").fetchall():
         all_panel_users_map[pu['id']] = pu['username']
 
+    # Build resellers list for owner filter dropdown
+    if user['role'] == 'admin':
+        all_resellers = db.get_db().execute("SELECT id,username,role FROM panel_users ORDER BY username").fetchall()
+    else:
+        all_resellers = db.get_all_resellers_under(user['id'])
+
     return render_template('shared/users.html',
                            users=users, servers=servers, server_map=server_map,
                            owner_map=all_panel_users_map,
-                           sort=sort, search=search, filter_type=filter_type)
+                           all_resellers=all_resellers,
+                           sort=sort, search=search, filter_type=filter_type,
+                           owner_filter=owner_filter)
 
 
 @app.route('/users/create', methods=['GET', 'POST'])
@@ -246,9 +264,10 @@ def create_user():
 
         # Check panel user limits
         if current_user['role'] != 'admin':
-            avail = current_user['account_limit'] - current_user['accounts_used']
-            if avail <= 0:
-                return jsonify(success=False, message='Limite de contas atingido')
+            if current_user['account_limit'] != -1:  # -1 = unlimited
+                avail = current_user['account_limit'] - current_user['accounts_used']
+                if avail <= 0:
+                    return jsonify(success=False, message='Limite de contas atingido')
 
         if not username:
             return jsonify(success=False, message='Username inválido')
@@ -273,7 +292,7 @@ def create_user():
         if not ok:
             return jsonify(success=False, message=msg)
 
-        # Create on server
+        # Create on server(s) - including all servers in the same category
         server_msg = ''
         if server_id:
             srv = db.get_server(server_id)
@@ -283,6 +302,15 @@ def create_user():
                     username, password, days, limit, uuid if use_v2ray else None
                 )
                 server_msg = s_msg
+                # Also create on other servers in same category
+                if srv['category_id']:
+                    cat_servers = db.get_servers_by_category(srv['category_id'])
+                    for cat_srv in cat_servers:
+                        if cat_srv['id'] != server_id:
+                            sc.create_ssh_user_on_server(
+                                cat_srv['ip'], cat_srv['module_port'], cat_srv['auth_token'],
+                                username, password, days, limit, uuid if use_v2ray else None
+                            )
 
         app_link = db.get_setting('app_link', '')
         return jsonify(
@@ -316,9 +344,10 @@ def create_test():
     uuid = db.random_uuid() if use_v2ray else None
 
     if current_user['role'] != 'admin':
-        avail = current_user['account_limit'] - current_user['accounts_used']
-        if avail <= 0:
-            return jsonify(success=False, message='Limite de contas atingido')
+        if current_user['account_limit'] != -1:  # -1 = unlimited
+            avail = current_user['account_limit'] - current_user['accounts_used']
+            if avail <= 0:
+                return jsonify(success=False, message='Limite de contas atingido')
 
     if not username:
         return jsonify(success=False, message='Username inválido')
@@ -402,6 +431,8 @@ def renew_user(user_id):
             return jsonify(success=False, message='Sem permissão')
 
     days = int(request.form.get('days', 30))
+    if days < 1:
+        return jsonify(success=False, message='Informe quantos dias renovar')
     db.renew_ssh_user(user_id, days)
 
     # Renew on server
@@ -414,7 +445,9 @@ def renew_user(user_id):
                 u['username'], days
             )
 
-    return jsonify(success=True, message=f'Renovado por {days} dias', server_msg=server_msg)
+    updated = db.get_ssh_user(user_id)
+    new_exp = updated['expires_at'][:10] if updated else ''
+    return jsonify(success=True, message=f'Renovado +{days} dias. Novo vencimento: {new_exp}', server_msg=server_msg, new_expiry=new_exp)
 
 
 @app.route('/users/update/<int:user_id>', methods=['POST'])
@@ -430,16 +463,34 @@ def update_user(user_id):
         if u['owner_id'] not in tree_ids:
             return jsonify(success=False, message='Sem permissão')
 
-    allowed_fields = {'connection_limit', 'status', 'expires_at'}
+    allowed_fields = {'connection_limit', 'status', 'expires_at', 'password'}
     updates = {k: v for k, v in request.form.items() if k in allowed_fields}
     if 'connection_limit' in updates:
         try:
             updates['connection_limit'] = int(updates['connection_limit'])
         except ValueError:
             return jsonify(success=False, message='Limite inválido')
+
+    new_password = updates.pop('password', None)
+
     if updates:
         db.update_ssh_user(user_id, **updates)
-    return jsonify(success=True, message='Atualizado')
+
+    # Change password on SSH server if requested
+    server_msg = ''
+    if new_password:
+        if len(new_password) < 4:
+            return jsonify(success=False, message='Senha muito curta (mínimo 4 caracteres)')
+        db.update_ssh_user(user_id, password=new_password)
+        if u['server_id']:
+            srv = db.get_server(u['server_id'])
+            if srv:
+                s_ok, server_msg = sc.send_command(
+                    srv['ip'], srv['module_port'], srv['auth_token'],
+                    f"echo '{u['username']}:{new_password}' | chpasswd"
+                )
+
+    return jsonify(success=True, message='Atualizado', server_msg=server_msg)
 
 
 @app.route('/users/suspend/<int:user_id>', methods=['POST'])
@@ -516,11 +567,19 @@ def create_reseller():
     if not username or not password or not expires_at:
         return jsonify(success=False, message='Preencha todos os campos')
 
-    # For non-admin, the account_limit comes from their own available limit
-    if current_user['role'] != 'admin':
-        avail = current_user['account_limit'] - current_user['accounts_used']
-        if account_limit > avail:
-            return jsonify(success=False, message=f'Limite insuficiente. Disponível: {avail}')
+    # Validate limits
+    unlimited = request.form.get('unlimited') == '1'
+    if unlimited and current_user['role'] != 'admin':
+        return jsonify(success=False, message='Apenas admin pode criar revendas ilimitadas')
+    if unlimited:
+        account_limit = -1  # -1 = unlimited
+
+    if current_user['role'] != 'admin' and account_limit > 0:
+        # Parent must have enough available slots
+        parent_avail = current_user['account_limit'] - current_user['accounts_used']
+        # If parent itself is unlimited (-1), they can give any amount
+        if current_user['account_limit'] != -1 and account_limit > parent_avail:
+            return jsonify(success=False, message=f'Limite insuficiente. Disponível: {parent_avail}')
 
     ok, msg, new_id = db.create_panel_user(
         username, password, 'reseller', current_user['id'], expires_at, account_limit
@@ -590,8 +649,25 @@ def delete_reseller(reseller_id):
         if reseller_id not in tree_ids:
             return jsonify(success=False, message='Sem permissão')
 
+    # Delete SSH users of this reseller tree from server before removing from DB
+    tree_ids = [reseller_id] + [s['id'] for s in db.get_all_resellers_under(reseller_id)]
+    conn = db.get_db()
+    affected_users = conn.execute(
+        f"SELECT * FROM ssh_users WHERE owner_id IN ({','.join('?'*len(tree_ids))})",
+        tree_ids
+    ).fetchall()
+    conn.close()
+
+    for u in affected_users:
+        if u['server_id']:
+            srv = db.get_server(u['server_id'])
+            if srv:
+                sc.delete_user_on_server(srv['ip'], srv['module_port'], srv['auth_token'],
+                                         u['username'], u['v2ray_uuid'])
+        db.delete_ssh_user(u['id'])
+
     db.delete_panel_user(reseller_id)
-    return jsonify(success=True, message='Revenda deletada')
+    return jsonify(success=True, message=f'Revenda e {len(affected_users)} usuário(s) deletados')
 
 
 @app.route('/resellers/suspend/<int:reseller_id>', methods=['POST'])
@@ -607,28 +683,57 @@ def suspend_reseller(reseller_id):
             return jsonify(success=False, message='Sem permissão')
     new_status = 'suspended' if r['status'] == 'active' else 'active'
     db.update_panel_user(reseller_id, status=new_status)
-    return jsonify(success=True, new_status=new_status)
+
+    # Get ALL users under this reseller tree
+    tree_ids = [reseller_id] + [s['id'] for s in db.get_all_resellers_under(reseller_id)]
+    conn = db.get_db()
+    affected_users = conn.execute(
+        f"SELECT * FROM ssh_users WHERE owner_id IN ({','.join('?'*len(tree_ids))})",
+        tree_ids
+    ).fetchall()
+    conn.close()
+
+    if new_status == 'suspended':
+        # Kill all active sessions on servers
+        for u in affected_users:
+            if u['server_id']:
+                srv = db.get_server(u['server_id'])
+                if srv:
+                    sc.send_command(srv['ip'], srv['module_port'], srv['auth_token'],
+                                    f"pkill -u {u['username']} 2>/dev/null || true")
+    else:
+        # Reactivated - resync all users to their servers
+        from collections import defaultdict
+        server_users = defaultdict(list)
+        for u in affected_users:
+            if u['server_id'] and u['status'] == 'active':
+                server_users[u['server_id']].append(dict(u))
+        for srv_id, users in server_users.items():
+            srv = db.get_server(srv_id)
+            if srv:
+                sc.sync_users_to_server(srv['ip'], srv['module_port'], srv['auth_token'], users)
+
+    return jsonify(success=True, new_status=new_status, affected_users=len(affected_users))
 
 
 @app.route('/resellers/renew/<int:reseller_id>', methods=['POST'])
 @login_required
 def renew_reseller(reseller_id):
     current_user = get_current_user()
-    if current_user['role'] != 'admin':
-        return jsonify(success=False, message='Apenas admin pode renovar revendas')
-    days = int(request.form.get('days', 30))
     r = db.get_panel_user(reseller_id)
     if not r:
         return jsonify(success=False, message='Revenda não encontrada')
-    try:
-        exp = datetime.fromisoformat(r['expires_at'])
-        if exp < now_br():
-            exp = now_br()
-    except Exception:
-        exp = now_br()
-    new_exp = (exp + timedelta(days=days)).strftime('%Y-%m-%d')
-    db.update_panel_user(reseller_id, expires_at=new_exp)
-    return jsonify(success=True, message=f'Renovado por {days} dias')
+    # Admin can renew any reseller; reseller can renew only their own subtree
+    if current_user['role'] != 'admin':
+        tree_ids = [s['id'] for s in db.get_all_resellers_under(current_user['id'])]
+        if reseller_id not in tree_ids:
+            return jsonify(success=False, message='Sem permissão para renovar esta revenda')
+    days = int(request.form.get('days', 30))
+    if days < 1:
+        return jsonify(success=False, message='Informe quantos dias renovar')
+    db.renew_panel_user(reseller_id, days)
+    updated = db.get_panel_user(reseller_id)
+    return jsonify(success=True, message=f'Renovado +{days} dias', new_expiry=updated['expires_at'])
 
 
 # ---------------------------------------------------------------------------
@@ -639,7 +744,9 @@ def renew_reseller(reseller_id):
 @admin_required
 def servers_list():
     servers = db.get_servers()
-    return render_template('admin/servers.html', servers=servers)
+    categories = db.get_server_categories()
+    cat_map = {c['id']: c['name'] for c in categories}
+    return render_template('admin/servers.html', servers=servers, categories=categories, cat_map=cat_map)
 
 
 @app.route('/servers/add', methods=['POST'])
@@ -647,7 +754,7 @@ def servers_list():
 def add_server():
     name = request.form.get('name', '').strip()
     ip = request.form.get('ip', '').strip()
-    module_port = int(request.form.get('module_port', 7277))
+    module_port = int(request.form.get('module_port', 7270))
     root_user = request.form.get('root_user', 'root').strip()
     root_password = request.form.get('root_password', '').strip()
     auth_token = request.form.get('auth_token', db.random_password(22)).strip()
@@ -656,6 +763,10 @@ def add_server():
         return jsonify(success=False, message='Nome e IP são obrigatórios')
 
     new_id = db.add_server(name, ip, module_port, root_user, root_password, auth_token)
+    # Assign category if provided
+    cat_id = request.form.get('category_id', '').strip()
+    if cat_id and cat_id.isdigit():
+        db.update_server(new_id, category_id=int(cat_id))
     return jsonify(success=True, message='Servidor adicionado', server_id=new_id)
 
 
@@ -664,6 +775,41 @@ def add_server():
 def delete_server(server_id):
     db.delete_server(server_id)
     return jsonify(success=True, message='Servidor removido')
+
+
+@app.route('/servers/edit/<int:server_id>', methods=['POST'])
+@admin_required
+def edit_server(server_id):
+    srv = db.get_server(server_id)
+    if not srv:
+        return jsonify(success=False, message='Servidor não encontrado')
+    updates = {}
+    for field in ('name', 'ip', 'module_port', 'root_user', 'root_password', 'auth_token', 'category_id'):
+        val = request.form.get(field, '').strip()
+        if val != '':
+            updates[field] = int(val) if field in ('module_port', 'category_id') else val
+    db.update_server(server_id, **updates)
+    return jsonify(success=True, message='Servidor atualizado')
+
+
+@app.route('/categories/add', methods=['POST'])
+@admin_required
+def add_category():
+    name = request.form.get('name', '').strip()
+    if not name:
+        return jsonify(success=False, message='Nome obrigatório')
+    try:
+        cat_id = db.add_server_category(name)
+        return jsonify(success=True, message='Categoria criada', id=cat_id)
+    except Exception as e:
+        return jsonify(success=False, message=str(e))
+
+
+@app.route('/categories/delete/<int:cat_id>', methods=['POST'])
+@admin_required
+def delete_category(cat_id):
+    db.delete_server_category(cat_id)
+    return jsonify(success=True, message='Categoria removida')
 
 
 @app.route('/servers/install_modules/<int:server_id>', methods=['POST'])
@@ -743,8 +889,10 @@ def server_stats_sse(server_id):
 @login_required
 def online_users():
     current_user = get_current_user()
-    servers = db.get_servers()
-    return render_template('shared/online.html', servers=servers)
+    servers = db.get_servers_for_user(current_user)
+    categories = db.get_server_categories()
+    cat_map = {c['id']: c['name'] for c in categories}
+    return render_template('shared/online.html', servers=servers, cat_map=cat_map)
 
 
 @app.route('/api/online/<int:server_id>')
@@ -755,31 +903,36 @@ def api_online(server_id):
     if not srv:
         return jsonify(online=[])
 
-    online = sc.get_online_users_ps(srv['ip'], srv['module_port'], srv['auth_token'])
+    online_raw = sc.get_online_users_robust(srv['ip'], srv['module_port'], srv['auth_token'])
+    # online_raw is list of {username, connections}
 
     # Filter by permission
     if current_user['role'] != 'admin':
-        # Only show users that belong to current user's tree
         tree_ids = [current_user['id']] + [s['id'] for s in db.get_all_resellers_under(current_user['id'])]
         conn = db.get_db()
-        my_usernames = [
+        my_usernames = set(
             r['username'] for r in conn.execute(
                 f"SELECT username FROM ssh_users WHERE owner_id IN ({','.join('?'*len(tree_ids))})",
                 tree_ids
             ).fetchall()
-        ]
+        )
         conn.close()
-        online = [u for u in online if u in my_usernames]
+        online_raw = [o for o in online_raw if o['username'] in my_usernames]
 
-    # Get connection counts and limit info
+    # Enrich with panel info (limit, owner, etc.)
     result = []
-    for uname in online:
-        u = db.get_ssh_user_by_username(uname)
-        count = sc.get_user_connections(srv['ip'], srv['module_port'], srv['auth_token'], uname)
+    for item in online_raw:
+        u = db.get_ssh_user_by_username(item['username'])
+        owner_name = ''
+        if u:
+            pu = db.get_panel_user(u['owner_id'])
+            owner_name = pu['username'] if pu else ''
         result.append({
-            'username': uname,
-            'connections': count,
+            'username': item['username'],
+            'connections': item['connections'],
             'limit': u['connection_limit'] if u else '?',
+            'owner': owner_name,
+            'expires_at': u['expires_at'][:10] if u and u['expires_at'] else '',
         })
 
     return jsonify(online=result)
@@ -869,6 +1022,39 @@ def mercadopago_config():
     return render_template('shared/mercadopago.html', payments=payments)
 
 
+@app.route('/mercadopago/delete/<int:payment_id>', methods=['POST'])
+@login_required
+def delete_payment(payment_id):
+    current_user = get_current_user()
+    conn = db.get_db()
+    payment = conn.execute("SELECT * FROM payments WHERE id=?", (payment_id,)).fetchone()
+    conn.close()
+    if not payment:
+        return jsonify(success=False, message='Pagamento não encontrado')
+    if current_user['role'] != 'admin' and payment['owner_id'] != current_user['id']:
+        return jsonify(success=False, message='Sem permissão')
+    db.delete_payment(payment_id)
+    return jsonify(success=True, message='Pagamento excluído')
+
+
+@app.route('/resellers/transfer/<int:reseller_id>', methods=['POST'])
+@login_required
+def transfer_reseller(reseller_id):
+    """Admin pulls a reseller from any tree into a new parent (or directly under admin)."""
+    current_user = get_current_user()
+    if current_user['role'] != 'admin':
+        return jsonify(success=False, message='Apenas admin pode transferir revendas')
+    r = db.get_panel_user(reseller_id)
+    if not r:
+        return jsonify(success=False, message='Revenda não encontrada')
+    new_parent_id = request.form.get('new_parent_id', type=int)
+    # new_parent_id=None means make it a direct child of admin (top-level reseller)
+    db.update_panel_user(reseller_id, parent_id=new_parent_id)
+    parent_name = 'admin (topo)' if not new_parent_id else (
+        db.get_panel_user(new_parent_id) or {}).get('username', str(new_parent_id))
+    return jsonify(success=True, message=f'Revenda transferida para {parent_name}')
+
+
 @app.route('/mercadopago/webhook', methods=['POST'])
 def mp_webhook():
     """Webhook for MercadoPago payment notifications."""
@@ -918,6 +1104,7 @@ def user_login():
     user_data = None
     qr_code = None
     mp_init_point = None
+    pix_copy_code = None
 
     if request.method == 'POST':
         username = request.form.get('username', '').strip()
@@ -926,99 +1113,148 @@ def user_login():
 
         if u and u['password'] == password:
             user_data = u
-            days_left = days_until(u['expires_at'])
 
-            # Generate MercadoPago payment link if owner has it configured
+            # Generate MercadoPago PIX payment if owner has it configured
             owner = db.get_panel_user(u['owner_id'])
             if owner and owner['mercadopago_token'] and owner['mercadopago_price'] > 0:
                 try:
-                    payload = {
-                        "items": [{
-                            "title": f"Renovação {username}",
-                            "quantity": 1,
-                            "unit_price": float(owner['mercadopago_price']),
-                            "currency_id": "BRL"
-                        }],
+                    import urllib.parse
+                    # Use Payments API with PIX → returns copy-paste qr_code string
+                    pix_payload = {
+                        "transaction_amount": float(owner['mercadopago_price']),
+                        "description": f"Renovação {username} - 30 dias",
+                        "payment_method_id": "pix",
+                        "payer": {"email": f"{username}@renovacao.local"},
                         "notification_url": request.host_url.rstrip('/') + url_for('mp_webhook'),
                         "external_reference": f"{u['id']}_{owner['id']}",
                     }
-                    resp = requests.post(
-                        "https://api.mercadopago.com/checkout/preferences",
+                    pix_resp = requests.post(
+                        "https://api.mercadopago.com/v1/payments",
                         headers={
                             'Authorization': f"Bearer {owner['mercadopago_token']}",
-                            'Content-Type': 'application/json'
+                            'Content-Type': 'application/json',
+                            'X-Idempotency-Key': f"renov-{u['id']}-{int(now_br().timestamp())}",
                         },
-                        json=payload,
-                        timeout=10
+                        json=pix_payload,
+                        timeout=15
                     )
-                    if resp.status_code in (200, 201):
-                        pref = resp.json()
-                        mp_init_point = pref.get('init_point')
-                        pref_id = pref.get('id')
-                        # Save payment record
+                    if pix_resp.status_code in (200, 201):
+                        pix_data = pix_resp.json()
+                        pix_payment_id = str(pix_data.get('id', ''))
+                        ti = (pix_data.get('point_of_interaction') or {}).get('transaction_data') or {}
+                        pix_copy_code = ti.get('qr_code', '')
+                        pix_qr_b64 = ti.get('qr_code_base64', '')
+                        if pix_qr_b64:
+                            qr_code = f"data:image/png;base64,{pix_qr_b64}"
+                        elif pix_copy_code:
+                            qr_code = (f"https://api.qrserver.com/v1/create-qr-code/"
+                                       f"?data={urllib.parse.quote(pix_copy_code, safe='')}"
+                                       f"&size=220x220&format=png")
+                        mp_init_point = pix_copy_code
                         db.add_payment(u['id'], owner['id'], owner['mercadopago_price'],
-                                       pref_id, '', 'pending')
-                        # Generate QR
-                        qr_url = f"https://api.qrserver.com/v1/create-qr-code/?data={mp_init_point}&size=200x200"
-                        qr_code = qr_url
+                                       pix_payment_id, '', 'pending')
+                    else:
+                        # Fallback: checkout preference link
+                        payload = {
+                            "items": [{"title": f"Renovação {username}",
+                                       "quantity": 1,
+                                       "unit_price": float(owner['mercadopago_price']),
+                                       "currency_id": "BRL"}],
+                            "notification_url": request.host_url.rstrip('/') + url_for('mp_webhook'),
+                            "external_reference": f"{u['id']}_{owner['id']}",
+                        }
+                        resp = requests.post(
+                            "https://api.mercadopago.com/checkout/preferences",
+                            headers={'Authorization': f"Bearer {owner['mercadopago_token']}",
+                                     'Content-Type': 'application/json'},
+                            json=payload, timeout=10
+                        )
+                        if resp.status_code in (200, 201):
+                            pref = resp.json()
+                            mp_init_point = pref.get('init_point')
+                            pref_id = pref.get('id')
+                            db.add_payment(u['id'], owner['id'], owner['mercadopago_price'],
+                                           pref_id, '', 'pending')
+                            qr_code = (f"https://api.qrserver.com/v1/create-qr-code/"
+                                       f"?data={urllib.parse.quote(mp_init_point, safe='')}"
+                                       f"&size=220x220&format=png")
                 except Exception:
                     pass
         else:
             error = 'Usuário ou senha inválidos'
 
     return render_template('user_login.html', user_data=user_data, error=error,
-                           qr_code=qr_code, mp_init_point=mp_init_point)
+                           qr_code=qr_code, mp_init_point=mp_init_point,
+                           pix_copy_code=pix_copy_code)
 
 
 # ---------------------------------------------------------------------------
 # CheckUser API
 # ---------------------------------------------------------------------------
 
-def _checkuser_response(username: str) -> dict:
-    """Build checkuser JSON response for a given username."""
+def _clean_username(username: str) -> str:
+    """Strip path prefixes and query-string params that some VPN apps include.
+    e.g. '/check/jean55?deviceid=123' → 'jean55'
+    """
+    # Remove query string
+    if '?' in username:
+        username = username.split('?')[0]
+    # Remove leading slashes / path components
+    if '/' in username:
+        username = username.rstrip('/').rsplit('/', 1)[-1]
+    return username.strip()
+
+
+def _checkuser_response(username: str):
+    """CheckUser response matching standard format used by VPN apps.
+    Format: {"id":"01","username":"x","count_connections":N,"limit_connections":N,
+              "expiration_date":"DD/MM/YYYY","expiration_days":"N"}
+    """
+    username = _clean_username(username)
     u = db.get_ssh_user_by_username(username)
     if not u:
-        return {
+        resp = {
+            "id": "01",
             "username": username,
             "count_connections": 0,
-            "expiry_date": "",
-            "expiry_days": 0,
-            "expiry_time": "",
             "limit_connections": 0,
-            "status": "Offline"
+            "expiration_date": "",
+            "expiration_days": "0",
         }
+        return jsonify(resp)
+
     d = days_until(u['expires_at'])
     try:
-        from datetime import datetime
-        exp_dt = datetime.fromisoformat(u['expires_at'])
-        expiry_time = exp_dt.strftime('%d/%m/%Y')
+        from datetime import datetime as _dt
+        exp_dt = _dt.fromisoformat(u['expires_at'])
+        expiration_date = exp_dt.strftime('%d/%m/%Y')
     except Exception:
-        expiry_time = u['expires_at'][:10] if u['expires_at'] else ''
+        expiration_date = u['expires_at'][:10] if u['expires_at'] else ''
 
-    return {
+    resp = {
+        "id": "01",
         "username": username,
         "count_connections": 0,
-        "expiry_date": u['expires_at'][:10] if u['expires_at'] else '',
-        "expiry_days": d,
-        "expiry_time": expiry_time,
         "limit_connections": u['connection_limit'],
-        "status": "Offline"
+        "expiration_date": expiration_date,
+        "expiration_days": str(max(0, d)),
     }
+    return jsonify(resp)
 
 
-@app.route('/checkuser/<username>')
+@app.route('/checkuser/<path:username>')
 def checkuser(username):
-    return jsonify(_checkuser_response(username))
+    return _checkuser_response(username)
 
 
 @app.route('/checkuser/')
 @app.route('/checkuser')
 def checkuser_index():
     """DTunnel-style: /checkuser?user=USERNAME or /checkuser/"""
-    username = request.args.get('user', '').strip()
+    username = request.args.get('user', request.args.get('username', '')).strip()
     if not username:
         return jsonify({"error": "missing user parameter"})
-    return jsonify(_checkuser_response(username))
+    return _checkuser_response(username)
 
 
 @app.route('/checkuser/dtunnel.php')
@@ -1027,9 +1263,7 @@ def checkuser_dtunnel():
     username = request.args.get('user', '').strip()
     if not username:
         return jsonify({"error": "missing user parameter"})
-    resp = _checkuser_response(username)
-    # DTunnel expects text/html or application/json
-    return jsonify(resp)
+    return _checkuser_response(username)
 
 
 @app.route('/api/checkuser')
@@ -1038,7 +1272,13 @@ def checkuser_api():
     username = request.args.get('user', request.args.get('username', '')).strip()
     if not username:
         return jsonify({"error": "missing user parameter"})
-    return jsonify(_checkuser_response(username))
+    return _checkuser_response(username)
+
+
+# /check/<username>?deviceid=xxx  — format used by some VPN apps
+@app.route('/check/<path:username>')
+def checkuser_check_path(username):
+    return _checkuser_response(username)
 
 
 
@@ -1160,6 +1400,6 @@ scheduler.start()
 # ---------------------------------------------------------------------------
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5052))
+    port = int(os.environ.get('PORT', 5000))
     debug = os.environ.get('DEBUG', 'false').lower() == 'true'
     app.run(host='0.0.0.0', port=port, debug=debug)

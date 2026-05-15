@@ -169,22 +169,37 @@ function apiPost(url, data, cb) {
 }
 
 // Copy to clipboard
-function copyText(text) {
-  if (navigator.clipboard && window.isSecureContext) {
+function copyText(text) { pmCopyGlobal(text); }
+function pmCopyGlobal(text) {
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
     navigator.clipboard.writeText(text)
-      .then(() => showToast('Copiado!', 'success'))
-      .catch(() => _execCopy(text));
-  } else {
-    _execCopy(text);
+      .then(() => showToast('Copiado! ✓', 'success'))
+      .catch(() => _legacyCopy(text));
+    return;
   }
+  _legacyCopy(text);
 }
-function _execCopy(text) {
-  const ta = document.createElement('textarea');
-  ta.value = text; ta.style.position='fixed'; ta.style.opacity='0';
-  document.body.appendChild(ta); ta.focus(); ta.select();
-  try { document.execCommand('copy'); showToast('Copiado!', 'success'); }
-  catch(e) { showToast('Copie manualmente', 'warning'); }
-  document.body.removeChild(ta);
+function _legacyCopy(text) {
+  const el = document.createElement('textarea');
+  el.value = text;
+  el.setAttribute('readonly', '');
+  el.style.cssText = 'position:absolute;left:-9999px;top:-9999px;opacity:0;width:1px;height:1px';
+  document.body.appendChild(el);
+  const isIOS = /ipad|iphone/i.test(navigator.userAgent);
+  if (isIOS) {
+    const r = document.createRange();
+    r.selectNodeContents(el);
+    const s = window.getSelection();
+    s.removeAllRanges(); s.addRange(r);
+    el.setSelectionRange(0, 999999);
+  } else {
+    el.focus(); el.select(); el.setSelectionRange(0, 999999);
+  }
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch(e) {}
+  document.body.removeChild(el);
+  if (ok) showToast('Copiado! ✓', 'success');
+  else window.prompt('Copie abaixo (Ctrl+C):', text);
 }
 </script>
 {% block extra_js %}{% endblock %}
