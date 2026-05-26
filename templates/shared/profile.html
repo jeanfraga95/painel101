@@ -1,0 +1,48 @@
+{% extends 'base.html' %}
+{% block title %}Perfil — {{ panel_name }}{% endblock %}
+{% block page_title %}<i class="fas fa-user-circle me-2"></i>Meu Perfil{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-5">
+    <div class="card">
+      <div class="card-header fw-semibold">Informações da Conta</div>
+      <div class="card-body">
+        <table class="table table-sm mb-3">
+          <tr><td class="text-muted">Usuário</td><td><strong>{{ current_user.username }}</strong></td></tr>
+          <tr><td class="text-muted">Função</td>
+            <td><span class="badge {{ 'bg-danger' if current_user.role=='admin' else 'bg-primary' }}">{{ current_user.role }}</span></td>
+          </tr>
+          {% if current_user.role != 'admin' %}
+          <tr><td class="text-muted">Painel vence</td>
+            <td>
+              {{ current_user.expires_at[:10] if current_user.expires_at else '—' }}
+              {% if current_user.expires_at %}
+                {% set d = days_until(current_user.expires_at) %}
+                <span class="badge ms-1 {{ 'bg-danger' if d<=3 else ('bg-warning text-dark' if d<=7 else 'bg-success') }}">{{ d }}d</span>
+              {% endif %}
+            </td>
+          </tr>
+          <tr><td class="text-muted">Contas</td>
+            <td>{{ current_user.accounts_used }} / {{ current_user.account_limit }}</td>
+          </tr>
+          {% endif %}
+          <tr><td class="text-muted">Criado em</td><td>{{ current_user.created_at[:10] }}</td></tr>
+        </table>
+
+        <hr>
+        <h6 class="fw-semibold mb-3">Alterar Senha</h6>
+        <form method="POST">
+          <div class="mb-3">
+            <label class="form-label">Nova Senha</label>
+            <input type="password" name="new_password" class="form-control" placeholder="Mínimo 4 caracteres" minlength="4" required>
+          </div>
+          <button type="submit" class="btn btn-primary">
+            <i class="fas fa-key me-2"></i>Alterar Senha
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

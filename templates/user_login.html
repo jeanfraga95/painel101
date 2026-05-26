@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-bs-theme="{{ panel_theme }}">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Verificar Acesso — {{ panel_name }}</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
+<style>
+body { min-height:100vh; display:flex; align-items:center; justify-content:center;
+       background:{{ '#0f1117' if panel_theme=='dark' else '#f0f2f5' }}; }
+.card { border-radius:16px; border:none; max-width:440px; width:100%; box-shadow:0 20px 60px rgba(0,0,0,.3); }
+.accent { color:{{ panel_color }}; }
+.btn-accent { background:{{ panel_color }}; border-color:{{ panel_color }}; color:#fff; }
+.pix-box { border-radius:12px; border:2px solid #00c46a; }
+.font-monospace { font-size:.72rem; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="card-body p-4">
+    <div class="text-center mb-4">
+      <i class="fas fa-user-check fa-3x mb-2 accent"></i>
+      <h5 class="fw-bold">Verificar Acesso</h5>
+      <small class="text-muted">{{ panel_name }}</small>
+    </div>
+
+    {% if error %}
+    <div class="alert alert-danger py-2">{{ error }}</div>
+    {% endif %}
+
+    {% if not user_data %}
+    {# ── Login form ── #}
+    <form method="POST">
+      <div class="mb-3">
+        <label class="form-label">Usuário SSH</label>
+        <input type="text" name="username" class="form-control" placeholder="seususuario" required autofocus>
+      </div>
+      <div class="mb-4">
+        <label class="form-label">Senha</label>
+        <input type="password" name="password" class="form-control" placeholder="••••••••" required>
+      </div>
+      <button type="submit" class="btn btn-accent w-100 fw-semibold">
+        <i class="fas fa-search me-2"></i>Verificar
+      </button>
+    </form>
+
+    {% else %}
+    {# ── User info ── #}
+    {% set d = days_until(user_data.expires_at) %}
+    <div class="text-center mb-3">
+      <div class="fw-bold mb-1" style="font-size:1.1rem">
+        <i class="fas fa-user me-1 accent"></i>{{ user_data.username }}
+      </div>
+      {% if d < 0 %}
+      <div class="display-6 fw-bold text-danger">Expirado</div>
+      <div class="text-muted">venceu há {{ d|abs }} dia(s)</div>
+      {% else %}
+      <div class="display-6 fw-bold {{ 'text-danger' if d <= 3 else ('text-warning' if d <= 7 else 'text-success') }}">
+        {{ d }} dia(s)
+      </div>
+      <div class="text-muted">restantes</div>
+      {% endif %}
+      <div class="mt-1"><small>Válido até: <strong>{{ user_data.expires_at[:10] }}</strong></small></div>
+    </div>
+
+    <div class="progress mb-4" style="height:10px;border-radius:10px">
+      <div class="progress-bar {{ 'bg-danger' if d<=3 else ('bg-warning' if d<=7 else 'bg-success') }}"
+           style="width:{{ [100, [0,d*3]|max]|min }}%;border-radius:10px"></div>
+    </div>
+
+    {# ── PIX renewal button ── #}
+    <div id="pixSection">
+      {% if d <= 30 %}
+      <button id="btnGerarPix" class="btn w-100 fw-semibold mb-3"
+              style="background:#00c46a;color:#fff;border:none"
+              onclick="gerarPix()">
+        <i class="fas fa-qrcode me-2"></i>Renovar via PIX — Gerar Código
+      </button>
+      {% else %}
+      <div class="alert alert-success text-center py-2 mb-3">
+        <i class="fas fa-check-circle me-2"></i>Seu acesso está ativo!
+      </div>
+      {% endif %}
+
+      {# PIX result area (hidden until generated) #}
+      <div id="pixResult" class="d-none">
+        <div class="card pix-box mb-3">
+          <div class="card-body text-center">
+            <h6 class="fw-semibold mb-2" style="color:#00c46a">
+              <i class="fas fa-qrcode me-2"></i>PIX Copia e Cola
+            </h6>
+            <div id="pixQrWrap" class="mb-2 d-none">
+              <img id="pixQrImg" src="" alt="QR Code PIX" class="rounded"
+                   style="max-width:190px;border:1px solid #dee2e6;padding:4px">
+              <p class="text-muted small mt-1 mb-2">
+                📱 Escaneie <strong>ou</strong> copie o código abaixo no app do banco em
+                <em>PIX → Copia e Cola</em>
+              </p>
+            </div>
+            <div class="input-group mb-2">
+              <input type="text" class="form-control form-control-sm font-monospace text-truncate"
+                     id="pixCode" value="" readonly
+                     style="cursor:pointer" onclick="this.select()">
+              <button class="btn btn-success btn-sm px-3 fw-semibold" id="copyBtn"
+                      onclick="copiarPix(this)">
+                <i class="fas fa-copy me-1"></i>Copiar código
+              </button>
+            </div>
+            <small class="text-muted">Renovação automática de <strong>30 dias</strong> após confirmação do pagamento</small>
+            <div id="pixAmount" class="mt-1 fw-bold" style="color:#00c46a"></div>
+            <!-- Waiting for payment indicator -->
+            <div id="pixWaiting" class="mt-3 d-none">
+              <span class="spinner-border spinner-border-sm text-success me-2"></span>
+              <small class="text-muted">Aguardando confirmação do pagamento…</small>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Payment approved success screen -->
+      <div id="pixApproved" class="d-none">
+        <div class="card mb-3" style="border:2px solid #00c46a;border-radius:12px">
+          <div class="card-body text-center py-4">
+            <i class="fas fa-check-circle fa-4x mb-3" style="color:#00c46a"></i>
+            <h5 class="fw-bold text-success mb-1">Pagamento Aprovado!</h5>
+            <p class="text-muted mb-2">Seu usuário foi renovado com sucesso.</p>
+            <div id="pixApprovedExpiry" class="fw-bold" style="font-size:1.1rem;color:#00c46a"></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="pixError" class="alert alert-danger d-none py-2 mb-3"></div>
+    </div>
+
+    <a href="{{ url_for('user_login') }}" class="btn btn-outline-secondary w-100">
+      <i class="fas fa-arrow-left me-2"></i>Voltar
+    </a>
+    {% endif %}
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+let _pixPollTimer = null;
+
+function gerarPix() {
+  const btn = document.getElementById('btnGerarPix');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Gerando PIX…';
+
+  fetch('/user/generate_pix', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) {
+        document.getElementById('pixCode').value = data.pix_copy_code || '';
+        if (data.qr_code) {
+          document.getElementById('pixQrImg').src = data.qr_code;
+          document.getElementById('pixQrWrap').classList.remove('d-none');
+        }
+        if (data.amount) {
+          document.getElementById('pixAmount').textContent = 'Valor: ' + data.amount;
+        }
+        document.getElementById('pixResult').classList.remove('d-none');
+        document.getElementById('pixWaiting').classList.remove('d-none');
+        btn.style.display = 'none';
+        // Start polling for payment confirmation every 5 seconds
+        _pixPollTimer = setInterval(checkPagamento, 5000);
+      } else {
+        const el = document.getElementById('pixError');
+        el.textContent = data.message || 'Erro ao gerar PIX.';
+        el.classList.remove('d-none');
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-qrcode me-2"></i>Tentar novamente';
+      }
+    })
+    .catch(() => {
+      const el = document.getElementById('pixError');
+      el.textContent = 'Erro de conexão. Tente novamente.';
+      el.classList.remove('d-none');
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-qrcode me-2"></i>Tentar novamente';
+    });
+}
+
+function checkPagamento() {
+  fetch('/user/check_payment')
+    .then(r => r.json())
+    .then(data => {
+      if (data.status === 'approved') {
+        // Stop polling
+        clearInterval(_pixPollTimer);
+        _pixPollTimer = null;
+        // Hide PIX section, show success
+        document.getElementById('pixSection').classList.add('d-none');
+        const aprovado = document.getElementById('pixApproved');
+        aprovado.classList.remove('d-none');
+        if (data.new_expiry) {
+          document.getElementById('pixApprovedExpiry').textContent =
+            'Válido até: ' + data.new_expiry;
+        }
+      }
+      // For pending/unknown, keep polling silently
+    })
+    .catch(() => { /* network error, keep trying */ });
+}
+
+function copiarPix(btnEl) {
+  const code = document.getElementById('pixCode').value;
+  if (!code) return;
+
+  if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(code).then(() => _pixCopied(btnEl)).catch(() => _execCopy(code, btnEl));
+  } else {
+    _execCopy(code, btnEl);
+  }
+}
+
+function _execCopy(text, btnEl) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;top:0;left:0;width:2px;height:2px;opacity:0';
+  document.body.appendChild(ta);
+  ta.focus(); ta.select(); ta.setSelectionRange(0, 999999);
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch(e) {}
+  document.body.removeChild(ta);
+  if (ok) _pixCopied(btnEl);
+  else window.prompt('Copie o código PIX (Ctrl+C / Cmd+C):', text);
+}
+
+function _pixCopied(btnEl) {
+  const orig = btnEl.innerHTML;
+  btnEl.innerHTML = '<i class="fas fa-check me-1"></i>Copiado!';
+  btnEl.classList.add('btn-success');
+  setTimeout(() => { btnEl.innerHTML = orig; }, 2500);
+}
+</script>
+</body>
+</html>

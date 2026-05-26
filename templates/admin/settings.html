@@ -1,0 +1,139 @@
+{% extends 'base.html' %}
+{% block title %}Configurações — {{ panel_name }}{% endblock %}
+{% block page_title %}<i class="fas fa-cog me-2"></i>Configurações{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <div class="col-md-7">
+    <div class="card">
+      <div class="card-header fw-semibold"><i class="fas fa-paint-brush me-2"></i>Aparência do Painel</div>
+      <div class="card-body">
+        <form method="POST">
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Nome do Painel</label>
+            <input type="text" name="panel_name" class="form-control" value="{{ settings.panel_name }}">
+          </div>
+          <div class="row mb-3">
+            <div class="col-6">
+              <label class="form-label fw-semibold">Cor de destaque</label>
+              <div class="input-group">
+                <span class="input-group-text p-1">
+                  <input type="color" name="panel_color" class="form-control form-control-color border-0"
+                         value="{{ settings.panel_color }}" style="width:40px;height:34px;">
+                </span>
+                <input type="text" class="form-control" id="colorHex" value="{{ settings.panel_color }}"
+                       oninput="document.querySelector('[name=panel_color]').value=this.value">
+              </div>
+            </div>
+            <div class="col-6">
+              <label class="form-label fw-semibold">Tema</label>
+              <select name="panel_theme" class="form-select">
+                <option value="dark" {{ 'selected' if settings.panel_theme == 'dark' }}>Escuro</option>
+                <option value="light" {{ 'selected' if settings.panel_theme == 'light' }}>Claro</option>
+              </select>
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Link do Aplicativo VPN</label>
+            <input type="text" name="app_link" class="form-control"
+                   value="{{ settings.app_link }}"
+                   placeholder="https://play.google.com/...">
+            <small class="text-muted">Exibido após criar usuário/teste</small>
+          </div>
+          <div class="mb-4">
+            <label class="form-label fw-semibold">URL do CheckUser (exibida no app)</label>
+            <input type="text" name="checkuser_url" class="form-control"
+                   value="{{ settings.checkuser_url }}"
+                   placeholder="{{ request.host_url }}checkuser/dtunnel.php?user=">
+            <small class="text-muted">
+              Configure na página <a href="{{ url_for('checkuser_panel') }}">CheckUser</a> do menu.
+            </small>
+          </div>
+          <button type="submit" class="btn btn-primary px-4">
+            <i class="fas fa-save me-2"></i>Salvar Configurações
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-5">
+    <div class="card mb-3">
+      <div class="card-header fw-semibold"><i class="fas fa-info-circle me-2"></i>Informações do Sistema</div>
+      <div class="card-body">
+        <table class="table table-sm mb-0">
+          <tr><td class="text-muted">Versão</td><td>Painel Master v1.0</td></tr>
+          <tr><td class="text-muted">Login usuário</td>
+            <td><a href="{{ url_for('user_login') }}" target="_blank">{{ url_for('user_login', _external=True) }}</a></td>
+          </tr>
+          <tr><td class="text-muted">CheckUser</td>
+            <td><a href="{{ url_for('checkuser_panel') }}">Ver página CheckUser</a></td>
+          </tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="card mt-3 border-warning">
+      <div class="card-header fw-semibold text-warning">
+        <i class="fas fa-calculator me-2"></i>Recalcular Limites de Revendas
+      </div>
+      <div class="card-body">
+        <p class="text-muted small mb-3">
+          Recalcula o <strong>accounts_used</strong> de todas as revendas com base nos dados reais do banco.<br>
+          Use após importar backup do Dragon Core ou reinstalar o painel com banco de dados antigo.
+        </p>
+        <button class="btn btn-warning w-100" onclick="doRecalculate()">
+          <i class="fas fa-sync me-2"></i>Recalcular Agora
+        </button>
+        <div id="recalcResult" class="mt-2 small"></div>
+      </div>
+    </div>
+
+    <div class="card mt-3 border-danger">
+      <div class="card-header fw-semibold text-danger">
+        <i class="fas fa-exclamation-triangle me-2"></i>Zona de Perigo — Reset do Sistema
+      </div>
+      <div class="card-body">
+        <p class="text-muted small mb-3">
+          Apaga <strong>todos os usuários SSH, revendas e pagamentos</strong>.<br>
+          Configurações e conta admin são mantidas. <strong>Ação irreversível.</strong>
+        </p>
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Confirme sua senha de admin</label>
+          <input type="password" id="resetPassword" class="form-control" placeholder="••••••••">
+        </div>
+        <button class="btn btn-danger w-100" onclick="doReset()">
+          <i class="fas fa-bomb me-2"></i>Zerar Sistema
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+document.querySelector('[name=panel_color]').addEventListener('input', function() {
+  document.getElementById('colorHex').value = this.value;
+});
+
+function doReset() {
+  const pw = document.getElementById('resetPassword').value;
+  if (!pw) { showToast('Digite sua senha para confirmar', 'warning'); return; }
+  if (!confirm('ATENÇÃO: todos os usuários SSH, revendas e pagamentos serão apagados. Continuar?')) return;
+  apiPost('/settings/reset', {confirm_password: pw}, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (d.success) setTimeout(() => location.reload(), 1500);
+  });
+}
+
+function doRecalculate() {
+  if (!confirm('Recalcular limits de todas as revendas? Isso pode demorar alguns segundos.')) return;
+  apiPost('/settings/recalculate', {}, d => {
+    const el = document.getElementById('recalcResult');
+    el.innerHTML = d.success
+      ? '<span class="text-success"><i class="fas fa-check me-1"></i>' + d.message + '</span>'
+      : '<span class="text-danger"><i class="fas fa-times me-1"></i>' + d.message + '</span>';
+    showToast(d.message, d.success ? 'success' : 'danger');
+  });
+}
+</script>
+{% endblock %}

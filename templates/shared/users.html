@@ -1,0 +1,525 @@
+{% extends 'base.html' %}
+{% block title %}Usuários — {{ panel_name }}{% endblock %}
+{% block page_title %}<i class="fas fa-users me-2"></i>Usuários SSH{% endblock %}
+
+{% block content %}
+<!-- Filters bar -->
+<div class="card mb-3">
+  <div class="card-body py-2">
+    <form class="row g-2 align-items-end" method="GET">
+      <div class="col-md-4">
+        <input type="text" name="search" class="form-control form-control-sm" placeholder="🔍 Buscar usuário..." value="{{ search }}">
+      </div>
+      <div class="col-md-3">
+        <select name="sort" class="form-select form-select-sm">
+          <option value="expires_at" {{ 'selected' if sort=='expires_at' }}>Ordenar por vencimento</option>
+          <option value="username" {{ 'selected' if sort=='username' }}>Por nome</option>
+          <option value="connection_limit" {{ 'selected' if sort=='connection_limit' }}>Por limite</option>
+          <option value="created_at" {{ 'selected' if sort=='created_at' }}>Por criação</option>
+        </select>
+      </div>
+      <div class="col-md-2">
+        <select name="filter" class="form-select form-select-sm">
+          <option value="all" {{ 'selected' if filter_type=='all' }}>Todos</option>
+          <option value="expiring" {{ 'selected' if filter_type=='expiring' }}>Vencendo (7d)</option>
+          <option value="expiring3" {{ 'selected' if filter_type=='expiring3' }}>Vencendo (3d)</option>
+          <option value="expired" {{ 'selected' if filter_type=='expired' }}>Já vencidos</option>
+          <option value="test" {{ 'selected' if filter_type=='test' }}>Testes</option>
+        </select>
+      </div>
+      {% if all_resellers %}
+      <div class="col-md-3">
+        <select name="owner_id" class="form-select form-select-sm">
+          <option value="">Todos os donos</option>
+          {% for r in all_resellers %}
+          <option value="{{ r.id }}" {{ 'selected' if owner_filter == r.id|string }}>
+            {{ r.username }} {% if r.role == 'admin' %}(admin){% endif %}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endif %}
+      <div class="col-auto">
+        <button class="btn btn-sm btn-primary"><i class="fas fa-filter me-1"></i>Filtrar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Action buttons -->
+<div class="d-flex gap-2 mb-3 flex-wrap align-items-center">
+  <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createUserModal">
+    <i class="fas fa-user-plus me-2"></i>Novo Usuário
+  </button>
+  <button class="btn btn-warning text-dark" data-bs-toggle="modal" data-bs-target="#createTestModal">
+    <i class="fas fa-clock me-2"></i>Novo Teste
+  </button>
+  <button class="btn btn-outline-danger btn-sm d-none" id="bulkDeleteBtn" onclick="bulkDelete()">
+    <i class="fas fa-trash me-1"></i>Excluir Selecionados (<span id="selCount">0</span>)
+  </button>
+  <button class="btn btn-outline-secondary btn-sm d-none" id="selectExpiredBtn" onclick="selectExpired()">
+    <i class="fas fa-calendar-times me-1"></i>Selecionar Vencidos
+  </button>
+  <span class="badge bg-secondary ms-auto">{{ total }} usuário(s) — pág. {{ page }}/{{ total_pages }}</span>
+</div>
+
+<div class="card">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0">
+        <thead class="table-secondary">
+          <tr>
+            <th style="width:36px">
+              <input type="checkbox" id="chkAll" onclick="toggleAll(this)" class="form-check-input">
+            </th>
+            <th>Usuário</th>
+            <th>Vencimento</th>
+            <th>Dias</th>
+            <th>Limite</th>
+            <th>Servidor</th>
+            {% if current_user.role == 'admin' %}<th>Dono</th>{% endif %}
+            <th>Status</th>
+            <th class="text-end">Ações</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for u in users %}
+          {% set d = days_until(u.expires_at) %}
+          <tr id="row_{{ u.id }}" data-expired="{{ '1' if d <= 0 else '0' }}">
+            <td>
+              <input type="checkbox" class="form-check-input row-chk" value="{{ u.id }}"
+                     onchange="updateBulkBar()">
+            </td>
+            <td>
+              <span id="online_{{ u.username }}" class="me-1" title="Verificando...">
+                <i class="fas fa-circle text-secondary" style="font-size:.55rem"></i>
+              </span>
+              <i class="fas fa-user me-1 text-muted"></i>
+              <strong>{{ u.username }}</strong>
+              {% if u.v2ray_uuid %}<span class="badge bg-info ms-1">v2ray</span>{% endif %}
+              {% if u.is_test %}<span class="badge bg-warning text-dark ms-1">teste</span>{% endif %}
+            </td>
+            <td>{{ u.expires_at[:10] }}</td>
+            <td>
+              <span class="badge {{ 'bg-danger' if d <= 0 else ('bg-warning text-dark' if d <= 3 else ('bg-secondary' if d <= 7 else 'bg-success')) }}">
+                {{ d }}d
+              </span>
+            </td>
+            <td>{{ u.connection_limit }}</td>
+            <td>
+              {% if u.server_id and u.server_id in server_map %}
+                <span class="badge bg-primary">{{ server_map[u.server_id].name }}</span>
+              {% else %}
+                <span class="text-muted">—</span>
+              {% endif %}
+            </td>
+            {% if current_user.role == 'admin' %}
+            <td><small>{{ owner_map.get(u.owner_id, '?') }}</small></td>
+            {% endif %}
+            <td>
+              <span class="badge {{ 'bg-success' if u.status == 'active' else 'bg-danger' }}" id="status_{{ u.id }}">
+                {{ u.status }}
+              </span>
+            </td>
+            <td class="text-end">
+              <div class="btn-group btn-group-sm">
+                <button class="btn btn-outline-primary" onclick="viewCredentials({{ u.id }})" title="Ver senha/UUID">
+                  <i class="fas fa-key"></i>
+                </button>
+                <button class="btn btn-outline-success" onclick="renewUser({{ u.id }})" title="Renovar">
+                  <i class="fas fa-redo"></i>
+                </button>
+                <button class="btn btn-outline-warning" onclick="suspendUser({{ u.id }})" title="Suspender/Ativar">
+                  <i class="fas fa-ban"></i>
+                </button>
+                <button class="btn btn-outline-info" onclick="openEditModal({{ u.id }}, '{{ u.username }}', {{ u.connection_limit }}, '{{ u.expires_at[:10] if u.expires_at else '' }}')" title="Editar / Servidores">
+                  <i class="fas fa-edit"></i>
+                </button>
+                <button class="btn btn-outline-danger" onclick="deleteUser({{ u.id }}, '{{ u.username }}')" title="Deletar">
+                  <i class="fas fa-trash"></i>
+                </button>
+              </div>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="9" class="text-center text-muted py-4">Nenhum usuário encontrado.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{# ── Pagination ───────────────────────────────────────────────────────────── #}
+{% if total_pages > 1 %}
+<nav class="mt-3 d-flex justify-content-between align-items-center">
+  <small class="text-muted">
+    Mostrando {{ ((page-1)*per_page)+1 }}–{{ [page*per_page, total]|min }} de {{ total }} usuários
+  </small>
+  <ul class="pagination pagination-sm mb-0">
+    <li class="page-item {{ 'disabled' if page == 1 }}">
+      <a class="page-link" href="{{ url_for('users_list', page=page-1, sort=sort, search=search, filter=filter_type, owner_id=owner_filter) }}">
+        <i class="fas fa-chevron-left"></i>
+      </a>
+    </li>
+    {% for p in range(1, total_pages+1) %}
+      {% if p == 1 or p == total_pages or (p >= page-2 and p <= page+2) %}
+        <li class="page-item {{ 'active' if p == page }}">
+          <a class="page-link" href="{{ url_for('users_list', page=p, sort=sort, search=search, filter=filter_type, owner_id=owner_filter) }}">{{ p }}</a>
+        </li>
+      {% elif p == page-3 or p == page+3 %}
+        <li class="page-item disabled"><span class="page-link">…</span></li>
+      {% endif %}
+    {% endfor %}
+    <li class="page-item {{ 'disabled' if page == total_pages }}">
+      <a class="page-link" href="{{ url_for('users_list', page=page+1, sort=sort, search=search, filter=filter_type, owner_id=owner_filter) }}">
+        <i class="fas fa-chevron-right"></i>
+      </a>
+    </li>
+  </ul>
+</nav>
+{% endif %}
+
+{% include 'shared/_create_user_modals.html' %}
+
+<script>
+function renewUser(id) {
+  const days = prompt('Adicionar quantos dias ao vencimento?', '30');
+  if (!days || isNaN(days) || parseInt(days) < 1) return;
+  apiPost(`/users/renew/${id}`, {days: parseInt(days)}, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (d.success) setTimeout(() => location.reload(), 1000);
+  });
+}
+
+function suspendUser(id) {
+  if (!confirm('Suspender/ativar este usuário?')) return;
+  apiPost(`/users/suspend/${id}`, {}, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (d.success) {
+      const el = document.getElementById('status_' + id);
+      el.textContent = d.new_status;
+      el.className = 'badge ' + (d.new_status === 'active' ? 'bg-success' : 'bg-danger');
+    }
+  });
+}
+
+function deleteUser(id, name) {
+  if (!confirm(`Deletar "${name}"? Isso também removerá do servidor SSH.`)) return;
+  apiPost(`/users/delete/${id}`, {}, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (d.success) document.getElementById('row_' + id)?.remove();
+  });
+}
+
+function openEditModal(id, username, currentLimit, currentExpiry) {
+  _editUserId = id;
+  document.getElementById('editModalTitle').textContent = 'Editar: ' + username;
+  document.getElementById('editLimitInput').value = currentLimit;
+  document.getElementById('editExpiryInput').value = currentExpiry || '';
+  document.getElementById('editPassInput').value = '';
+  // Reset servers tab
+  const body = document.getElementById('editServersBody');
+  body.innerHTML = '<tr><td colspan="3" class="text-center text-muted py-3"><span class="spinner-border spinner-border-sm me-2"></span>Carregando...</td></tr>';
+  // Show tab 1 by default
+  bootstrap.Tab.getOrCreateInstance(document.getElementById('editTabInfo')).show();
+  new bootstrap.Modal(document.getElementById('editUserModal')).show();
+  // Load servers in background
+  loadUserServers(id);
+}
+
+let _editUserId = null;
+let _serversLoaded = false;
+
+// Re-load servers list when the Servers tab is clicked
+document.addEventListener('DOMContentLoaded', () => {
+  const serversTab = document.getElementById('editTabServers');
+  if (serversTab) {
+    serversTab.addEventListener('shown.bs.tab', () => {
+      if (_editUserId) loadUserServers(_editUserId);
+    });
+  }
+  // Reset loaded flag when modal closes
+  const editModal = document.getElementById('editUserModal');
+  if (editModal) {
+    editModal.addEventListener('hidden.bs.modal', () => {
+      _serversLoaded = false;
+      _editUserId = null;
+    });
+  }
+});
+
+function saveEditUser() {
+  const id = _editUserId;
+  if (!id) return;
+  const limit = document.getElementById('editLimitInput').value.trim();
+  const expiry = document.getElementById('editExpiryInput').value.trim();
+  const pass = document.getElementById('editPassInput').value.trim();
+  if (!limit || isNaN(limit)) { showToast('Limite inválido', 'danger'); return; }
+  const body = {connection_limit: parseInt(limit)};
+  if (expiry) body.expires_at = expiry;
+  if (pass) {
+    if (pass.length < 4) { showToast('Senha mínima 4 caracteres', 'danger'); return; }
+    body.password = pass;
+  }
+  apiPost(`/users/update/${id}`, body, d => {
+    showToast(d.message || 'Atualizado', d.success ? 'success' : 'danger');
+    if (d.success) {
+      bootstrap.Modal.getInstance(document.getElementById('editUserModal')).hide();
+      setTimeout(() => location.reload(), 600);
+    }
+  });
+}
+
+function loadUserServers(userId) {
+  fetch(`/users/${userId}/servers`)
+    .then(r => r.json())
+    .then(data => {
+      const body = document.getElementById('editServersBody');
+      if (!data.success) { body.innerHTML = `<tr><td colspan="3" class="text-danger p-2">${data.message}</td></tr>`; return; }
+      const rows = data.servers.map(srv => {
+        const badge = srv.primary
+          ? '<span class="badge bg-primary">Principal</span>'
+          : srv.extra
+            ? '<span class="badge bg-success">Extra</span>'
+            : '<span class="badge bg-secondary opacity-50">—</span>';
+        const addBtn = (!srv.primary && !srv.extra)
+          ? `<button class="btn btn-outline-success btn-sm" onclick="addExtraServer(${userId}, ${srv.id}, this)"><i class="fas fa-plus me-1"></i>Adicionar</button>`
+          : '';
+        const removeBtn = srv.extra
+          ? `<button class="btn btn-outline-danger btn-sm ms-1" onclick="removeExtraServer(${userId}, ${srv.id}, this)"><i class="fas fa-times me-1"></i>Remover</button>`
+          : '';
+        return `<tr>
+          <td><strong>${srv.name}</strong><br><small class="text-muted">${srv.ip}</small></td>
+          <td>${badge}</td>
+          <td class="text-end">${addBtn}${removeBtn}</td>
+        </tr>`;
+      }).join('');
+      body.innerHTML = rows || '<tr><td colspan="3" class="text-muted text-center">Nenhum servidor cadastrado.</td></tr>';
+    })
+    .catch(() => {
+      document.getElementById('editServersBody').innerHTML = '<tr><td colspan="3" class="text-danger p-2">Erro ao carregar servidores.</td></tr>';
+    });
+}
+
+function addExtraServer(userId, serverId, btn) {
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+  apiPost(`/users/${userId}/servers/add`, {server_id: serverId}, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (d.success) loadUserServers(userId);
+    else { btn.disabled = false; btn.innerHTML = '<i class="fas fa-plus me-1"></i>Adicionar'; }
+  });
+}
+
+function removeExtraServer(userId, serverId, btn) {
+  if (!confirm('Remover usuário deste servidor? O usuário será deletado no servidor.')) return;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+  apiPost(`/users/${userId}/servers/remove`, {server_id: serverId}, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (d.success) loadUserServers(userId);
+    else { btn.disabled = false; btn.innerHTML = '<i class="fas fa-times me-1"></i>Remover'; }
+  });
+}
+
+// Keep old name as alias for backward compat
+function editUser(id, currentLimit) {
+  openEditModal(id, '(usuário)', currentLimit, '');
+}
+
+function viewCredentials(id) {
+  fetch(`/users/credentials/${id}`)
+    .then(r => r.json())
+    .then(d => {
+      if (!d.success) { showToast(d.message, 'danger'); return; }
+      const appLink = '{{ settings.app_link }}';
+      const uuidLine = d.v2ray_uuid
+        ? `<div class="mt-2"><small class="text-muted">UUID V2Ray:</small><br>
+           <code class="small text-info text-break">${d.v2ray_uuid}</code></div>` : '';
+      const appLine = appLink
+        ? `<div class="mt-2"><small class="text-muted">App:</small> <a href="${appLink}" target="_blank" class="small">${appLink}</a></div>` : '';
+
+      let copyText = `👤 Usuário: ${d.username}
+🔐 Senha: ${d.password}
+📅 Validade: ${d.expires_at}
+🔢 Limite: ${d.connection_limit}`;
+      if (d.v2ray_uuid) copyText += `
+🆔 UUID: ${d.v2ray_uuid}`;
+      if (appLink) copyText += `
+🔗 App: ${appLink}`;
+
+      document.getElementById('credBody').innerHTML = `
+        <table class="table table-sm mb-2">
+          <tr><td class="text-muted w-50">Usuário</td><td><strong>${d.username}</strong></td></tr>
+          <tr><td class="text-muted">Senha</td><td><code>${d.password}</code></td></tr>
+          <tr><td class="text-muted">Validade</td><td>${d.expires_at ? d.expires_at.slice(0,10) : '—'}</td></tr>
+          <tr><td class="text-muted">Limite</td><td>${d.connection_limit} conexões</td></tr>
+        </table>
+        ${uuidLine}${appLine}`;
+      document.getElementById('credCopyBtn').onclick = () => universalCopy(copyText, document.getElementById('credCopyBtn'));
+      new bootstrap.Modal(document.getElementById('credModal')).show();
+    });
+}
+
+// ── Bulk select & delete ─────────────────────────────────────────────────
+function toggleAll(chk) {
+  document.querySelectorAll('.row-chk').forEach(c => c.checked = chk.checked);
+  updateBulkBar();
+}
+function updateBulkBar() {
+  const all = document.querySelectorAll('.row-chk');
+  const checked = document.querySelectorAll('.row-chk:checked');
+  const n = checked.length;
+  document.getElementById('bulkDeleteBtn').classList.toggle('d-none', n === 0);
+  document.getElementById('selCount').textContent = n;
+  document.getElementById('chkAll').indeterminate = n > 0 && n < all.length;
+  document.getElementById('chkAll').checked = n > 0 && n === all.length;
+}
+function selectExpired() {
+  document.querySelectorAll('tr[data-expired="1"] .row-chk').forEach(c => c.checked = true);
+  updateBulkBar();
+}
+function bulkDelete() {
+  const ids = [...document.querySelectorAll('.row-chk:checked')].map(c => c.value);
+  if (!ids.length) return;
+  if (!confirm(`Excluir ${ids.length} usuário(s) selecionado(s)? Esta ação não pode ser desfeita.`)) return;
+  apiPost('/users/bulk_delete', {ids: ids.join(',')}, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (d.success) {
+      ids.forEach(id => document.getElementById('row_' + id)?.remove());
+      document.getElementById('bulkDeleteBtn').classList.add('d-none');
+    }
+  });
+}
+
+// ── Online indicator ─────────────────────────────────────────────────────
+function loadOnlineUsers() {
+  fetch('/api/online_usernames')
+    .then(r => r.json())
+    .then(d => {
+      const onlineSet = new Set((d.online || []).map(u => u.toLowerCase()));
+      document.querySelectorAll('[id^="online_"]').forEach(el => {
+        const uname = el.id.replace('online_', '').toLowerCase();
+        const icon = el.querySelector('i');
+        if (!icon) return;
+        if (onlineSet.has(uname)) {
+          icon.className = 'fas fa-circle text-success';
+          icon.parentElement.title = 'Online agora';
+        } else {
+          icon.className = 'fas fa-circle opacity-25';
+          icon.style.color = '#6c757d';
+          icon.parentElement.title = 'Offline';
+        }
+      });
+    }).catch(() => {});
+}
+loadOnlineUsers();
+setInterval(loadOnlineUsers, 20000);
+</script>
+
+<!-- Edit User Modal (with multi-server tab) -->
+<div class="modal fade" id="editUserModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h6 class="modal-title fw-semibold" id="editModalTitle">
+          <i class="fas fa-edit me-2"></i>Editar Usuário
+        </h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-0">
+        <!-- Tabs -->
+        <ul class="nav nav-tabs px-3 pt-2" id="editUserTabs">
+          <li class="nav-item">
+            <button class="nav-link active" id="editTabInfo" data-bs-toggle="tab"
+                    data-bs-target="#editPaneInfo" type="button">
+              <i class="fas fa-user-cog me-1"></i>Dados
+            </button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link" id="editTabServers" data-bs-toggle="tab"
+                    data-bs-target="#editPaneServers" type="button">
+              <i class="fas fa-server me-1"></i>Servidores
+            </button>
+          </li>
+        </ul>
+
+        <div class="tab-content px-3 pb-3 pt-3">
+          <!-- Tab 1: dados básicos -->
+          <div class="tab-pane fade show active" id="editPaneInfo">
+            <div class="row g-3">
+              <div class="col-md-6">
+                <label class="form-label fw-semibold">Limite de conexões</label>
+                <input type="number" class="form-control" id="editLimitInput" min="1" max="99">
+              </div>
+              <div class="col-md-6">
+                <label class="form-label fw-semibold">Vencimento</label>
+                <input type="date" class="form-control" id="editExpiryInput">
+              </div>
+              <div class="col-12">
+                <label class="form-label fw-semibold">Nova senha
+                  <small class="text-muted fw-normal">(deixe em branco para não alterar)</small>
+                </label>
+                <input type="text" class="form-control" id="editPassInput"
+                       placeholder="Nova senha...">
+              </div>
+            </div>
+          </div>
+
+          <!-- Tab 2: servidores extras -->
+          <div class="tab-pane fade" id="editPaneServers">
+            <div class="alert alert-info py-2 mb-3 small">
+              <i class="fas fa-info-circle me-1"></i>
+              O usuário é criado em <strong>todos</strong> os servidores marcados como
+              <strong>Principal</strong> ou <strong>Extra</strong>.
+              Renovações e exclusões são propagadas automaticamente para todos eles.
+            </div>
+            <div class="table-responsive">
+              <table class="table table-sm align-middle mb-0">
+                <thead class="table-secondary">
+                  <tr>
+                    <th>Servidor</th>
+                    <th>Status</th>
+                    <th class="text-end">Ação</th>
+                  </tr>
+                </thead>
+                <tbody id="editServersBody">
+                  <tr><td colspan="3" class="text-center text-muted py-3">
+                    <span class="spinner-border spinner-border-sm me-2"></span>Carregando…
+                  </td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" class="btn btn-primary fw-semibold" onclick="saveEditUser()">
+          <i class="fas fa-save me-1"></i>Salvar alterações
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Credentials Modal -->
+<div class="modal fade" id="credModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h6 class="modal-title"><i class="fas fa-key me-2"></i>Credenciais do Usuário</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="credBody"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-success w-100" id="credCopyBtn">
+          <i class="fas fa-copy me-2"></i>Copiar tudo
+        </button>
+        <button type="button" class="btn btn-secondary w-100" data-bs-dismiss="modal">Fechar</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

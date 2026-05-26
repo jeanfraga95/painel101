@@ -1,0 +1,164 @@
+{% extends 'base.html' %}
+{% block title %}CheckUser — {{ panel_name }}{% endblock %}
+{% block page_title %}<i class="fas fa-user-check me-2"></i>CheckUser{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+
+  <!-- URLs disponíveis -->
+  <div class="col-md-7">
+    <div class="card mb-4">
+      <div class="card-header fw-semibold">
+        <i class="fas fa-link me-2"></i>URLs do CheckUser
+      </div>
+      <div class="card-body">
+        <p class="text-muted small mb-3">
+          Use uma dessas URLs no campo de CheckUser do aplicativo VPN do cliente.
+        </p>
+
+        <div class="mb-3">
+          <label class="form-label fw-semibold">DTunnel / HTTP Injector</label>
+          <div class="input-group">
+            <input type="text" class="form-control font-monospace small"
+                   id="urlDtunnel"
+                   value="{{ request.host_url }}checkuser/dtunnel.php?user="
+                   readonly onclick="this.select()">
+            <button class="btn btn-outline-secondary"
+                    onclick="universalCopy(document.getElementById('urlDtunnel').value, this)">
+              <i class="fas fa-copy me-1"></i>Copiar
+            </button>
+          </div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Outros apps (formato <code>/checkuser/&lt;user&gt;</code>)</label>
+          <div class="input-group">
+            <input type="text" class="form-control font-monospace small"
+                   id="urlGeneric"
+                   value="{{ request.host_url }}checkuser/"
+                   readonly onclick="this.select()">
+            <button class="btn btn-outline-secondary"
+                    onclick="universalCopy(document.getElementById('urlGeneric').value, this)">
+              <i class="fas fa-copy me-1"></i>Copiar
+            </button>
+          </div>
+        </div>
+
+        <div class="mb-0">
+          <label class="form-label fw-semibold">Login do Usuário (renovação)</label>
+          <div class="input-group">
+            <input type="text" class="form-control font-monospace small"
+                   id="urlLogin"
+                   value="{{ url_for('user_login', _external=True) }}"
+                   readonly onclick="this.select()">
+            <button class="btn btn-outline-secondary"
+                    onclick="universalCopy(document.getElementById('urlLogin').value, this)">
+              <i class="fas fa-copy me-1"></i>Copiar
+            </button>
+          </div>
+          <small class="text-muted">Página onde o cliente verifica a validade e renova via PIX.</small>
+        </div>
+      </div>
+    </div>
+
+    <!-- Teste rápido -->
+    <div class="card">
+      <div class="card-header fw-semibold">
+        <i class="fas fa-search me-2"></i>Teste Rápido
+      </div>
+      <div class="card-body">
+        <p class="text-muted small mb-3">Consulte qualquer usuário diretamente aqui no painel.</p>
+        <div class="input-group mb-3">
+          <input type="text" id="checkInput" class="form-control" placeholder="Digite o usuário SSH...">
+          <button class="btn btn-primary" onclick="doCheck()">
+            <i class="fas fa-search me-1"></i>Verificar
+          </button>
+        </div>
+        <div id="checkResult"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Instalação + URL configurada -->
+  <div class="col-md-5">
+    <div class="card mb-4">
+      <div class="card-header fw-semibold">
+        <i class="fas fa-tools me-2"></i>Instalação no Servidor
+      </div>
+      <div class="card-body">
+        <p class="text-muted small mb-2">
+          Execute no servidor SSH para instalar o script de CheckUser:
+        </p>
+        <pre class="p-2 rounded small mb-3" style="background:rgba(0,0,0,.25);white-space:pre-wrap;word-break:break-all;">bash &lt;(curl -sSL https://raw.githubusercontent.com/jeanfraga33/painel-master/main/server_modules/checkuser_install.sh)</pre>
+        <p class="text-muted small mb-0">Após instalado, o CheckUser responde automaticamente nas URLs acima.</p>
+      </div>
+    </div>
+
+    {% if current_user.role == 'admin' %}
+    <div class="card">
+      <div class="card-header fw-semibold">
+        <i class="fas fa-cog me-2"></i>URL personalizada (app VPN)
+      </div>
+      <div class="card-body">
+        <p class="text-muted small mb-2">
+          URL exibida no app para o cliente configurar o CheckUser:
+        </p>
+        <form method="POST" action="{{ url_for('settings') }}">
+          <div class="input-group mb-2">
+            <input type="text" name="checkuser_url" class="form-control form-control-sm"
+                   value="{{ settings.checkuser_url }}"
+                   placeholder="{{ request.host_url }}checkuser/dtunnel.php?user=">
+            <button type="submit" class="btn btn-sm btn-primary">
+              <i class="fas fa-save me-1"></i>Salvar
+            </button>
+          </div>
+          {# Hidden fields to preserve other settings values #}
+          <input type="hidden" name="panel_name"  value="{{ settings.panel_name }}">
+          <input type="hidden" name="panel_color" value="{{ settings.panel_color }}">
+          <input type="hidden" name="panel_theme" value="{{ settings.panel_theme }}">
+          <input type="hidden" name="app_link"    value="{{ settings.app_link }}">
+        </form>
+        <small class="text-muted">
+          <strong>DTunnel:</strong> <code>{{ request.host_url }}checkuser/dtunnel.php?user=</code><br>
+          <strong>Outros:</strong> <code>{{ request.host_url }}checkuser/&lt;username&gt;</code>
+        </small>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function doCheck() {
+  const user = document.getElementById('checkInput').value.trim();
+  if (!user) return;
+  const div = document.getElementById('checkResult');
+  div.innerHTML = '<div class="text-muted small"><i class="fas fa-spinner fa-spin me-1"></i>Consultando...</div>';
+  fetch('/api/checkuser?user=' + encodeURIComponent(user))
+    .then(r => r.json())
+    .then(d => {
+      const ok = d.status === 'online' || d.online === true || (typeof d.limit !== 'undefined');
+      const color = ok ? 'success' : 'danger';
+      let html = `<div class="alert alert-${color} py-2 small mb-0">`;
+      if (d.username) html += `<strong>Usuário:</strong> ${d.username}<br>`;
+      if (d.status)   html += `<strong>Status:</strong> ${d.status}<br>`;
+      if (d.expires_at) html += `<strong>Validade:</strong> ${d.expires_at}<br>`;
+      if (typeof d.connections !== 'undefined') html += `<strong>Conexões:</strong> ${d.connections}<br>`;
+      if (typeof d.limit !== 'undefined') html += `<strong>Limite:</strong> ${d.limit}<br>`;
+      if (!d.username && !d.status) html += JSON.stringify(d);
+      html += '</div>';
+      div.innerHTML = html;
+    })
+    .catch(() => {
+      div.innerHTML = '<div class="alert alert-danger py-2 small mb-0">Erro ao consultar.</div>';
+    });
+}
+
+document.getElementById('checkInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doCheck();
+});
+</script>
+{% endblock %}

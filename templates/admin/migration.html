@@ -1,0 +1,277 @@
+{% extends 'base.html' %}
+{% block title %}Migração — {{ panel_name }}{% endblock %}
+{% block page_title %}<i class="fas fa-file-import me-2"></i>Migração de Painel{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+
+  {# ── Left column: upload form ─────────────────────────────────────────── #}
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header fw-semibold">
+        <i class="fas fa-upload me-2 text-primary"></i>Importar banco de dados
+      </div>
+      <div class="card-body">
+
+        <div class="alert alert-info mb-3">
+          <i class="fas fa-magic me-2"></i>
+          <strong>Detecção automática de painel</strong> — basta enviar o arquivo e o sistema
+          identifica se é <strong>Dragon Core&nbsp;/&nbsp;Atlas</strong> ou <strong>GestorSSH</strong>.
+          <ul class="mb-0 mt-2 small">
+            <li>Aceita arquivos <code>.sql</code> ou <code>.sql.gz</code></li>
+            <li>Revendas são importadas mantendo hierarquia (pai → filho)</li>
+            <li>Usuários SSH são vinculados à revenda correspondente</li>
+            <li>Registros já existentes no painel são ignorados (sem duplicatas)</li>
+          </ul>
+        </div>
+
+        <div class="alert alert-warning py-2 mb-3">
+          <i class="fas fa-exclamation-triangle me-2"></i>
+          <strong>Atenção:</strong> Execute a migração apenas <strong>uma vez</strong>.
+          Rodar duas vezes pode causar duplicatas.
+        </div>
+
+        <form method="POST" enctype="multipart/form-data">
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Arquivo de backup MySQL</label>
+            <input type="file" name="sql_file" class="form-control"
+                   accept=".sql,.gz,.sql.gz" required>
+            <small class="text-muted">
+              Exportado pelo Dragon Core / Atlas (ex: <code>backup_2026-05-13.sql.gz</code>)
+              ou pelo GestorSSH (ex: <code>gestor-api_abc123.sql</code>)
+            </small>
+          </div>
+          <button type="submit" class="btn btn-primary fw-semibold"
+                  onclick="return confirm('Confirma importação? Registros existentes serão ignorados.')">
+            <i class="fas fa-file-import me-2"></i>Iniciar Migração
+          </button>
+        </form>
+      </div>
+    </div>
+
+    {# ── Supported panels ──────────────────────────────────────────────── #}
+    <div class="row g-3 mt-1">
+
+      {# Dragon Core / Atlas #}
+      <div class="col-md-6">
+        <div class="card h-100">
+          <div class="card-header fw-semibold">
+            <i class="fas fa-dragon me-2 text-warning"></i>Dragon Core / Atlas
+          </div>
+          <div class="card-body p-0">
+            <table class="table table-sm mb-0">
+              <thead class="table-secondary">
+                <tr><th>Tabela origem</th><th>Destino no painel</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>accounts</code></td><td>Revendas</td></tr>
+                <tr><td><code>atribuidos.limite</code></td><td>Limite de contas</td></tr>
+                <tr><td><code>atribuidos.expira</code></td><td>Validade da revenda</td></tr>
+                <tr><td><code>atribuidos.suspenso</code></td><td>Status suspensão</td></tr>
+                <tr><td><code>ssh_accounts.login/senha</code></td><td>Usuários SSH</td></tr>
+                <tr><td><code>ssh_accounts.expira</code></td><td>Validade do usuário</td></tr>
+                <tr><td><code>ssh_accounts.uuid</code></td><td>UUID V2Ray</td></tr>
+                <tr><td><code>ssh_accounts.limite</code></td><td>Limite conexões</td></tr>
+                <tr>
+                  <td><code>categorias</code></td>
+                  <td><span class="badge bg-secondary">Não importado</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {# GestorSSH #}
+      <div class="col-md-6">
+        <div class="card h-100">
+          <div class="card-header fw-semibold">
+            <i class="fas fa-server me-2 text-info"></i>GestorSSH
+          </div>
+          <div class="card-body p-0">
+            <table class="table table-sm mb-0">
+              <thead class="table-secondary">
+                <tr><th>Tabela origem</th><th>Destino no painel</th></tr>
+              </thead>
+              <tbody>
+                <tr><td><code>accounts</code></td><td>Revendas</td></tr>
+                <tr><td><code>accounts.expiraadm</code></td><td>Validade da revenda</td></tr>
+                <tr><td><code>accounts.qtdrevenda</code></td><td>Limite de contas</td></tr>
+                <tr><td><code>atribuidos.expira</code></td><td>Validade (preferencial)</td></tr>
+                <tr><td><code>categorias</code></td><td>Categorias de servidor</td></tr>
+                <tr><td><code>servidores</code></td><td>Servidores (IP + credenciais)</td></tr>
+                <tr><td><code>ssh_accounts.login/senha</code></td><td>Usuários SSH</td></tr>
+                <tr><td><code>ssh_accounts.expira</code></td><td>Validade do usuário</td></tr>
+                <tr><td><code>ssh_accounts.uuid</code></td><td>UUID V2Ray</td></tr>
+                <tr><td><code>ssh_accounts.limite</code></td><td>Limite conexões</td></tr>
+                <tr><td><code>ssh_accounts.situacao</code></td><td>Status (ativo/suspenso)</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="card-footer text-muted small">
+            <i class="fas fa-info-circle me-1"></i>
+            Servidores são importados com IP e credenciais SSH, mas a porta do módulo
+            (<code>7270</code>) e o token de autenticação precisam ser configurados
+            após a migração em <strong>Servidores → Editar</strong>.
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  {# ── Right column: post-migration checklist ────────────────────────────── #}
+  <div class="col-lg-5">
+    <div class="card border-success">
+      <div class="card-header fw-semibold text-success">
+        <i class="fas fa-tasks me-2"></i>O que fazer após qualquer migração
+      </div>
+      <div class="card-body small">
+
+        <p class="text-muted mb-3">
+          Siga os passos abaixo em ordem após concluir a importação.
+          Nenhum usuário vai funcionar até os servidores estarem configurados e sincronizados.
+        </p>
+
+        {# Step 1 #}
+        <div class="d-flex mb-3">
+          <div class="me-3 flex-shrink-0">
+            <span class="badge rounded-pill bg-primary" style="width:24px;height:24px;display:flex;align-items:center;justify-content:center">1</span>
+          </div>
+          <div>
+            <strong>Cadastrar / conferir servidores SSH</strong>
+            <div class="text-muted mt-1">
+              Vá em <strong>Servidores → Adicionar</strong>. Para GestorSSH os servidores
+              já são importados, mas confira o <em>IP</em>, defina a porta do módulo
+              (<code>7270</code> padrão) e gere ou cole o token de autenticação correto.
+            </div>
+          </div>
+        </div>
+
+        {# Step 2 #}
+        <div class="d-flex mb-3">
+          <div class="me-3 flex-shrink-0">
+            <span class="badge rounded-pill bg-primary" style="width:24px;height:24px;display:flex;align-items:center;justify-content:center">2</span>
+          </div>
+          <div>
+            <strong>Instalar o módulo em cada servidor</strong>
+            <div class="text-muted mt-1">
+              Em <strong>Servidores</strong>, clique em
+              <kbd>Instalar Módulo</kbd> para cada servidor.
+              O painel vai conectar via SSH (root), instalar o
+              <code>pmaster_agent</code> e configurar o serviço automaticamente.
+            </div>
+          </div>
+        </div>
+
+        {# Step 3 #}
+        <div class="d-flex mb-3">
+          <div class="me-3 flex-shrink-0">
+            <span class="badge rounded-pill bg-primary" style="width:24px;height:24px;display:flex;align-items:center;justify-content:center">3</span>
+          </div>
+          <div>
+            <strong>Atribuir servidores às revendas</strong>
+            <div class="text-muted mt-1">
+              Em <strong>Revendas</strong>, abra cada revenda e defina quais
+              servidores ela pode usar. Sem essa atribuição a revenda não consegue
+              criar usuários.
+            </div>
+          </div>
+        </div>
+
+        {# Step 4 #}
+        <div class="d-flex mb-3">
+          <div class="me-3 flex-shrink-0">
+            <span class="badge rounded-pill bg-primary" style="width:24px;height:24px;display:flex;align-items:center;justify-content:center">4</span>
+          </div>
+          <div>
+            <strong>Vincular usuários SSH aos servidores</strong>
+            <div class="text-muted mt-1">
+              Os usuários migrados ficam <em>sem servidor</em> (Dragon Core) ou
+              vinculados ao servidor importado (GestorSSH).
+              Em <strong>Usuários</strong> use a edição em massa ou individual para
+              associar cada usuário ao servidor correto se necessário.
+            </div>
+          </div>
+        </div>
+
+        {# Step 5 #}
+        <div class="d-flex mb-3">
+          <div class="me-3 flex-shrink-0">
+            <span class="badge rounded-pill bg-success" style="width:24px;height:24px;display:flex;align-items:center;justify-content:center">5</span>
+          </div>
+          <div>
+            <strong>Sincronizar usuários em cada servidor</strong>
+            <div class="text-muted mt-1">
+              Em <strong>Servidores</strong>, clique em <kbd>Sincronizar</kbd> em cada
+              servidor. Isso cria no servidor Linux todos os usuários SSH do painel que
+              ainda não existem lá, com as senhas e vencimentos corretos.
+            </div>
+          </div>
+        </div>
+
+        {# Step 6 #}
+        <div class="d-flex mb-3">
+          <div class="me-3 flex-shrink-0">
+            <span class="badge rounded-pill bg-success" style="width:24px;height:24px;display:flex;align-items:center;justify-content:center">6</span>
+          </div>
+          <div>
+            <strong>Testar acesso com um usuário real</strong>
+            <div class="text-muted mt-1">
+              Pegue um usuário ativo e tente conectar via SSH ou pelo app VPN.
+              Confirme que o vencimento bate com o painel e que as conexões
+              simultâneas são limitadas corretamente.
+            </div>
+          </div>
+        </div>
+
+        {# Step 7 #}
+        <div class="d-flex mb-3">
+          <div class="me-3 flex-shrink-0">
+            <span class="badge rounded-pill bg-warning text-dark" style="width:24px;height:24px;display:flex;align-items:center;justify-content:center">7</span>
+          </div>
+          <div>
+            <strong>Orientar as revendas a trocar as senhas</strong>
+            <div class="text-muted mt-1">
+              As senhas são importadas em texto puro. Oriente cada revenda a
+              acessar <strong>Perfil → Alterar Senha</strong> assim que possível.
+            </div>
+          </div>
+        </div>
+
+        {# Step 8 #}
+        <div class="d-flex mb-3">
+          <div class="me-3 flex-shrink-0">
+            <span class="badge rounded-pill bg-warning text-dark" style="width:24px;height:24px;display:flex;align-items:center;justify-content:center">8</span>
+          </div>
+          <div>
+            <strong>Configurar backup automático (Telegram)</strong>
+            <div class="text-muted mt-1">
+              Em <strong>Backup</strong>, informe o token do bot e o chat ID.
+              O painel faz backup do banco automaticamente a cada 6 horas e
+              envia para o Telegram.
+            </div>
+          </div>
+        </div>
+
+        {# Step 9 #}
+        <div class="d-flex">
+          <div class="me-3 flex-shrink-0">
+            <span class="badge rounded-pill bg-secondary" style="width:24px;height:24px;display:flex;align-items:center;justify-content:center">9</span>
+          </div>
+          <div>
+            <strong>Configurar Mercado Pago (opcional)</strong>
+            <div class="text-muted mt-1">
+              Para cada revenda que vai usar renovação via PIX, acesse
+              <strong>Mercado Pago</strong> e configure o token de acesso e o
+              valor da renovação mensal.
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

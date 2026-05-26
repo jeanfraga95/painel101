@@ -1,0 +1,235 @@
+<!-- Create User Modal -->
+<div class="modal fade" id="createUserModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fas fa-user-plus me-2"></i>Criar Usuário SSH</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Usuário</label>
+            <div class="input-group">
+              <input type="text" id="cu_username" class="form-control" placeholder="usuario123" required>
+              <button class="btn btn-outline-secondary" onclick="genCreds()" title="Gerar aleatório">
+                <i class="fas fa-random"></i>
+              </button>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Senha</label>
+            <input type="text" id="cu_password" class="form-control" placeholder="senha123" required>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Dias de validade</label>
+            <input type="number" id="cu_days" class="form-control" value="30" min="1" max="365">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Limite de conexões</label>
+            <input type="number" id="cu_limit" class="form-control" value="1" min="1">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Servidor</label>
+            <select id="cu_server" class="form-select">
+              <option value="">Selecione...</option>
+              {% for s in servers if servers is defined %}
+              <option value="{{ s.id }}">{{ s.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-12">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="cu_v2ray" onchange="toggleUUID(this)">
+              <label class="form-check-label" for="cu_v2ray">Habilitar V2Ray/Xray</label>
+            </div>
+          </div>
+          <div class="col-12" id="cu_uuid_wrap" style="display:none">
+            <label class="form-label">UUID V2Ray</label>
+            <div class="input-group">
+              <input type="text" id="cu_uuid" class="form-control font-monospace" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+              <button class="btn btn-outline-secondary" onclick="genUUID()"><i class="fas fa-random"></i></button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" class="btn btn-primary" onclick="submitCreateUser()">
+          <i class="fas fa-plus me-2"></i>Criar Usuário
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Create Test Modal -->
+<div class="modal fade" id="createTestModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fas fa-clock me-2"></i>Criar Teste</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-3">
+          <div class="col-12">
+            <label class="form-label">Usuário</label>
+            <div class="input-group">
+              <input type="text" id="ct_username" class="form-control" placeholder="teste123" required>
+              <button class="btn btn-outline-secondary" onclick="genTestCreds()"><i class="fas fa-random"></i></button>
+            </div>
+          </div>
+          <div class="col-6">
+            <label class="form-label">Senha</label>
+            <input type="text" id="ct_password" class="form-control" placeholder="senha123" required>
+          </div>
+          <div class="col-6">
+            <label class="form-label">Duração (horas)</label>
+            <select id="ct_hours" class="form-select">
+              <option value="1">1 hora</option>
+              <option value="2" selected>2 horas</option>
+              <option value="6">6 horas</option>
+              <option value="12">12 horas</option>
+              <option value="24">24 horas</option>
+              <option value="48">48 horas</option>
+            </select>
+          </div>
+          <div class="col-6">
+            <label class="form-label">Limite de conexões</label>
+            <input type="number" id="ct_limit" class="form-control" value="1" min="1">
+          </div>
+          <div class="col-6">
+            <label class="form-label">Servidor</label>
+            <select id="ct_server" class="form-select">
+              <option value="">Selecione...</option>
+              {% for s in servers if servers is defined %}
+              <option value="{{ s.id }}">{{ s.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-12">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="ct_v2ray">
+              <label class="form-check-label" for="ct_v2ray">Com V2Ray/Xray</label>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" class="btn btn-warning text-dark" onclick="submitCreateTest()">
+          <i class="fas fa-plus me-2"></i>Criar Teste
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Result Modal -->
+<div class="modal fade" id="resultModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header bg-success text-white">
+        <h6 class="modal-title"><i class="fas fa-check-circle me-2"></i>Criado com sucesso!</h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="resultBody">
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-success w-100" id="copyResultBtn"
+                onclick="copyResult(this)">
+          <i class="fas fa-copy me-2"></i>Copiar tudo
+        </button>
+        <button type="button" class="btn btn-secondary w-100" data-bs-dismiss="modal">Fechar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let lastResultText = '';
+
+function toggleUUID(cb) {
+  document.getElementById('cu_uuid_wrap').style.display = cb.checked ? 'block' : 'none';
+  if (cb.checked) genUUID();
+}
+
+function genUUID() {
+  fetch('/api/random_credentials').then(r=>r.json()).then(d => {
+    document.getElementById('cu_uuid').value = d.uuid;
+  });
+}
+
+function genCreds() {
+  fetch('/api/random_credentials').then(r=>r.json()).then(d => {
+    document.getElementById('cu_username').value = d.username;
+    document.getElementById('cu_password').value = d.password;
+  });
+}
+
+function genTestCreds() {
+  fetch('/api/random_credentials').then(r=>r.json()).then(d => {
+    document.getElementById('ct_username').value = 'tst_' + d.username.slice(3);
+    document.getElementById('ct_password').value = d.password;
+  });
+}
+
+function showResult(data) {
+  const appLink = data.app_link ? `\n🔗 App: ${data.app_link}` : '';
+  const uuidLine = data.uuid ? `\n🆔 UUID: ${data.uuid}` : '';
+  const hoursLine = data.hours ? `⏱️ Duração: ${data.hours}h\n` : '';
+  lastResultText = `👤 Usuário: ${data.username}\n🔐 Senha: ${data.password}\n${hoursLine}📅 Validade: ${data.expires_at}${uuidLine}${appLink}`;
+
+  document.getElementById('resultBody').innerHTML = `
+    <div class="font-monospace small p-2 rounded" style="background:rgba(0,0,0,.2)">
+      <div><b>Usuário:</b> ${data.username}</div>
+      <div><b>Senha:</b> ${data.password}</div>
+      ${data.hours ? `<div><b>Duração:</b> ${data.hours}h</div>` : ''}
+      <div><b>Validade:</b> ${data.expires_at}</div>
+      ${data.uuid ? `<div><b>UUID:</b> <span class="text-info">${data.uuid}</span></div>` : ''}
+      ${data.app_link ? `<div><b>App:</b> <a href="${data.app_link}" target="_blank">${data.app_link}</a></div>` : ''}
+    </div>`;
+
+  bootstrap.Modal.getInstance(document.getElementById('createUserModal'))?.hide();
+  bootstrap.Modal.getInstance(document.getElementById('createTestModal'))?.hide();
+  new bootstrap.Modal(document.getElementById('resultModal')).show();
+}
+
+function copyResult(btnEl) {
+  universalCopy(lastResultText, btnEl);
+}
+
+// pmCopy removed — universalCopy (defined in base.html) handles all cases including HTTP + modal focus-trap
+
+function submitCreateUser() {
+  const v2 = document.getElementById('cu_v2ray').checked;
+  apiPost('/users/create', {
+    username: document.getElementById('cu_username').value,
+    password: document.getElementById('cu_password').value,
+    days: document.getElementById('cu_days').value,
+    limit: document.getElementById('cu_limit').value,
+    server_id: document.getElementById('cu_server').value,
+    use_v2ray: v2 ? '1' : '0',
+    uuid: v2 ? document.getElementById('cu_uuid').value : '',
+  }, d => {
+    if (d.success) showResult(d.user);
+    else showToast(d.message, 'danger');
+  });
+}
+
+function submitCreateTest() {
+  const v2 = document.getElementById('ct_v2ray').checked;
+  apiPost('/users/test', {
+    username: document.getElementById('ct_username').value,
+    password: document.getElementById('ct_password').value,
+    hours: document.getElementById('ct_hours').value,
+    limit: document.getElementById('ct_limit').value,
+    server_id: document.getElementById('ct_server').value,
+    use_v2ray: v2 ? '1' : '0',
+  }, d => {
+    if (d.success) showResult(d.user);
+    else showToast(d.message, 'danger');
+  });
+}
+</script>
