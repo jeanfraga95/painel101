@@ -11,19 +11,23 @@ import os
 
 
 TIMEOUT = 15
+SYNC_TIMEOUT = 125  # tempo maior para sincronização com muitos usuários
+SYNC_BATCH_SIZE = 50  # usuários por lote na sincronização
 
 
-def send_command(ip: str, port: int, auth_token: str, command: str) -> tuple:
+def send_command(ip: str, port: int, auth_token: str, command: str,
+                 timeout: int = None) -> tuple:
     """Send a shell command to modulo.py on the SSH server.
     Returns (success: bool, output: str).
     """
     url = f"http://{ip}:{port}"
+    _timeout = timeout if timeout is not None else TIMEOUT
     try:
         resp = requests.post(
             url,
             headers={'Senha': auth_token},
             data={'comando': command},
-            timeout=TIMEOUT
+            timeout=_timeout
         )
         if resp.status_code == 200:
             return True, resp.text.strip()
@@ -120,7 +124,9 @@ def create_test_user_on_server(ip: str, port: int, auth_token: str,
 
 
 def sync_users_to_server(ip: str, port: int, auth_token: str, users: list) -> tuple:
-    """Sync all active users to server. Falls back through sync scripts."""
+    """Sync all active users to server in batches to avoid HTTP timeout.
+    Falls back through sync scripts. Services are restarted only once at the end.
+    """
     from datetime import datetime as _dt2
     lines = []
     for u in users:
@@ -139,19 +145,55 @@ def sync_users_to_server(ip: str, port: int, auth_token: str, users: list) -> tu
     if not lines:
         return True, '0 usuários para sincronizar'
 
-    content = '\n'.join(lines)
-    escaped = content.replace('\\', '\\\\').replace("'", "'\\''")
-    cmd = (
-        f"printf '%s\\n' '{escaped}' > /tmp/pmg_sync.txt && "
-        f"(python3 /root/pmaster_sync.py /tmp/pmg_sync.txt 2>/dev/null || "
-        f"python3 /root/sincronizar.py /tmp/pmg_sync.txt 2>/dev/null) && "
-        f"echo 'PMG_OK:{len(lines)}'"
-    )
-    ok, out = send_command(ip, port, auth_token, cmd)
-    if ok and 'PMG_OK' in out:
-        return True, f'{len(lines)} usuários sincronizados'
-    # If command timed out or failed, report but don't crash
-    return ok, out or 'Sem resposta do servidor'
+    # Split into batches to avoid timeout with large user lists
+    batches = [lines[i:i + SYNC_BATCH_SIZE]
+               for i in range(0, len(lines), SYNC_BATCH_SIZE)]
+    total = len(lines)
+    synced = 0
+    errors = []
+
+    for idx, batch in enumerate(batches):
+        is_last = (idx == len(batches) - 1)
+        content = '\n'.join(batch)
+        escaped = content.replace('\\', '\\\\').replace("'", "'\\''")
+
+        if is_last:
+            # Último lote: executa o script completo (inclui restart dos serviços)
+            cmd = (
+                f"printf '%s\\n' '{escaped}' > /tmp/pmg_sync.txt && "
+                f"(python3 /root/pmaster_sync.py /tmp/pmg_sync.txt 2>/dev/null || "
+                f"python3 /root/sincronizar.py /tmp/pmg_sync.txt 2>/dev/null) && "
+                f"echo 'PMG_OK:{len(batch)}'"
+            )
+        else:
+            # Lotes intermediários: cria usuários sem reiniciar os serviços
+            cmd = (
+                f"printf '%s\\n' '{escaped}' > /tmp/pmg_sync_batch.txt && "
+                f"python3 - << 'PYEOF'\n"
+                f"import os\n"
+                f"with open('/tmp/pmg_sync_batch.txt') as f:\n"
+                f"    lines = [l.strip() for l in f if l.strip()]\n"
+                f"for linha in lines:\n"
+                f"    cols = linha.split()\n"
+                f"    if len(cols) >= 5:\n"
+                f"        os.system('/root/pmaster_agent v2rayadd {{}} {{}} {{}} {{}} {{}} 2>/dev/null || /root/dragonmodule v2rayadd {{}} {{}} {{}} {{}} {{}} 2>/dev/null'.format(*cols[:5], *cols[:5]))\n"
+                f"    elif len(cols) >= 4:\n"
+                f"        os.system('/root/pmaster_agent createssh {{}} {{}} {{}} {{}} 2>/dev/null || /root/dragonmodule createssh {{}} {{}} {{}} {{}} 2>/dev/null'.format(*cols[:4], *cols[:4]))\n"
+                f"os.remove('/tmp/pmg_sync_batch.txt')\n"
+                f"print('BATCH_OK:{len(batch)}')\n"
+                f"PYEOF"
+            )
+
+        ok, out = send_command(ip, port, auth_token, cmd, timeout=SYNC_TIMEOUT)
+
+        if ok and ('PMG_OK' in out or 'BATCH_OK' in out):
+            synced += len(batch)
+        else:
+            errors.append(f"lote {idx + 1}/{len(batches)}: {out or 'sem resposta'}")
+
+    if errors:
+        return False, f'{synced}/{total} sincronizados. Erros: {"; ".join(errors)}'
+    return True, f'{synced} usuários sincronizados'
 
 
 def install_modules_ssh(ip: str, root_user: str, root_password: str, auth_token: str) -> tuple:
@@ -259,33 +301,37 @@ def get_online_users_robust(ip: str, port: int, auth_token: str) -> list:
     import json as _json
 
     # ── Method 1: pmg-monitor or plugin-sync binary (fastest, JSON output) ─
+    # Nota: pmg-monitor pode retornar {} vazio para usuários migrados de
+    # GestorSSH/DragonCore que não estão no seu banco local. Nesse caso
+    # NÃO retornamos — caímos no Method 2 para pegar todos os usuários via ps.
+    monitor_result = []
     for monitor_bin in ('/opt/pmg-monitor', '/opt/sshplus/plugin-sync'):
         ok, out = send_command(ip, port, auth_token,
                                f"{monitor_bin} --monitor-users 2>/dev/null")
         if ok and out.strip().startswith('{'):
             try:
                 data = _json.loads(out.strip())
-                result = [
+                monitor_result = [
                     {'username': u, 'connections': int(c)}
                     for u, c in data.items()
                     if u and u not in ('root', 'sshd', '')
                 ]
-                if result:
-                    return result
+                if monitor_result:
+                    break
             except Exception:
                 pass
 
-    # ── Method 2: ps -eo args (user's script, modified to output user:count) ─
-    # Based on: ps -eo args | grep "sshd:" | grep -v "grep" | grep -v "\["
-    #           | awk -F'[: ]+' '/sshd:/ {print $2}' | sort | uniq -c
+    # ── Method 2: ps -eo args ────────────────────────────────────────────────
+    # BUG CORRIGIDO: awk usava -F'[: ]+' que retornava "usuario@pts/0" como
+    # username. Agora usa -F'[: @]+' para separar o "@pts/X" do username.
     cmd = (
         "ps -eo args 2>/dev/null | grep 'sshd:' | grep -v grep | grep -v '\\[' | "
-        "awk -F'[: ]+' '/sshd:/ {print $2}' | "
+        "awk -F'[: @]+' '/sshd:/ {if($2 && $2!=\"root\" && $2!=\"sshd\") print $2}' | "
         "grep -v '^root$' | grep -v '^sshd$' | grep -v '^$' | "
         "sort | uniq -c | awk '{print $2 \":\" $1}'"
     )
     ok, out = send_command(ip, port, auth_token, cmd)
-    result = []
+    ps_result = []
     if ok and out.strip():
         for line in out.strip().splitlines():
             line = line.strip()
@@ -294,11 +340,25 @@ def get_online_users_robust(ip: str, port: int, auth_token: str) -> list:
                 uname = uname.strip()
                 if uname and uname not in ('root', 'sshd', ''):
                     try:
-                        result.append({'username': uname, 'connections': int(count.strip())})
+                        ps_result.append({'username': uname, 'connections': int(count.strip())})
                     except ValueError:
                         pass
-        if result:
-            return result
+
+    # Mescla: monitor_result tem prioridade (mais preciso), mas ps_result
+    # captura usuários migrados que o pmg-monitor não conhece
+    if ps_result:
+        if monitor_result:
+            # Une os dois, sem duplicatas — ps_result sobrescreve contagem
+            monitor_names = {r['username'].lower() for r in monitor_result}
+            merged = list(monitor_result)
+            for item in ps_result:
+                if item['username'].lower() not in monitor_names:
+                    merged.append(item)
+            return merged
+        return ps_result
+
+    if monitor_result:
+        return monitor_result
 
     # ── Method 3: who fallback ─────────────────────────────────────────────
     cmd_who = (
@@ -306,6 +366,7 @@ def get_online_users_robust(ip: str, port: int, auth_token: str) -> list:
         "sort | uniq -c | awk '{print $2 \":\" $1}'"
     )
     ok3, out3 = send_command(ip, port, auth_token, cmd_who)
+    result = []
     if ok3 and out3.strip():
         for line in out3.strip().splitlines():
             line = line.strip()
