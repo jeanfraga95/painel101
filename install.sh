@@ -11,7 +11,7 @@
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
-REPO_URL="https://github.com/jeanfraga33/painel-master"
+REPO_URL="https://github.com/jeanfraga95/painel101"
 INSTALL_DIR="/opt/painel-master"
 SERVICE_NAME="painel-master"
 PANEL_PORT=2083
