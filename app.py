@@ -549,8 +549,6 @@ def update_user(user_id):
 
 @app.route('/users/suspend/<int:user_id>', methods=['POST'])
 @login_required
-@app.route('/users/suspend/<int:user_id>', methods=['POST'])
-@login_required
 def suspend_user(user_id):
     current_user = get_current_user()
     u = db.get_ssh_user(user_id)
