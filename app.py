@@ -562,80 +562,33 @@ def suspend_user(user_id):
         if u['owner_id'] not in tree_ids:
             return jsonify(success=False, message='Sem permissão')
 
-    # Determinar novo status
     new_status = 'suspended' if u['status'] == 'active' else 'active'
     
-    # Verificar se o usuário tem servidor associado
-    # CORREÇÃO: usar u['server_id'] em vez de u.get('server_id')
-    if not u['server_id']:
-        # Se não tem servidor, apenas atualiza o banco
-        db.update_ssh_user(user_id, status=new_status)
-        return jsonify(
-            success=True, 
-            message=f'Status alterado para: {new_status} (sem servidor associado)', 
-            new_status=new_status
-        )
-    
-    # Buscar informações do servidor
-    srv = db.get_server(u['server_id'])
-    if not srv:
-        return jsonify(success=False, message='Servidor associado não encontrado')
-    
-    # Preparar comandos SSH
-    if new_status == 'suspended':
-        # Suspender usuário: matar processos e bloquear
-        cmd = f"pkill -u {u['username']} 2>/dev/null; usermod -L {u['username']} 2>/dev/null; chsh -s /sbin/nologin {u['username']} 2>/dev/null"
-    else:
-        # Ativar usuário: desbloquear e restaurar shell
-        cmd = f"usermod -U {u['username']} 2>/dev/null; chsh -s /bin/bash {u['username']} 2>/dev/null"
-    
-    # Executar comando no servidor SSH
-    try:
-        result = sc.send_command(
-            srv['ip'], 
-            srv['module_port'], 
-            srv['auth_token'],
-            cmd,
-            timeout=10
-        )
-        
-        # Verificar se o comando foi bem sucedido
-        # sqlite3.Row pode ser acessado por índice ou chave, mas não tem .get()
-        success = False
-        
-        if result:
-            # Diferentes formas de verificar sucesso dependendo do retorno do sc.send_command
-            if isinstance(result, dict):
-                # Se retorna dicionário
-                if 'success' in result:
-                    success = result['success']
-                elif 'exit_code' in result:
-                    success = result['exit_code'] == 0
+    # Tentar executar ação no servidor SSH (se existir)
+    if u['server_id']:
+        srv = db.get_server(u['server_id'])
+        if srv:
+            try:
+                if new_status == 'suspended':
+                    # Mata processos e bloqueia
+                    sc.send_command(srv['ip'], srv['module_port'], srv['auth_token'],
+                                  f"pkill -u {u['username']}")
+                    sc.send_command(srv['ip'], srv['module_port'], srv['auth_token'],
+                                  f"usermod -L {u['username']}")
                 else:
-                    success = True if result else False
-            elif isinstance(result, bool):
-                success = result
-            else:
-                success = True if result else False
-        
-        if not success:
-            return jsonify(
-                success=False, 
-                message=f'Falha ao executar comando no servidor {srv["name"]}. Verifique o servidor SSH.'
-            )
-            
-    except Exception as e:
-        return jsonify(
-            success=False, 
-            message=f'Erro ao comunicar com servidor SSH: {str(e)}'
-        )
+                    # Desbloqueia
+                    sc.send_command(srv['ip'], srv['module_port'], srv['auth_token'],
+                                  f"usermod -U {u['username']}")
+            except Exception as e:
+                # Log do erro mas não interrompe
+                print(f"SSH Error: {e}")
     
-    # Tudo ok - atualizar banco de dados
+    # Atualiza banco (sempre)
     db.update_ssh_user(user_id, status=new_status)
     
     return jsonify(
         success=True, 
-        message=f'Usuário {new_status} com sucesso no servidor {srv["name"]}',
+        message=f'Usuário {new_status}', 
         new_status=new_status
     )
 
