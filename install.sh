@@ -1,20 +1,20 @@
 #!/bin/bash
 # =============================================================
-#  Painel Master — Instalador v4
-#  Repositório: https://github.com/jeanfraga33/painel-master
+#  Painel Master — Instalador
+#  Repositório: https://github.com/jeanfraga95/painel101
+#
+#  Uso:
+#    bash install.sh            # instala / reinstala
+#    bash install.sh update     # só atualiza o código do GitHub
 # =============================================================
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
+REPO_URL="https://github.com/jeanfraga33/painel-master"
 INSTALL_DIR="/opt/painel-master"
 SERVICE_NAME="painel-master"
-# Default port 2083; protect against empty-string override
-PANEL_PORT="${PANEL_PORT:-2083}"
-[ -z "$PANEL_PORT" ] && PANEL_PORT="2083"
-REPO_URL="https://github.com/jeanfraga95/painel101"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DB_BACKUP=""
+PANEL_PORT=2083
 
 log()    { echo -e "${GREEN}[✔]${NC} $1"; }
 warn()   { echo -e "${YELLOW}[!]${NC} $1"; }
@@ -22,467 +22,193 @@ error()  { echo -e "${RED}[✗]${NC} $1"; exit 1; }
 info()   { echo -e "${BLUE}[i]${NC} $1"; }
 banner() { echo -e "${CYAN}${BOLD}$1${NC}"; }
 
-check_root() {
-    [ "$EUID" -eq 0 ] || error "Execute como root: sudo bash install.sh"
-}
+# ── Root check ─────────────────────────────────────────────────────────────────
+check_root() { [ "$EUID" -eq 0 ] || error "Execute como root: sudo bash install.sh"; }
 
-detect_arch() {
-    ARCH=$(uname -m)
-    case "$ARCH" in
-        x86_64|amd64)  ARCH_LABEL="x86_64" ;;
-        aarch64|arm64) ARCH_LABEL="arm64"   ;;
-        armv7l)        ARCH_LABEL="armv7"   ;;
-        *)             ARCH_LABEL="$ARCH"   ;;
-    esac
-    info "Arquitetura: $ARCH_LABEL"
-}
-
+# ── Detect OS ──────────────────────────────────────────────────────────────────
 detect_os() {
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        OS_ID="$ID"; OS_VER="$VERSION_ID"
-    else
-        OS_ID="unknown"; OS_VER="unknown"
-    fi
-    info "Sistema: $OS_ID $OS_VER"
+    [ -f /etc/os-release ] && . /etc/os-release || true
+    OS_ID="${ID:-unknown}"
+    info "Sistema: ${OS_ID} ${VERSION_ID:-}"
 }
 
-# ── Desinstala versão anterior ─────────────────────────────────
-uninstall_existing() {
-    local found=0
-    systemctl is-active  --quiet "$SERVICE_NAME" 2>/dev/null && found=1
-    systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null && found=1
-    [ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]     && found=1
-    [ -d "$INSTALL_DIR" ]                                    && found=1
-    [ "$found" -eq 0 ] && return
-
-    banner "Instalacao anterior detectada. Removendo tudo..."
-
-    systemctl stop    "$SERVICE_NAME" 2>/dev/null || true
-    systemctl disable "$SERVICE_NAME" 2>/dev/null || true
-    rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
-    systemctl daemon-reload 2>/dev/null
-
-    pkill -9 -f "python.*app\.py" 2>/dev/null || true
-    pkill -9 -f "painel-master"   2>/dev/null || true
-    sleep 2
-
-    if [ -f "$INSTALL_DIR/painel.db" ]; then
-        DB_BACKUP="/tmp/painel_backup_$(date +%s).db"
-        cp "$INSTALL_DIR/painel.db" "$DB_BACKUP"
-        warn "Banco de dados salvo em: $DB_BACKUP"
-    fi
-
-    rm -rf "$INSTALL_DIR"
-    log "Instalacao anterior removida"
-}
-
-# ── Mata processos em uma porta ────────────────────────────────
-kill_port() {
-    local port="$1"
-    # ss
-    if command -v ss &>/dev/null; then
-        local pids
-        pids=$(ss -tlnp "sport = :${port}" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | sort -u)
-        for pid in $pids; do kill -9 "$pid" 2>/dev/null || true; done
-    fi
-    # fuser
-    command -v fuser &>/dev/null && fuser -k "${port}/tcp" 2>/dev/null || true
-    # lsof
-    if command -v lsof &>/dev/null; then
-        local lpids
-        lpids=$(lsof -ti tcp:"${port}" 2>/dev/null || true)
-        [ -n "$lpids" ] && kill -9 $lpids 2>/dev/null || true
-    fi
-}
-
-free_ports() {
-    banner "Liberando portas..."
-    kill_port "$PANEL_PORT"
-    for p in 5000 5001 5050 5052 8000 8080 8888; do
-        [ "$p" -ne "$PANEL_PORT" ] && kill_port "$p"
+# ── Stop whatever is using port 80 (apache, lighttpd, old nginx, etc.) ─────────
+stop_conflicting_webservers() {
+    info "Liberando porta 80..."
+    for svc in apache2 apache httpd lighttpd h2o caddy; do
+        if systemctl is-active --quiet "$svc" 2>/dev/null; then
+            warn "Parando $svc (ocupa porta 80)..."
+            systemctl stop    "$svc" 2>/dev/null || true
+            systemctl disable "$svc" 2>/dev/null || true
+        fi
     done
-    pkill -9 -f "python.*app\.py" 2>/dev/null || true
-    sleep 1
-    log "Portas liberadas"
+    # kill anything else still bound to port 80 (but not our own nginx)
+    local nginx_pid
+    nginx_pid=$(systemctl show -p MainPID nginx 2>/dev/null | cut -d= -f2)
+    local pid80
+    pid80=$(ss -tlnp 2>/dev/null | awk '/:80 /{match($0,/pid=([0-9]+)/,a); if(a[1]) print a[1]}' | head -1)
+    if [ -n "$pid80" ] && [ "$pid80" != "$nginx_pid" ] && [ "$pid80" != "0" ]; then
+        warn "Processo $pid80 na porta 80 — encerrando..."
+        kill -9 "$pid80" 2>/dev/null || true
+        sleep 1
+    fi
+    log "Porta 80 livre"
 }
 
-# ── Dependências do sistema ────────────────────────────────────
+# ── Free panel port if something else is using it ──────────────────────────────
+free_panel_port() {
+    local pid
+    pid=$(ss -tlnp 2>/dev/null | awk "/:${PANEL_PORT} /{match(\$0,/pid=([0-9]+)/,a); if(a[1]) print a[1]}" | head -1)
+    if [ -n "$pid" ] && [ "$pid" != "0" ]; then
+        warn "Porta ${PANEL_PORT} em uso pelo PID $pid — encerrando..."
+        kill -9 "$pid" 2>/dev/null || true
+        sleep 1
+    fi
+}
+
+# ── Remove previous installation ───────────────────────────────────────────────
+uninstall_existing() {
+    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null || \
+       systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
+        info "Removendo instalação anterior..."
+        systemctl stop    "$SERVICE_NAME" 2>/dev/null || true
+        systemctl disable "$SERVICE_NAME" 2>/dev/null || true
+    fi
+    rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
+    systemctl daemon-reload 2>/dev/null || true
+}
+
+# ── System dependencies ────────────────────────────────────────────────────────
 install_system_deps() {
-    banner "Instalando dependencias do sistema..."
-    case "$OS_ID" in
-        ubuntu|debian)
+    banner "Instalando dependências..."
+    case "${OS_ID}" in
+        ubuntu|debian|linuxmint)
             apt-get update -qq 2>/dev/null
             DEBIAN_FRONTEND=noninteractive apt-get install -y \
                 curl wget git build-essential libssl-dev libffi-dev \
-                python3 python3-pip python3-venv python3-dev \
-                libsqlite3-dev sqlite3 perl openssl jq 2>/dev/null \
-                || warn "Algumas dependencias podem ter falhado"
+                python3 python3-venv python3-dev python3-pip \
+                sqlite3 openssl nginx iptables 2>/dev/null || true
             ;;
-        centos|rhel|fedora|rocky|almalinux)
-            if command -v dnf &>/dev/null; then
-                dnf install -y curl wget git gcc openssl-devel libffi-devel \
-                    python3 python3-pip python3-devel sqlite-devel sqlite \
-                    perl jq 2>/dev/null
-            else
-                yum install -y curl wget git gcc openssl-devel libffi-devel \
-                    python3 python3-pip python3-devel sqlite-devel sqlite \
-                    perl jq 2>/dev/null
-            fi
+        fedora|centos|rhel|rocky|almalinux)
+            dnf install -y curl wget git gcc openssl-devel libffi-devel \
+                python3 python3-pip sqlite openssl nginx iptables 2>/dev/null || true
             ;;
         *)
-            apt-get update -qq 2>/dev/null
-            apt-get install -y curl wget git python3 python3-pip python3-venv \
-                libsqlite3-dev sqlite3 perl openssl jq 2>/dev/null || true
+            warn "Distro não reconhecida — tentando apt-get..."
+            apt-get install -y python3 python3-venv python3-pip nginx iptables 2>/dev/null || true
             ;;
     esac
-    log "Dependencias do sistema instaladas"
+    log "Dependências OK"
 }
 
-# ── Seleciona Python funcional com sqlite3 ────────────────────
+# ── Find python3 with sqlite3 ──────────────────────────────────────────────────
 check_python() {
-    banner "Verificando Python..."
-
-    # Testa se um interpretador tem sqlite3 funcionando
-    python_has_sqlite() {
-        "$1" -c "import sqlite3; sqlite3.connect(':memory:').close()" 2>/dev/null
-    }
-
-    python_version_ok() {
-        local ver
-        ver=$("$1" -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>/dev/null)
-        local major=${ver%%.*}
-        local minor=${ver##*.}
-        [ "${major:-0}" -ge 3 ] && [ "${minor:-0}" -ge 8 ]
-    }
-
-    # Preferir Python do sistema (apt/yum) que normalmente tem sqlite3 compilado
-    # /usr/bin primeiro, depois /usr/local/bin (compilações manuais que podem estar quebradas)
-    local candidates=(
-        /usr/bin/python3.12
-        /usr/bin/python3.11
-        /usr/bin/python3.10
-        /usr/bin/python3.9
-        /usr/bin/python3.8
-        /usr/bin/python3
-        /usr/local/bin/python3.12
-        /usr/local/bin/python3.11
-        /usr/local/bin/python3.10
-        /usr/local/bin/python3.9
-        /usr/local/bin/python3.8
-        /usr/local/bin/python3
-    )
-
-    for cmd in "${candidates[@]}"; do
-        [ -x "$cmd" ] || continue
-        if python_version_ok "$cmd" && python_has_sqlite "$cmd"; then
-            PYTHON_CMD="$cmd"
-            local ver
-            ver=$("$cmd" -c "import sys; print('%d.%d' % sys.version_info[:2])")
-            log "Python $ver com sqlite3 OK: $cmd"
-            return 0
-        else
-            if [ -x "$cmd" ]; then
-                local ver
-                ver=$("$cmd" -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>/dev/null || echo "?")
-                warn "  $cmd (Python $ver) — sqlite3 ausente ou versao < 3.8, ignorando"
-            fi
+    PYTHON_CMD=""
+    for cmd in python3.12 python3.11 python3.10 python3.9 python3.8 python3; do
+        if command -v "$cmd" &>/dev/null && "$cmd" -c "import sqlite3" 2>/dev/null; then
+            PYTHON_CMD="$cmd"; break
         fi
     done
-
-    # Nenhum funcional encontrado — tenta instalar Python 3.10 do sistema
-    warn "Nenhum Python 3.8+ com sqlite3 encontrado. Tentando instalar..."
-    case "$OS_ID" in
-        ubuntu|debian)
-            # Garante libsqlite3-dev e tenta reinstalar python3
-            apt-get install -y libsqlite3-dev python3.10 python3.10-venv python3.10-dev 2>/dev/null || true
-            # Verifica se o python3.10 do apt agora tem sqlite3
-            if [ -x /usr/bin/python3.10 ] && python_has_sqlite /usr/bin/python3.10; then
-                PYTHON_CMD=/usr/bin/python3.10
-                log "Python 3.10 do sistema instalado com sqlite3 OK"
-                return 0
-            fi
-            # Fallback: python3.8 do sistema
-            if [ -x /usr/bin/python3.8 ] && python_has_sqlite /usr/bin/python3.8; then
-                PYTHON_CMD=/usr/bin/python3.8
-                log "Usando Python 3.8 do sistema com sqlite3 OK"
-                return 0
-            fi
-            ;;
-    esac
-
-    error "Nenhum Python 3.8+ com suporte a sqlite3 encontrado.
-O Python em /usr/local/bin/ parece ter sido compilado sem --enable-loadable-sqlite-extensions.
-
-Para corrigir manualmente, execute:
-  apt-get install -y libsqlite3-dev python3.8 python3.8-venv
-E reexecute o instalador."
+    [ -n "$PYTHON_CMD" ] || error "Python3 com sqlite3 não encontrado."
+    log "Python: $PYTHON_CMD ($($PYTHON_CMD --version 2>&1))"
 }
 
-# ── Remove conflitos git ───────────────────────────────────────
-remove_git_conflicts() {
-    local file="$1"
-    if grep -qP '^(<{7}|={7}|>{7})' "$file" 2>/dev/null; then
-        warn "Conflito git em $file — removendo marcadores..."
-        python3 - "$file" << 'PYEOF'
-import sys
-path = sys.argv[1]
-with open(path, 'r', encoding='utf-8', errors='replace') as f:
-    lines = f.readlines()
-result = []
-in_conflict = False
-keep = True
-for line in lines:
-    if line.startswith('<<<<<<<'):
-        in_conflict = True; keep = True; continue
-    elif line.startswith('=======') and in_conflict:
-        keep = False; continue
-    elif line.startswith('>>>>>>>') and in_conflict:
-        in_conflict = False; keep = True; continue
-    if not (in_conflict and not keep):
-        result.append(line)
-with open(path, 'w', encoding='utf-8') as f:
-    f.writelines(result)
-print(f"  Conflitos removidos em {path}")
-PYEOF
-    fi
-}
-
-# ── Verifica sintaxe Python ────────────────────────────────────
-check_syntax() {
-    local file="$1"
-    remove_git_conflicts "$file"
-    if ! $PYTHON_CMD -m py_compile "$file" 2>/dev/null; then
-        $PYTHON_CMD -m py_compile "$file"
-        error "Erro de sintaxe em $file"
-    fi
-}
-
+# ── Clone / force-sync from GitHub ─────────────────────────────────────────────
 copy_files() {
-    # Sempre forca sincronizacao com GitHub — nunca usa arquivos locais
-    # Isso garante que push --force no GitHub seja refletido na instalacao
-
-    info "Sincronizando com repositorio GitHub..."
-
-    if [ -d "$INSTALL_DIR/.git" ]; then
-        banner "Repositorio local detectado — forcando alinhamento com GitHub..."
-        cd "$INSTALL_DIR" || true
+    info "Sincronizando código com GitHub..."
+    if [ -d "${INSTALL_DIR}/.git" ]; then
+        cd "$INSTALL_DIR"
         git remote set-url origin "$REPO_URL" 2>/dev/null || \
             git remote add origin "$REPO_URL" 2>/dev/null || true
-        # Busca tudo incluindo rewrites causados por push --force
-        git fetch --all --prune 2>/dev/null || git fetch origin 2>/dev/null || true
-        # Reset hard: descarta QUALQUER alteracao local e alinha com o GitHub
+        git fetch --all --prune 2>/dev/null || true
         git reset --hard origin/main 2>/dev/null || \
             git reset --hard origin/master 2>/dev/null || \
             git reset --hard FETCH_HEAD 2>/dev/null || true
-        # Remove arquivos nao rastreados (pyc, caches etc)
         git clean -fd 2>/dev/null || true
-        log "Codigo forcado para versao atual do GitHub"
-        _apply_hotfixes
-        return 0
+        log "Código atualizado do GitHub"
+    else
+        [ -d "$INSTALL_DIR" ] && rm -rf "$INSTALL_DIR"
+        info "Clonando repositório..."
+        git clone --depth=1 "$REPO_URL" "$INSTALL_DIR" 2>/dev/null || \
+            git clone "$REPO_URL" "$INSTALL_DIR" 2>/dev/null || \
+            error "Falha ao clonar. Verifique a conexão com a internet."
+        log "Repositório clonado"
     fi
-
-    # Diretorio existe mas sem .git — remove e clona limpo
-    if [ -d "$INSTALL_DIR" ]; then
-        warn "Diretorio $INSTALL_DIR sem git. Removendo para clonar limpo..."
-        rm -rf "$INSTALL_DIR"
-    fi
-
-    info "Clonando: $REPO_URL"
-    if git clone --depth=1 "$REPO_URL" "$INSTALL_DIR" 2>/dev/null; then
-        log "Clone concluido com sucesso"
-        _apply_hotfixes
-        return 0
-    fi
-
-    warn "Clone com --depth=1 falhou. Tentando clone completo..."
-    if git clone "$REPO_URL" "$INSTALL_DIR" 2>/dev/null; then
-        log "Clone completo concluido"
-        _apply_hotfixes
-        return 0
-    fi
-
-    error "Nao foi possivel clonar: $REPO_URL\nVerifique a conexao com a internet e tente novamente."
 }
 
-
-# ── Corrige bugs conhecidos no app.py após cópia/clone ─────────
-_apply_hotfixes() {
-    local f="$INSTALL_DIR/app.py"
-    [ -f "$f" ] || return
-
-    # Fix 1: PORT vazio causa crash — usar fallback com "or"
-    sed -i 's/int(os\.environ\.get(.PORT., [0-9]\+))/int(os.environ.get("PORT") or 2083)/g' "$f" 2>/dev/null || true
-
-    # Fix 2: payer.email com domínio local é rejeitado pelo Mercado Pago
-    # Garante que _safe_user é definido ANTES do dict pix_payload
-    python3 - "$f" << 'PYEOF'
-import sys, re
-
-path = sys.argv[1]
-with open(path) as fh:
-    src = fh.read()
-
-# Substituir email de dominio local por dominio valido
-src = re.sub(
-    r"""f["']\{[^}]*username[^}]*\}@renovacao\.local["']""",
-    'f"{_safe_user}@email.com"',
-    src
-)
-
-# Garantir que _safe_user esta definido antes de pix_payload
-if '_safe_user' not in src:
-    src = src.replace(
-        'pix_payload = {',
-        "_safe_user = ''.join(c for c in u['username'] if c.isalnum() or c in '-_') or 'pagador'\n        pix_payload = {",
-        1
-    )
-
-with open(path, 'w') as fh:
-    fh.write(src)
-PYEOF
-
-    python3 -m py_compile "$f" 2>/dev/null && log "Hotfixes aplicados com sucesso" || warn "Verifique app.py manualmente"
-}
-
-# ── Instala painel ─────────────────────────────────────────────
-install_panel() {
-    banner "Instalando Painel Master..."
-    copy_files
-
-    cd "$INSTALL_DIR" || error "Nao foi possivel entrar em $INSTALL_DIR"
-
-    for f in app.py db.py requirements.txt; do
-        [ -f "$f" ] || error "Arquivo essencial ausente: $f"
-    done
-    [ -d "templates" ]            || error "Pasta templates/ ausente"
-    [ -f "templates/login.html" ] || error "templates/login.html ausente"
-    log "Estrutura de arquivos OK"
-
-    info "Verificando sintaxe dos arquivos Python..."
-    for pyfile in app.py db.py server_comm.py backup.py; do
-        [ -f "$pyfile" ] && check_syntax "$pyfile"
-    done
-    log "Sintaxe Python OK"
-
-    # Restaura banco
-    if [ -n "$DB_BACKUP" ] && [ -f "$DB_BACKUP" ]; then
-        cp "$DB_BACKUP" "$INSTALL_DIR/painel.db"
-        log "Banco de dados restaurado"
-    fi
-
-    info "Criando ambiente virtual com: $PYTHON_CMD"
+# ── Python virtualenv + deps ───────────────────────────────────────────────────
+install_python_deps() {
+    cd "$INSTALL_DIR"
+    info "Criando virtualenv..."
     $PYTHON_CMD -m venv venv 2>/dev/null || error "Falha ao criar virtualenv"
-
-    # Valida que o venv tem sqlite3 também
-    if ! venv/bin/python -c "import sqlite3" 2>/dev/null; then
-        error "O virtualenv tambem nao tem sqlite3.
-O Python $PYTHON_CMD foi compilado sem suporte a SQLite.
-
-Solucao: instale python3.8 do sistema:
-  apt-get install python3.8 python3.8-venv libsqlite3-dev
-E reexecute o instalador."
-    fi
-    log "sqlite3 no virtualenv: OK"
 
     source venv/bin/activate
     pip install --upgrade pip setuptools wheel -q 2>/dev/null
-    info "Instalando dependencias Python..."
-    if pip install -r requirements.txt -q 2>/dev/null; then
-        log "Dependencias instaladas"
-    else
-        warn "Instalacao em lote falhou. Instalando pacote a pacote..."
+
+    info "Instalando pacotes Python..."
+    if ! pip install -r requirements.txt -q 2>/dev/null; then
+        warn "Instalação em lote falhou — instalando um por um..."
         while IFS= read -r pkg; do
             [[ -z "$pkg" || "$pkg" =~ ^# ]] && continue
-            pkg_name="${pkg%%[><=!]*}"
-            pip install "$pkg" -q 2>/dev/null \
-                && info "  OK: $pkg_name" \
-                || warn "  FALHA: $pkg_name"
+            pip install "${pkg}" -q 2>/dev/null && \
+                info "  OK: ${pkg%%[><=!]*}" || \
+                warn "  FALHOU: ${pkg%%[><=!]*}"
         done < requirements.txt
     fi
     deactivate
-    log "Ambiente Python pronto: $INSTALL_DIR/venv"
+    log "Pacotes Python instalados"
 }
 
-# ── Serviço systemd ────────────────────────────────────────────
-configure_service() {
-    banner "Configurando servico systemd..."
-    kill_port "$PANEL_PORT"
-    sleep 1
+# ── Configure nginx ─────────────────────────────────────────────────────────────
+configure_nginx() {
+    local domain="$1"
 
-    SECRET_KEY=$(openssl rand -hex 32)
+    # Shared proxy snippet
+    mkdir -p /etc/nginx/snippets /var/www/letsencrypt/.well-known/acme-challenge
 
-    cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
-[Unit]
-Description=Painel Master SSH Manager
-After=network.target
-Wants=network-online.target
+    cat > /etc/nginx/snippets/proxy_params.conf << 'SNIPPET'
+proxy_http_version 1.1;
+proxy_set_header   Host              $http_host;
+proxy_set_header   X-Real-IP         $remote_addr;
+proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+proxy_set_header   X-Forwarded-Proto $scheme;
+proxy_set_header   Upgrade           $http_upgrade;
+proxy_set_header   Connection        "upgrade";
+proxy_read_timeout 120s;
+client_max_body_size 110M;
+SNIPPET
 
-[Service]
-Type=simple
-User=root
-WorkingDirectory=${INSTALL_DIR}
-Environment="PORT=${PANEL_PORT:-2083}"
-Environment="SECRET_KEY=${SECRET_KEY}"
-ExecStart=${INSTALL_DIR}/venv/bin/python ${INSTALL_DIR}/app.py
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
+    # Remove Ubuntu default site that conflicts on port 80
+    rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
 
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    systemctl daemon-reload
-    systemctl enable "$SERVICE_NAME" 2>/dev/null
-    systemctl start  "$SERVICE_NAME"
-
-    info "Aguardando servico inicializar..."
-    for i in $(seq 1 10); do
-        sleep 1
-        if systemctl is-active --quiet "$SERVICE_NAME"; then
-            log "Servico ativo apos ${i}s"
-            return 0
-        fi
-        printf "."
-    done
-    echo ""
-    warn "Servico nao iniciou. Ultimos logs:"
-    journalctl -u "$SERVICE_NAME" -n 30 --no-pager
-}
-
-# ── Firewall ───────────────────────────────────────────────────
-open_firewall() {
-    banner "Liberando portas..."
-    local ports=("${PANEL_PORT}" 80 443 2053 2083 2087 2096 8443)
-    if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
-        for p in "${ports[@]}"; do ufw allow "${p}/tcp" 2>/dev/null || true; done
-        log "UFW: portas liberadas"
-    fi
-    if command -v firewall-cmd &>/dev/null && firewall-cmd --state 2>/dev/null | grep -q running; then
-        for p in "${ports[@]}"; do firewall-cmd --permanent --add-port="${p}/tcp" 2>/dev/null || true; done
-        firewall-cmd --permanent --add-service=http  2>/dev/null || true
-        firewall-cmd --permanent --add-service=https 2>/dev/null || true
-        firewall-cmd --reload 2>/dev/null || true
-    fi
-    for p in "${ports[@]}"; do
-        iptables -I INPUT -p tcp --dport "${p}" -j ACCEPT 2>/dev/null || true
-    done
-}
-
-# ── Nginx base: sempre instala com suporte a IP direto + Cloudflare ──────────
-setup_nginx_base() {
-    banner "Instalando nginx..."
-    if command -v apt-get &>/dev/null; then
-        apt-get install -y nginx 2>/dev/null || true
-    elif command -v dnf &>/dev/null; then
-        dnf install -y nginx 2>/dev/null || true
+    # Self-signed cert for HTTPS catch-all (port 443 without domain)
+    if [ ! -f /etc/nginx/ssl/pmg-selfsigned.crt ]; then
+        mkdir -p /etc/nginx/ssl
+        openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+            -keyout /etc/nginx/ssl/pmg-selfsigned.key \
+            -out    /etc/nginx/ssl/pmg-selfsigned.crt \
+            -subj "/CN=painel-master/O=PMG/C=BR" 2>/dev/null
     fi
 
-    # Garante que o módulo real_ip do nginx está ativo
-    local cf_ips="
-    # Cloudflare IPv4
+    # Main nginx config
+    # HTTP port 80: catch-all + optional domain name
+    # HTTPS port 443: catch-all with self-signed (Cloudflare Full SSL / acesso direto)
+    local server_name="_"
+    [ -n "$domain" ] && server_name="${domain} www.${domain} _"
+
+    cat > /etc/nginx/sites-available/painel-master << NGCONF
+# Painel Master — gerado automaticamente
+# Compatível com Cloudflare Proxy (nuvem laranja):
+#   Cloudflare recebe HTTPS e repassa HTTP para este servidor.
+# Compatível com acesso direto por IP (HTTP e HTTPS com cert autoassinado).
+
+# HTTP — porta 80
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name ${server_name};
+
+    # Cloudflare real IP passthrough
     set_real_ip_from 103.21.244.0/22;
     set_real_ip_from 103.22.200.0/22;
     set_real_ip_from 103.31.4.0/22;
@@ -498,212 +224,248 @@ setup_nginx_base() {
     set_real_ip_from 190.93.240.0/20;
     set_real_ip_from 197.234.240.0/22;
     set_real_ip_from 198.41.128.0/17;
-    # Cloudflare IPv6
-    set_real_ip_from 2400:cb00::/32;
-    set_real_ip_from 2606:4700::/32;
-    set_real_ip_from 2803:f800::/32;
-    set_real_ip_from 2405:b500::/32;
-    set_real_ip_from 2405:8100::/32;
-    set_real_ip_from 2a06:98c0::/29;
-    set_real_ip_from 2c0f:f248::/32;
-    real_ip_header CF-Connecting-IP;"
+    real_ip_header CF-Connecting-IP;
 
-    # Snippet de proxy_params reutilizável
-    cat > /etc/nginx/snippets/proxy_params.conf << 'SNIPPET'
-proxy_http_version 1.1;
-proxy_set_header   Host              $http_host;
-proxy_set_header   X-Real-IP         $remote_addr;
-proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
-proxy_set_header   X-Forwarded-Proto $scheme;
-proxy_set_header   CF-Connecting-IP  $http_cf_connecting_ip;
-proxy_read_timeout 120s;
-client_max_body_size 110M;
-SNIPPET
-
-    # ── Bloco catch-all porta 80 (IP direto + Cloudflare HTTP Flexible) ──────
-    cat > /etc/nginx/sites-available/painel-ip << IPCNF
-server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    server_name _;
-${cf_ips}
+    # ACME challenge for certbot (used when requesting Let's Encrypt)
+    location /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+    }
 
     location / {
-        proxy_pass http://127.0.0.1:${PANEL_PORT:-2083};
-        include /etc/nginx/snippets/proxy_params.conf;
+        proxy_pass         http://127.0.0.1:${PANEL_PORT};
+        include            /etc/nginx/snippets/proxy_params.conf;
     }
 }
-IPCNF
 
-    # ── Bloco catch-all porta 443 com cert autoassinado ───────────────────────
-    # Necessário para Cloudflare Full SSL sem domínio configurado
-    if [ ! -f /etc/nginx/ssl/painel-selfsigned.crt ]; then
-        mkdir -p /etc/nginx/ssl
-        openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-            -keyout /etc/nginx/ssl/painel-selfsigned.key \
-            -out    /etc/nginx/ssl/painel-selfsigned.crt \
-            -subj "/CN=painel-master/O=PainelMaster/C=BR" 2>/dev/null
-    fi
-
-    cat > /etc/nginx/sites-available/painel-ip-ssl << SSLCNF
+# HTTPS — porta 443 (cert autoassinado; troca para Let's Encrypt com pmgctl ssl)
 server {
     listen 443 ssl default_server;
     listen [::]:443 ssl default_server;
-    server_name _;
-    ssl_certificate     /etc/nginx/ssl/painel-selfsigned.crt;
-    ssl_certificate_key /etc/nginx/ssl/painel-selfsigned.key;
+    server_name ${server_name};
+
+    ssl_certificate     /etc/nginx/ssl/pmg-selfsigned.crt;
+    ssl_certificate_key /etc/nginx/ssl/pmg-selfsigned.key;
     ssl_protocols       TLSv1.2 TLSv1.3;
-${cf_ips}
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1d;
+
+    set_real_ip_from 103.21.244.0/22;
+    set_real_ip_from 104.16.0.0/13;
+    set_real_ip_from 104.24.0.0/14;
+    set_real_ip_from 162.158.0.0/15;
+    set_real_ip_from 172.64.0.0/13;
+    set_real_ip_from 173.245.48.0/20;
+    real_ip_header CF-Connecting-IP;
 
     location / {
-        proxy_pass         http://127.0.0.1:${PANEL_PORT:-2083};
+        proxy_pass         http://127.0.0.1:${PANEL_PORT};
         include            /etc/nginx/snippets/proxy_params.conf;
         proxy_set_header   X-Forwarded-Proto https;
     }
 }
-SSLCNF
+NGCONF
 
-    # Ativa os blocos base e remove o default do nginx
-    ln -sf /etc/nginx/sites-available/painel-ip     /etc/nginx/sites-enabled/painel-ip     2>/dev/null || true
-    ln -sf /etc/nginx/sites-available/painel-ip-ssl /etc/nginx/sites-enabled/painel-ip-ssl 2>/dev/null || true
-    rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+    ln -sf /etc/nginx/sites-available/painel-master \
+           /etc/nginx/sites-enabled/painel-master 2>/dev/null || true
 
-    nginx -t && systemctl enable nginx && systemctl reload nginx
-    log "nginx configurado: HTTP porta 80, HTTPS porta 443 (self-signed)"
-}
-
-# ── SSL com domínio (nginx + certbot Let's Encrypt) ───────────────────────────
-setup_ssl() {
-    setup_nginx_base  # Garante nginx base + IP direto sempre funcionando
-
-    banner "Configuração SSL/HTTPS com domínio"
-    echo ""
-    echo -e "  ${YELLOW}Modos suportados:${NC}"
-    echo -e "  1) ${BOLD}IP direto${NC}:          http://IP:${PANEL_PORT}  ou  http://IP  (porta 80)"
-    echo -e "  2) ${BOLD}Cloudflare HTTP${NC}:    Flexible SSL — origem HTTP, Cloudflare entrega HTTPS"
-    echo -e "  3) ${BOLD}Cloudflare HTTPS${NC}:   Full SSL — já funciona com cert autoassinado (porta 443)"
-    echo -e "  4) ${BOLD}Domínio + Let's Encrypt${NC}: HTTPS real com certbot (requer DNS apontando para este IP)"
-    echo ""
-    read -rp "  Deseja configurar domínio + Let's Encrypt agora? [s/N]: " DO_SSL
-    [[ "$DO_SSL" =~ ^[Ss]$ ]] || {
-        warn "Let's Encrypt pulado. Modos 1, 2 e 3 já estão funcionando."
-        return
-    }
-
-    read -rp "  Digite o domínio (ex: painel.seusite.com.br): " DOMAIN
-    [[ -z "$DOMAIN" ]] && { warn "Domínio em branco — certbot cancelado."; return; }
-
-    read -rp "  E-mail para notificações do Let's Encrypt: " LE_EMAIL
-    [[ -z "$LE_EMAIL" ]] && { warn "E-mail em branco — certbot cancelado."; return; }
-
-    # Instala certbot via snap
-    if command -v apt-get &>/dev/null; then
-        apt-get remove -y certbot python3-certbot-nginx 2>/dev/null || true
-        if ! command -v snap &>/dev/null; then
-            apt-get install -y snapd 2>/dev/null || true
-        fi
-        snap install --classic certbot 2>/dev/null \
-            || pip3 install certbot certbot-nginx --break-system-packages 2>/dev/null || true
-        ln -sf /snap/bin/certbot /usr/bin/certbot 2>/dev/null || true
-    elif command -v dnf &>/dev/null; then
-        dnf install -y certbot python3-certbot-nginx 2>/dev/null || true
-    fi
-
-    local cf_ips="
-    set_real_ip_from 103.21.244.0/22; set_real_ip_from 103.22.200.0/22;
-    set_real_ip_from 104.16.0.0/13;   set_real_ip_from 104.24.0.0/14;
-    set_real_ip_from 162.158.0.0/15;  set_real_ip_from 172.64.0.0/13;
-    set_real_ip_from 173.245.48.0/20; set_real_ip_from 188.114.96.0/20;
-    set_real_ip_from 197.234.240.0/22; set_real_ip_from 198.41.128.0/17;
-    real_ip_header CF-Connecting-IP;"
-
-    # Config nginx para o domínio (Let's Encrypt vai adicionar bloco 443)
-    cat > "/etc/nginx/sites-available/${DOMAIN}" << DOMCNF
-server {
-    listen 80;
-    listen [::]:80;
-    server_name ${DOMAIN};
-${cf_ips}
-
-    location / {
-        proxy_pass http://127.0.0.1:${PANEL_PORT:-2083};
-        include /etc/nginx/snippets/proxy_params.conf;
-    }
-}
-DOMCNF
-
-    ln -sf "/etc/nginx/sites-available/${DOMAIN}" "/etc/nginx/sites-enabled/${DOMAIN}" 2>/dev/null || true
-    nginx -t && systemctl reload nginx
-
-    certbot --nginx -d "${DOMAIN}" --non-interactive --agree-tos -m "${LE_EMAIL}" && {
-        # Porta 2083 (Cloudflare HTTPS alternativa)
-        cat >> "/etc/nginx/sites-available/${DOMAIN}" << EXTRA2083
-
-server {
-    listen 2083 ssl;
-    listen [::]:2083 ssl;
-    server_name ${DOMAIN} _;
-    ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
-    ssl_protocols       TLSv1.2 TLSv1.3;
-${cf_ips}
-    location / {
-        proxy_pass         http://127.0.0.1:${PANEL_PORT:-2083};
-        include            /etc/nginx/snippets/proxy_params.conf;
-        proxy_set_header   X-Forwarded-Proto https;
-    }
-}
-EXTRA2083
-        nginx -t && systemctl reload nginx
-        log "Let's Encrypt OK: https://${DOMAIN}"
-        log "Porta 2083 também disponível"
-        SSL_DOMAIN="${DOMAIN}"
-    } || warn "Certbot falhou. DNS ${DOMAIN} aponta para este IP? Verifique e tente: certbot --nginx -d ${DOMAIN}"
-}
-
-
-# ── Resultado ──────────────────────────────────────────────────
-print_info() {
-    SERVER_IP=$(curl -s --max-time 5 https://ipv4.icanhazip.com 2>/dev/null \
-        || curl -s --max-time 5 https://api.ipify.org 2>/dev/null \
-        || hostname -I | awk '{print $1}')
-
-    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-        ST="${GREEN}✔ Rodando${NC}"
+    systemctl enable nginx 2>/dev/null || true
+    if nginx -t 2>/dev/null; then
+        systemctl is-active --quiet nginx 2>/dev/null && \
+            systemctl reload nginx || systemctl start nginx
+        log "nginx configurado e rodando"
     else
-        ST="${RED}✗ Erro — execute: journalctl -u $SERVICE_NAME -n 50${NC}"
+        warn "nginx -t falhou:"
+        nginx -t 2>&1
+    fi
+}
+
+# ── Systemd service ─────────────────────────────────────────────────────────────
+configure_service() {
+    local secret_key
+    secret_key=$(openssl rand -hex 32)
+
+    cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
+[Unit]
+Description=Painel Master
+# Wait for full network stack before starting
+After=network.target network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=${INSTALL_DIR}
+Environment="PORT=${PANEL_PORT}"
+Environment="SECRET_KEY=${secret_key}"
+
+# Flush iptables rules on start (removes blocks from previous session)
+ExecStartPre=/sbin/iptables -F
+ExecStartPre=/sbin/iptables -t nat -F
+ExecStartPre=/sbin/iptables -t mangle -F
+
+ExecStart=${INSTALL_DIR}/venv/bin/python ${INSTALL_DIR}/app.py
+Restart=always
+RestartSec=5
+TimeoutStartSec=30
+# Prevent restart storm after 5 failures in 60s
+StartLimitIntervalSec=60
+StartLimitBurst=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+# Ensures service starts automatically on every boot
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable "$SERVICE_NAME"
+    log "Serviço configurado (auto-start no boot)"
+}
+
+# ── Start service and show logs ─────────────────────────────────────────────────
+start_service() {
+    info "Iniciando serviço..."
+    systemctl start "$SERVICE_NAME"
+
+    local started=0
+    for i in $(seq 1 20); do
+        sleep 1
+        if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+            log "Serviço ativo após ${i}s"
+            started=1
+            break
+        fi
+        printf "."
+    done
+    echo ""
+
+    echo ""
+    banner "── Logs de inicialização ──────────────────────────────────"
+    journalctl -u "$SERVICE_NAME" -n 30 --no-pager 2>/dev/null || true
+    echo ""
+
+    if [ "$started" -eq 0 ]; then
+        warn "Serviço não respondeu em 20s."
+        warn "Verifique: journalctl -u ${SERVICE_NAME} -f"
+    fi
+}
+
+# ── Firewall ────────────────────────────────────────────────────────────────────
+open_firewall() {
+    # Flush first, then allow the needed ports
+    iptables -F 2>/dev/null || true
+    iptables -t nat -F 2>/dev/null || true
+
+    for port in 80 443 "${PANEL_PORT}"; do
+        iptables -I INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null || true
+    done
+
+    command -v ufw &>/dev/null && {
+        ufw allow 80/tcp   2>/dev/null || true
+        ufw allow 443/tcp  2>/dev/null || true
+        ufw allow "${PANEL_PORT}/tcp" 2>/dev/null || true
+    }
+    command -v firewall-cmd &>/dev/null && {
+        firewall-cmd --permanent --add-port=80/tcp        2>/dev/null || true
+        firewall-cmd --permanent --add-port=443/tcp       2>/dev/null || true
+        firewall-cmd --permanent --add-port=${PANEL_PORT}/tcp 2>/dev/null || true
+        firewall-cmd --reload 2>/dev/null || true
+    }
+    log "Firewall configurado"
+}
+
+# ── nginx watchdog (restart nginx + painel if down after reboot) ───────────────
+setup_watchdog() {
+    cat > /etc/systemd/system/pmg-watchdog.service << 'WD'
+[Unit]
+Description=Painel Master — watchdog (reinicia nginx e painel se caírem)
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c '\
+    systemctl is-active nginx      2>/dev/null || systemctl start nginx      2>/dev/null; \
+    systemctl is-active painel-master 2>/dev/null || systemctl start painel-master 2>/dev/null; \
+    iptables -F 2>/dev/null || true'
+WD
+
+    cat > /etc/systemd/system/pmg-watchdog.timer << 'WDT'
+[Unit]
+Description=Painel Master — watchdog timer (a cada 5 minutos)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=pmg-watchdog.service
+
+[Install]
+WantedBy=timers.target
+WDT
+
+    systemctl daemon-reload
+    systemctl enable --now pmg-watchdog.timer 2>/dev/null || true
+    log "Watchdog ativo (verifica a cada 5 min + 2min após boot)"
+}
+
+# ── Print final info ────────────────────────────────────────────────────────────
+print_info() {
+    local domain="$1" admin_pass="$2"
+    local SERVER_IP
+    SERVER_IP=$(curl -s --max-time 5 https://ipv4.icanhazip.com 2>/dev/null || \
+                curl -s --max-time 5 https://api.ipify.org   2>/dev/null || \
+                hostname -I 2>/dev/null | awk '{print $1}')
+
+    local svc_status
+    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        svc_status="${GREEN}✔ Rodando${NC}"
+    else
+        svc_status="${RED}✗ Erro — veja os logs acima${NC}"
+    fi
+
+    local nginx_status
+    if systemctl is-active --quiet nginx 2>/dev/null; then
+        nginx_status="${GREEN}✔ Rodando${NC}"
+    else
+        nginx_status="${RED}✗ Parado${NC}"
     fi
 
     echo ""
-    echo -e "${CYAN}╔══════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║       PAINEL MASTER — INSTALACAO CONCLUIDA       ║${NC}"
-    echo -e "${CYAN}╚══════════════════════════════════════════════════╝${NC}"
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║          PAINEL MASTER — INSTALAÇÃO CONCLUÍDA        ║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo -e "  Status:        $(echo -e $ST)"
+    echo -e "  Serviço:   $(echo -e $svc_status)"
+    echo -e "  nginx:     $(echo -e $nginx_status)"
     echo ""
-    echo -e "  ${BOLD}— Modos de acesso disponíveis —${NC}"
-    echo -e "  IP direto:          ${BOLD}http://${SERVER_IP}:${PANEL_PORT}${NC}"
-    echo -e "  nginx HTTP (80):    ${BOLD}http://${SERVER_IP}${NC}"
-    echo -e "  nginx HTTPS (443):  ${BOLD}https://${SERVER_IP}${NC}  ${YELLOW}(cert autoassinado)${NC}"
-    echo -e "  Cloudflare HTTP:    ative o proxy (laranja) — origin HTTP, modo Flexible"
-    echo -e "  Cloudflare HTTPS:   ative o proxy (laranja) — modo Full SSL (cert autoassinado OK)"
-    if [ -n "${SSL_DOMAIN:-}" ]; then
-        echo -e "  Domínio HTTPS:      ${BOLD}https://${SSL_DOMAIN}${NC}"
-        echo -e "  Porta 2083 HTTPS:   ${BOLD}https://${SSL_DOMAIN}:2083${NC}"
-        echo -e "  Webhook Telegram:   ${BOLD}https://${SSL_DOMAIN}/telegram/webhook${NC}"
+    echo -e "  ${BOLD}Modos de acesso:${NC}"
+    echo -e "    Direto (IP + porta): ${BOLD}http://${SERVER_IP}:${PANEL_PORT}${NC}"
+    echo -e "    nginx  HTTP:         ${BOLD}http://${SERVER_IP}${NC}"
+    echo -e "    nginx  HTTPS:        ${BOLD}https://${SERVER_IP}${NC}  (cert autoassinado)"
+    [ -n "$domain" ] && {
+        echo -e "    Domínio:             ${BOLD}https://${domain}${NC}  (via Cloudflare)"
+    }
+    echo ""
+    echo -e "  Login padrão:  ${BOLD}admin / ${admin_pass}${NC}"
+    echo -e "  Diretório:     ${INSTALL_DIR}"
+    echo ""
+    if [ -n "$domain" ]; then
+        echo -e "  ${BOLD}Para o domínio funcionar:${NC}"
+        echo -e "  ┌──────────────────────────────────────────────────────────┐"
+        echo -e "  │  1) No DNS: crie registro A  →  ${domain} = ${SERVER_IP}"
+        echo -e "  │  2) Cloudflare: ative o proxy (nuvem 🟠 laranja)         │"
+        echo -e "  │     A Cloudflare entrega HTTPS automaticamente           │"
+        echo -e "  │  3) Aguarde propagação DNS (geralmente < 5 min)          │"
+        echo -e "  └──────────────────────────────────────────────────────────┘"
+        echo ""
     fi
-    echo ""
-    echo -e "  Login:         admin / admin123"
-    echo -e "  Python usado:  ${PYTHON_CMD}"
-    echo -e "  Diretorio:     ${INSTALL_DIR}"
-    echo ""
-    echo -e "  ${YELLOW}⚠  Troque a senha do admin após o primeiro login!${NC}"
-    echo ""
-    echo -e "  Comandos úteis:"
-    echo -e "    journalctl -u ${SERVICE_NAME} -f          # logs em tempo real"
-    echo -e "    journalctl -u ${SERVICE_NAME} -n 50       # últimas 50 linhas"
-    echo -e "    systemctl restart ${SERVICE_NAME}         # reiniciar painel"
-    echo -e "    nginx -t && systemctl reload nginx        # recarregar nginx"
+    echo -e "  ${YELLOW}Comandos úteis:${NC}"
+    echo -e "    journalctl -u ${SERVICE_NAME} -f          # logs ao vivo"
+    echo -e "    journalctl -u ${SERVICE_NAME} -n 50 --no-pager"
+    echo -e "    systemctl restart ${SERVICE_NAME}         # reiniciar"
+    echo -e "    systemctl status  ${SERVICE_NAME}         # status"
+    echo -e "    nginx -t && systemctl reload nginx         # recarregar nginx"
+    echo -e "    bash install.sh update                     # atualizar do GitHub"
     echo ""
 }
 
@@ -716,61 +478,89 @@ banner "║      PAINEL MASTER — INSTALADOR      ║"
 banner "╚══════════════════════════════════════╝"
 echo ""
 
-SSL_DOMAIN=""
-MODE="${1:-install}"   # install (default) | update
-
 check_root
-detect_arch
 detect_os
 
+MODE="${1:-install}"
+
+# ── Update mode ────────────────────────────────────────────────────────────────
 if [ "$MODE" = "update" ]; then
-    # ── Modo atualização: só sincroniza código e reinicia, sem apagar banco ──
     banner "Modo ATUALIZAÇÃO — sincronizando código do GitHub..."
     check_python
-    free_ports
 
-    # Salva banco antes de qualquer operação
-    if [ -f "$INSTALL_DIR/painel.db" ]; then
-        DB_BACKUP="/tmp/painel_backup_$(date +%s).db"
-        cp "$INSTALL_DIR/painel.db" "$DB_BACKUP"
-        warn "Banco salvo em: $DB_BACKUP"
-    fi
+    # Backup db
+    [ -f "${INSTALL_DIR}/painel.db" ] && \
+        cp "${INSTALL_DIR}/painel.db" "/tmp/pmg_backup_$(date +%s).db" && \
+        info "Banco salvo em /tmp/"
 
     systemctl stop "$SERVICE_NAME" 2>/dev/null || true
-
-    # Força alinhamento com GitHub (usa a mesma lógica de copy_files)
     copy_files
 
-    # Restaura banco
-    if [ -n "$DB_BACKUP" ] && [ -f "$DB_BACKUP" ]; then
-        cp "$DB_BACKUP" "$INSTALL_DIR/painel.db"
-        log "Banco restaurado"
-    fi
+    # Restore db if it was wiped by git clean
+    local_db="/tmp/pmg_backup_$(ls -t /tmp/pmg_backup_*.db 2>/dev/null | head -1 | xargs basename 2>/dev/null)"
+    [ -f "$local_db" ] && [ ! -f "${INSTALL_DIR}/painel.db" ] && \
+        cp "$local_db" "${INSTALL_DIR}/painel.db"
 
-    # Atualiza dependências Python sem recriar o venv
-    if [ -f "$INSTALL_DIR/venv/bin/pip" ]; then
-        info "Atualizando dependencias Python..."
-        "$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt" -q 2>/dev/null || true
-    fi
+    "${INSTALL_DIR}/venv/bin/pip" install -r "${INSTALL_DIR}/requirements.txt" -q 2>/dev/null || true
 
-    systemctl daemon-reload
     systemctl start "$SERVICE_NAME"
     sleep 3
-    if systemctl is-active --quiet "$SERVICE_NAME"; then
-        log "Painel atualizado e rodando!"
-    else
-        warn "Verifique: journalctl -u $SERVICE_NAME -n 50"
-    fi
-    print_info
-else
-    # ── Modo instalação completa ──────────────────────────────────────────
-    uninstall_existing
-    free_ports
-    install_system_deps
-    check_python
-    install_panel
-    configure_service
-    open_firewall
-    setup_ssl
-    print_info
+    echo ""
+    banner "── Logs pós-atualização ──────────────────────────────────"
+    journalctl -u "$SERVICE_NAME" -n 20 --no-pager 2>/dev/null || true
+    echo ""
+    systemctl is-active --quiet "$SERVICE_NAME" && \
+        log "Atualizado e rodando!" || \
+        warn "Verifique: journalctl -u ${SERVICE_NAME} -f"
+    exit 0
 fi
+
+# ── Full install ───────────────────────────────────────────────────────────────
+echo ""
+read -rp "  Domínio para o painel (ex: painel.seusite.com.br) [Enter para pular]: " DOMAIN
+DOMAIN="${DOMAIN// /}"
+
+read -rp "  Senha do admin [padrão: admin123]: " ADMIN_PASS
+ADMIN_PASS="${ADMIN_PASS:-admin123}"
+
+echo ""
+
+install_system_deps
+check_python
+stop_conflicting_webservers
+free_panel_port
+uninstall_existing
+copy_files
+install_python_deps
+
+# Set initial admin password
+info "Configurando senha admin..."
+PW_HASH=$("${INSTALL_DIR}/venv/bin/python" -c \
+    "import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" \
+    "$ADMIN_PASS" 2>/dev/null || echo "")
+
+if [ -n "$PW_HASH" ]; then
+    "${INSTALL_DIR}/venv/bin/python" << PYINIT 2>/dev/null
+import sys
+sys.path.insert(0, '${INSTALL_DIR}')
+import db
+db.init_db()
+db.migrate_schema()
+try: db.migrate_schema_v2()
+except: pass
+try: db.migrate_schema_v3()
+except: pass
+conn = db.get_db()
+conn.execute("UPDATE panel_users SET password_hash=? WHERE username='admin'", ('${PW_HASH}',))
+conn.commit()
+conn.close()
+print("Admin configurado")
+PYINIT
+fi
+
+configure_service
+configure_nginx "$DOMAIN"
+open_firewall
+setup_watchdog
+start_service
+print_info "$DOMAIN" "$ADMIN_PASS"
