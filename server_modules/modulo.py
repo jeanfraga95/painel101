@@ -42,7 +42,7 @@ class MyRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(('Erro interno: ' + str(e)).encode())
 
 host = '0.0.0.0'
-port = 6969
+port = 7072
 server = HTTPServer((host, port), MyRequestHandler)
 print('Servidor modulo iniciado em {}:{}'.format(host, port))
 server.serve_forever()
