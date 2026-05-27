@@ -36,7 +36,7 @@ app = Flask(
     static_folder=os.path.join(BASE_DIR, 'static'),
 )
 # Support Cloudflare / reverse-proxy: trust X-Forwarded-Proto, X-Forwarded-For
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100 MB for restore
@@ -47,10 +47,15 @@ app.config['SESSION_COOKIE_HTTPONLY'] = True
 
 TZ = pytz.timezone('America/Sao_Paulo')
 
-db.init_db()
-db.migrate_schema()
-db.migrate_schema_v2()
-db.migrate_schema_v3()
+try:
+    db.init_db()
+    db.migrate_schema()
+    db.migrate_schema_v2()
+    db.migrate_schema_v3()
+except Exception as _startup_err:
+    import traceback as _tb
+    print(f"[PMG STARTUP ERROR] DB init failed: {_startup_err}", flush=True)
+    _tb.print_exc()
 
 # ---------------------------------------------------------------------------
 # Helpers / decorators
@@ -552,45 +557,92 @@ def update_user(user_id):
 def suspend_user(user_id):
     current_user = get_current_user()
     u = db.get_ssh_user(user_id)
-    
     if not u:
         return jsonify(success=False, message='Usuário não encontrado')
 
-    # Verificar permissões
     if current_user['role'] != 'admin':
         tree_ids = [current_user['id']] + [s['id'] for s in db.get_all_resellers_under(current_user['id'])]
         if u['owner_id'] not in tree_ids:
             return jsonify(success=False, message='Sem permissão')
 
     new_status = 'suspended' if u['status'] == 'active' else 'active'
-    
-    # Tentar executar ação no servidor SSH (se existir)
-    if u['server_id']:
-        srv = db.get_server(u['server_id'])
-        if srv:
-            try:
-                if new_status == 'suspended':
-                    # Mata processos e bloqueia
-                    sc.send_command(srv['ip'], srv['module_port'], srv['auth_token'],
-                                  f"pkill -u {u['username']}")
-                    sc.send_command(srv['ip'], srv['module_port'], srv['auth_token'],
-                                  f"usermod -L {u['username']}")
-                else:
-                    # Desbloqueia
-                    sc.send_command(srv['ip'], srv['module_port'], srv['auth_token'],
-                                  f"usermod -U {u['username']}")
-            except Exception as e:
-                # Log do erro mas não interrompe
-                print(f"SSH Error: {e}")
-    
-    # Atualiza banco (sempre)
     db.update_ssh_user(user_id, status=new_status)
-    
-    return jsonify(
-        success=True, 
-        message=f'Usuário {new_status}', 
-        new_status=new_status
-    )
+
+    if new_status == 'suspended':
+        # Lock account + kill sessions on ALL servers
+        cmd = (
+            f"passwd -l {u['username']} 2>/dev/null; "
+            f"/root/pmaster_agent blockuser {u['username']} 2>/dev/null || true; "
+            f"pkill -u {u['username']} 2>/dev/null || true"
+        )
+    else:
+        # Unlock account on ALL servers
+        cmd = (
+            f"passwd -u {u['username']} 2>/dev/null; "
+            f"/root/pmaster_agent unblockuser {u['username']} 2>/dev/null || true"
+        )
+
+    sc.broadcast_command(u, cmd, db)
+
+    return jsonify(success=True, message=f'Status: {new_status}', new_status=new_status)
+
+
+# ---------------------------------------------------------------------------
+# Recreate user on server(s)
+# ---------------------------------------------------------------------------
+
+@app.route('/users/recreate_on_server/<int:user_id>', methods=['POST'])
+@login_required
+def recreate_user_on_server(user_id):
+    """Create user on ALL their servers if they don't exist yet. Safe to call multiple times."""
+    current_user = get_current_user()
+    u = db.get_ssh_user(user_id)
+    if not u:
+        return jsonify(success=False, message='Usuário não encontrado')
+    if current_user['role'] != 'admin':
+        tree_ids = [current_user['id']] + [s['id'] for s in db.get_all_resellers_under(current_user['id'])]
+        if u['owner_id'] not in tree_ids:
+            return jsonify(success=False, message='Sem permissão')
+
+    server_ids = db.get_user_all_server_ids(user_id)
+    if not server_ids:
+        return jsonify(success=False, message='Nenhum servidor associado a este usuário')
+
+    try:
+        exp_days = max(1, (
+            __import__('datetime').date.fromisoformat(u['expires_at'][:10]) -
+            now_br().date()
+        ).days)
+    except Exception:
+        exp_days = 30
+
+    results = []
+    for sid in server_ids:
+        srv = db.get_server(sid)
+        if not srv:
+            continue
+
+        # Check if user already exists on server
+        check_ok, check_out = sc.send_command(
+            srv['ip'], srv['module_port'], srv['auth_token'],
+            f"id {u['username']} 2>/dev/null && echo EXISTS || echo MISSING"
+        )
+
+        if check_ok and 'EXISTS' in (check_out or ''):
+            results.append({'server': srv['name'], 'action': 'já existe', 'ok': True})
+            continue
+
+        # Create user
+        c_ok, c_msg = sc.create_ssh_user_on_server(
+            srv['ip'], srv['module_port'], srv['auth_token'],
+            u['username'], u['password'], exp_days, u['connection_limit'],
+            uuid=u['v2ray_uuid']
+        )
+        results.append({'server': srv['name'], 'action': 'criado' if c_ok else f'erro: {c_msg}', 'ok': c_ok})
+
+    any_ok = any(r['ok'] for r in results)
+    summary = '; '.join(f"{r['server']}: {r['action']}" for r in results)
+    return jsonify(success=any_ok, message=summary, results=results)
 
 
 # ---------------------------------------------------------------------------
