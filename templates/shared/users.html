@@ -193,15 +193,25 @@ function renewUser(id) {
 }
 
 function suspendUser(id) {
+  if (!id) return;
   if (!confirm('Suspender/ativar este usuário?')) return;
-  apiPost(`/users/suspend/${id}`, {}, d => {
-    showToast(d.message, d.success ? 'success' : 'danger');
-    if (d.success) {
-      const el = document.getElementById('status_' + id);
-      el.textContent = d.new_status;
-      el.className = 'badge ' + (d.new_status === 'active' ? 'bg-success' : 'bg-danger');
-    }
-  });
+  
+  // Envolve em try-catch se apiPost for síncrona
+  try {
+    apiPost(`/users/suspend/${id}`, {}, d => {
+      showToast(d.message, d.success ? 'success' : 'danger');
+      
+      if (d.success) {
+        const el = document.getElementById('status_' + id);
+        if (el) {  // <-- ESSA VERIFICAÇÃO É CRÍTICA
+          el.textContent = d.new_status;
+          el.className = 'badge ' + (d.new_status === 'active' ? 'bg-success' : 'bg-danger');
+        }
+      }
+    });
+  } catch (err) {
+    showToast('Erro de conexão', 'danger');
+  }
 }
 
 function deleteUser(id, name) {
