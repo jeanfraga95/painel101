@@ -552,25 +552,66 @@ def update_user(user_id):
 def suspend_user(user_id):
     current_user = get_current_user()
     u = db.get_ssh_user(user_id)
+    
     if not u:
         return jsonify(success=False, message='Usuário não encontrado')
 
+    # Verificar permissões
     if current_user['role'] != 'admin':
         tree_ids = [current_user['id']] + [s['id'] for s in db.get_all_resellers_under(current_user['id'])]
         if u['owner_id'] not in tree_ids:
             return jsonify(success=False, message='Sem permissão')
 
     new_status = 'suspended' if u['status'] == 'active' else 'active'
-    db.update_ssh_user(user_id, status=new_status)
-
-    # Kill sessions if suspending
-    if new_status == 'suspended' and u['server_id']:
+    
+    # Tentar executar ação no servidor SSH
+    ssh_success = True
+    error_message = ''
+    
+    if u.get('server_id'):
         srv = db.get_server(u['server_id'])
         if srv:
-            sc.send_command(srv['ip'], srv['module_port'], srv['auth_token'],
-                            f"pkill -u {u['username']}")
-
-    return jsonify(success=True, message=f'Status: {new_status}', new_status=new_status)
+            if new_status == 'suspended':
+                # Suspender: matar processos e bloquear
+                cmd = f"pkill -u {u['username']} 2>/dev/null; usermod -L {u['username']} 2>/dev/null"
+            else:
+                # Ativar: desbloquear
+                cmd = f"usermod -U {u['username']} 2>/dev/null"
+            
+            try:
+                result = sc.send_command(srv['ip'], srv['module_port'], srv['auth_token'], cmd)
+                
+                # Verificar se o comando foi bem sucedido (ajuste conforme sua API)
+                if result and isinstance(result, dict):
+                    if result.get('exit_code') != 0 and result.get('success') != True:
+                        ssh_success = False
+                        error_message = f'Falha no servidor {srv["name"]}'
+                elif result is None:
+                    ssh_success = False
+                    error_message = 'Sem resposta do servidor'
+                    
+            except Exception as e:
+                ssh_success = False
+                error_message = f'Erro: {str(e)}'
+        else:
+            ssh_success = False
+            error_message = 'Servidor não encontrado'
+    
+    # Se falhou no SSH mas não é crítico, ainda atualiza o banco?
+    if not ssh_success:
+        return jsonify(
+            success=False, 
+            message=f'Não foi possível alterar o status no servidor. {error_message}'
+        )
+    
+    # Atualizar banco de dados
+    db.update_ssh_user(user_id, status=new_status)
+    
+    return jsonify(
+        success=True, 
+        message=f'Usuário {new_status} com sucesso', 
+        new_status=new_status
+    )
 
 
 # ---------------------------------------------------------------------------
