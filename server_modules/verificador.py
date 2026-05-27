@@ -31,7 +31,7 @@ token = get_token()
 if token:
     try:
         resp = requests.post(
-            'http://localhost:6969',
+            'http://localhost:7072',
             headers={'Senha': token},
             data={'comando': 'echo ok'},
             timeout=5
