@@ -129,8 +129,11 @@
                 <button class="btn btn-outline-success" onclick="renewUser({{ u.id }})" title="Renovar">
                   <i class="fas fa-redo"></i>
                 </button>
-                <button class="btn btn-outline-warning" onclick="suspendUser({{ u.id }})" title="Suspender/Ativar">
+                <button class="btn btn-outline-warning" onclick="suspendUser({{ u.id }}, this)" title="Suspender/Ativar">
                   <i class="fas fa-ban"></i>
+                </button>
+                <button class="btn btn-outline-secondary" onclick="recreateOnServer({{ u.id }}, this)" title="Recriar no servidor (se não existir)">
+                  <i class="fas fa-sync-alt"></i>
                 </button>
                 <button class="btn btn-outline-info" onclick="openEditModal({{ u.id }}, '{{ u.username }}', {{ u.connection_limit }}, '{{ u.expires_at[:10] if u.expires_at else '' }}')" title="Editar / Servidores">
                   <i class="fas fa-edit"></i>
@@ -192,26 +195,29 @@ function renewUser(id) {
   });
 }
 
-function suspendUser(id) {
-  if (!id) return;
+function suspendUser(id, btn) {
   if (!confirm('Suspender/ativar este usuário?')) return;
-  
-  // Envolve em try-catch se apiPost for síncrona
-  try {
-    apiPost(`/users/suspend/${id}`, {}, d => {
-      showToast(d.message, d.success ? 'success' : 'danger');
-      
-      if (d.success) {
-        const el = document.getElementById('status_' + id);
-        if (el) {  // <-- ESSA VERIFICAÇÃO É CRÍTICA
-          el.textContent = d.new_status;
-          el.className = 'badge ' + (d.new_status === 'active' ? 'bg-success' : 'bg-danger');
-        }
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
+  apiPost(`/users/suspend/${id}`, {}, d => {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-ban"></i>'; }
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (d.success) {
+      const el = document.getElementById('status_' + id);
+      if (el) {
+        el.textContent = d.new_status === 'active' ? 'ativo' : 'suspenso';
+        el.className = 'badge ' + (d.new_status === 'active' ? 'bg-success' : 'bg-danger');
       }
-    });
-  } catch (err) {
-    showToast('Erro de conexão', 'danger');
-  }
+    }
+  });
+}
+
+function recreateOnServer(id, btn) {
+  if (!confirm('Recriar este usuário nos servidores onde ele não existe?\nSe já existir, nada será alterado.')) return;
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
+  apiPost(`/users/recreate_on_server/${id}`, {}, d => {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-sync-alt"></i>'; }
+    showToast(d.message || (d.success ? 'Concluído' : 'Erro'), d.success ? 'success' : 'danger');
+  });
 }
 
 function deleteUser(id, name) {
