@@ -622,17 +622,42 @@ def recreate_user_on_server(user_id):
         if not srv:
             continue
 
-        # Check if user already exists on server
-        check_ok, check_out = sc.send_command(
-            srv['ip'], srv['module_port'], srv['auth_token'],
-            f"id {u['username']} 2>/dev/null && echo EXISTS || echo MISSING"
-        )
+        # ── Verifica existência de forma adequada ao tipo de usuário ──────
+        already_exists = False
 
-        if check_ok and 'EXISTS' in (check_out or ''):
+        if u.get('v2ray_uuid'):
+            # Usuário Xray: verifica se o UUID já está no config.json.
+            # Checar só o usuário Linux (id username) não é suficiente —
+            # o uuid pode estar ausente do config.json mesmo que o user exista.
+            uuid_check_cmd = (
+                "python3 -c \""
+                "import json,sys\n"
+                "try:\n"
+                "    cfg=json.load(open('/usr/local/etc/xray/config.json'))\n"
+                "    ids=[c.get('id','') for i in cfg.get('inbounds',[])"
+                " for c in i.get('settings',{}).get('clients',[])]\n"
+                f"    print('UUID_EXISTS' if '{u['v2ray_uuid']}' in ids else 'UUID_MISSING')\n"
+                "except Exception as e:\n"
+                "    print('UUID_MISSING')\n"
+                "\" 2>/dev/null || echo UUID_MISSING"
+            )
+            ck_ok, ck_out = sc.send_command(
+                srv['ip'], srv['module_port'], srv['auth_token'], uuid_check_cmd
+            )
+            already_exists = ck_ok and 'UUID_EXISTS' in (ck_out or '')
+        else:
+            # Usuário SSH puro: basta verificar se o usuário Linux existe
+            ck_ok, ck_out = sc.send_command(
+                srv['ip'], srv['module_port'], srv['auth_token'],
+                f"id {u['username']} 2>/dev/null && echo EXISTS || echo MISSING"
+            )
+            already_exists = ck_ok and 'EXISTS' in (ck_out or '')
+
+        if already_exists:
             results.append({'server': srv['name'], 'action': 'já existe', 'ok': True})
             continue
 
-        # Create user
+        # ── Cria o usuário (ou adiciona UUID ao Xray se estiver faltando) ──
         c_ok, c_msg = sc.create_ssh_user_on_server(
             srv['ip'], srv['module_port'], srv['auth_token'],
             u['username'], u['password'], exp_days, u['connection_limit'],
