@@ -99,7 +99,7 @@
               {% if u.v2ray_uuid %}<span class="badge bg-info ms-1">v2ray</span>{% endif %}
               {% if u.is_test %}<span class="badge bg-warning text-dark ms-1">teste</span>{% endif %}
             </td>
-            <td>{{ u.expires_at[:10] }}</td>
+            <td data-user-id="{{ u.id }}">{{ u.expires_at[:10] }}</td>
             <td>
               <span class="badge {{ 'bg-danger' if d <= 0 else ('bg-warning text-dark' if d <= 3 else ('bg-secondary' if d <= 7 else 'bg-success')) }}">
                 {{ d }}d
@@ -126,7 +126,7 @@
                 <button class="btn btn-outline-primary" onclick="viewCredentials({{ u.id }})" title="Ver senha/UUID">
                   <i class="fas fa-key"></i>
                 </button>
-                <button class="btn btn-outline-success" onclick="renewUser({{ u.id }})" title="Renovar">
+                <button class="btn btn-outline-success" onclick="renewUser({{ u.id }}, '{{ u.username }}')" title="Renovar">
                   <i class="fas fa-redo"></i>
                 </button>
                 <button class="btn btn-outline-warning" onclick="suspendUser({{ u.id }}, this)" title="Suspender/Ativar">
@@ -183,17 +183,126 @@
 </nav>
 {% endif %}
 
+<!-- ── Modal Renovar ─────────────────────────────────────────────────── -->
+<div class="modal fade" id="renewModal" tabindex="-1" aria-labelledby="renewModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-sm modal-dialog-centered">
+    <div class="modal-content border-0 shadow">
+
+      <!-- Cabeçalho -->
+      <div class="modal-header py-2 bg-success bg-opacity-10 border-0">
+        <h6 class="modal-title fw-semibold text-success" id="renewModalLabel">
+          <i class="fas fa-redo me-1"></i> Renovar usuário
+        </h6>
+        <button type="button" class="btn-close btn-close-sm" data-bs-dismiss="modal"></button>
+      </div>
+
+      <div class="modal-body px-3 py-3">
+
+        <!-- Passo 1: input de dias -->
+        <div id="renewStep1">
+          <p class="mb-1 text-muted small">Usuário:</p>
+          <p class="fw-bold mb-3" id="renewUsername">—</p>
+          <label class="form-label small mb-1">Quantos dias adicionar?</label>
+          <input type="number" id="renewDaysInput" class="form-control form-control-sm text-center"
+                 value="30" min="1" max="3650" style="font-size:1.1rem;">
+          <div class="d-grid mt-3">
+            <button class="btn btn-success btn-sm" id="renewConfirmBtn" onclick="submitRenew()">
+              <i class="fas fa-check me-1"></i> Confirmar renovação
+            </button>
+          </div>
+        </div>
+
+        <!-- Passo 2: resultado -->
+        <div id="renewStep2" class="d-none text-center">
+          <div class="mb-2">
+            <i class="fas fa-check-circle text-success" style="font-size:2rem;"></i>
+          </div>
+          <p class="mb-1 text-muted small">Usuário</p>
+          <p class="fw-bold mb-2" id="renewResultUser">—</p>
+          <p class="mb-1 text-muted small">Novo vencimento</p>
+          <p class="fw-bold fs-5 text-success mb-3" id="renewResultDate">—</p>
+          <button class="btn btn-outline-secondary btn-sm w-100" id="renewCopyBtn" onclick="copyRenewResult()">
+            <i class="fas fa-copy me-1"></i> Copiar
+          </button>
+          <p class="text-muted small mt-2 mb-0" id="renewCopiedMsg" style="visibility:hidden;">
+            <i class="fas fa-check text-success"></i> Copiado!
+          </p>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+<!-- ──────────────────────────────────────────────────────────────────── -->
+
 {% include 'shared/_create_user_modals.html' %}
 
 <script>
-function renewUser(id) {
-  const days = prompt('Adicionar quantos dias ao vencimento?', '30');
-  if (!days || isNaN(days) || parseInt(days) < 1) return;
-  apiPost(`/users/renew/${id}`, {days: parseInt(days)}, d => {
-    showToast(d.message, d.success ? 'success' : 'danger');
-    if (d.success) setTimeout(() => location.reload(), 1000);
+// ── Renovar usuário ──────────────────────────────────────────────────
+let _renewUserId = null;
+let _renewUsername = '';
+
+function renewUser(id, username) {
+  _renewUserId  = id;
+  _renewUsername = username || '—';
+
+  // Reseta para o passo 1
+  document.getElementById('renewUsername').textContent  = _renewUsername;
+  document.getElementById('renewDaysInput').value       = '30';
+  document.getElementById('renewStep1').classList.remove('d-none');
+  document.getElementById('renewStep2').classList.add('d-none');
+  document.getElementById('renewCopiedMsg').style.visibility = 'hidden';
+  document.getElementById('renewConfirmBtn').disabled   = false;
+  document.getElementById('renewConfirmBtn').innerHTML  = '<i class="fas fa-check me-1"></i> Confirmar renovação';
+
+  new bootstrap.Modal(document.getElementById('renewModal')).show();
+}
+
+function submitRenew() {
+  const days = parseInt(document.getElementById('renewDaysInput').value);
+  if (!days || days < 1) {
+    document.getElementById('renewDaysInput').focus();
+    return;
+  }
+  const btn = document.getElementById('renewConfirmBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Renovando...';
+
+  apiPost(`/users/renew/${_renewUserId}`, {days}, d => {
+    if (!d.success) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-check me-1"></i> Confirmar renovação';
+      showToast(d.message, 'danger');
+      return;
+    }
+    // Formata data DD/MM/AAAA
+    let dateStr = d.new_expiry || '';
+    if (dateStr.match(/^\d{4}-\d{2}-\d{2}/)) {
+      const [y, m, dd] = dateStr.slice(0, 10).split('-');
+      dateStr = `${dd}/${m}/${y}`;
+    }
+    document.getElementById('renewResultUser').textContent = _renewUsername;
+    document.getElementById('renewResultDate').textContent = dateStr;
+    document.getElementById('renewStep1').classList.add('d-none');
+    document.getElementById('renewStep2').classList.remove('d-none');
+
+    // Atualiza a célula de vencimento na tabela sem recarregar
+    const rows = document.querySelectorAll(`[data-user-id="${_renewUserId}"]`);
+    rows.forEach(td => { td.textContent = dateStr; });
   });
 }
+
+function copyRenewResult() {
+  const user = document.getElementById('renewResultUser').textContent;
+  const date = document.getElementById('renewResultDate').textContent;
+  const text = `Usuário: ${user} | Vencimento: ${date}`;
+  navigator.clipboard.writeText(text).then(() => {
+    const msg = document.getElementById('renewCopiedMsg');
+    msg.style.visibility = 'visible';
+    setTimeout(() => { msg.style.visibility = 'hidden'; }, 2000);
+  });
+}
+
 
 function suspendUser(id, btn) {
   if (!confirm('Suspender/ativar este usuário?')) return;
