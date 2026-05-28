@@ -307,6 +307,32 @@ def install_modules_ssh(ip: str, root_user: str, root_password: str, auth_token:
             "chmod +x /opt/pmg-monitor",
             "mkdir -p /etc/SSHPlus/senha /etc/DragonPanel",
             "touch /root/usuarios.db",
+            # ── Segurança: bloqueia acesso ao terminal para usuários VPN ──────
+            # Cria grupo que identifica usuários do painel
+            "groupadd pmg_vpn 2>/dev/null || true",
+            # Corrige usuários migrados de outros painéis (GestorSSH, DragonCore etc.)
+            # que possam ter /bin/bash: força /bin/false e adiciona ao grupo
+            (
+                "awk -F: '($3>=1000 && $1!=\"nobody\" && $1!=\"nfsnobody\"){"
+                "print $1}' /etc/passwd | "
+                "xargs -I{} bash -c '"
+                "usermod -s /bin/false {} 2>/dev/null; "
+                "usermod -aG pmg_vpn {} 2>/dev/null' 2>/dev/null || true"
+            ),
+            # Adiciona bloco no sshd_config (somente uma vez, marcado com PMG_VPN_BLOCK)
+            (
+                "grep -q 'PMG_VPN_BLOCK' /etc/ssh/sshd_config || "
+                "printf '\\n# PMG_VPN_BLOCK - Gerado pelo Painel Master\\n"
+                "Match Group pmg_vpn\\n"
+                "    PermitTTY no\\n"
+                "    X11Forwarding no\\n"
+                "    AllowAgentForwarding no\\n"
+                "    ForceCommand /bin/false\\n' "
+                ">> /etc/ssh/sshd_config"
+            ),
+            # Reinicia sshd para aplicar as restrições
+            "systemctl restart sshd 2>/dev/null || service ssh restart 2>/dev/null || true",
+            # ─────────────────────────────────────────────────────────────────
             "pkill -f pmaster_module.py || true",
             "nohup python3 /root/pmaster_module.py > /root/pmaster_module.log 2>&1 &",
             "(crontab -l 2>/dev/null | grep -v pmaster_watchdog; echo '* * * * * python3 /root/pmaster_watchdog.py') | crontab -",
