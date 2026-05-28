@@ -3,156 +3,269 @@
 {% block page_title %}<i class="fas fa-wifi me-2"></i>Usuários Online{% endblock %}
 
 {% block content %}
-<div class="mb-3 d-flex gap-2 align-items-center flex-wrap">
-  <div class="input-group input-group-sm" style="max-width:240px">
-    <span class="input-group-text"><i class="fas fa-search"></i></span>
-    <input type="text" id="onlineSearch" class="form-control" placeholder="Filtrar usuário..."
-           oninput="filterOnline(this.value)">
-    <button class="btn btn-outline-secondary" onclick="document.getElementById('onlineSearch').value='';filterOnline('')">✕</button>
+{% set is_admin = current_user.role == 'admin' %}
+
+{# ── Barra de resumo e controles ────────────────────────────────────────── #}
+<div class="row g-2 mb-3 align-items-center">
+
+  {# Totalizadores #}
+  <div class="col-auto">
+    <div class="d-flex gap-2">
+      <span class="badge bg-success fs-6 px-3 py-2" id="totalOnlineBadge">
+        <i class="fas fa-circle me-1" style="font-size:.6rem;vertical-align:middle;"></i>
+        <span id="totalOnlineCount">0</span> online
+      </span>
+      <span class="badge bg-secondary fs-6 px-3 py-2" id="totalConBadge">
+        <i class="fas fa-plug me-1" style="font-size:.75rem;"></i>
+        <span id="totalConCount">0</span> conexões
+      </span>
+    </div>
   </div>
-  <select id="resellerFilter" class="form-select form-select-sm" style="max-width:200px"
-          onchange="filterOnline(document.getElementById('onlineSearch').value)">
-    <option value="">Todos os donos</option>
-    {% for r in all_resellers %}
-    <option value="{{ r.username|lower }}">{{ r.username }}</option>
-    {% endfor %}
-  </select>
-  <span class="badge bg-success ms-auto" id="totalOnlineBadge">0 online</span>
-  <button class="btn btn-sm btn-outline-primary" onclick="refreshAll()">
-    <i class="fas fa-sync me-1"></i>Atualizar
-  </button>
+
+  {# Busca #}
+  <div class="col-md-3 col-sm-5 ms-auto">
+    <div class="input-group input-group-sm">
+      <span class="input-group-text"><i class="fas fa-search"></i></span>
+      <input type="text" id="onlineSearch" class="form-control" placeholder="Filtrar usuário…"
+             oninput="applyFilter()">
+      <button class="btn btn-outline-secondary" onclick="document.getElementById('onlineSearch').value='';applyFilter()">✕</button>
+    </div>
+  </div>
+
+  {# Filtro de revenda — só admin #}
+  {% if is_admin and all_resellers %}
+  <div class="col-md-2 col-sm-4">
+    <select id="resellerFilter" class="form-select form-select-sm" onchange="applyFilter()">
+      <option value="">Todos os donos</option>
+      {% for r in all_resellers %}
+      <option value="{{ r.username|lower }}">{{ r.username }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  {% endif %}
+
+  {# Botão atualizar + indicador de auto-refresh #}
+  <div class="col-auto">
+    <div class="d-flex align-items-center gap-2">
+      <small class="text-muted" id="refreshTimer" title="Próxima atualização automática"></small>
+      <button class="btn btn-sm btn-outline-primary" onclick="refreshAll(true)">
+        <i class="fas fa-sync me-1" id="refreshIcon"></i>Atualizar
+      </button>
+    </div>
+  </div>
+
 </div>
 
+{# ── Grid de servidores ──────────────────────────────────────────────────── #}
+{% if servers %}
 <div class="row g-3" id="serversGrid">
   {% for srv in servers %}
-  <div class="col-md-6">
-    <div class="card">
-      <div class="card-header d-flex justify-content-between align-items-center">
-        <strong><i class="fas fa-server me-2 text-primary"></i>{{ srv.name }}
-          {% if cat_map and srv.category_id %}<span class="badge bg-secondary ms-1">{{ cat_map.get(srv.category_id, '') }}</span>{% endif %}
-        </strong>
+  <div class="col-xl-6 col-12" id="srvCol_{{ srv.id }}">
+    <div class="card h-100 border-0 shadow-sm">
+
+      {# Cabeçalho do servidor #}
+      <div class="card-header d-flex align-items-center justify-content-between py-2">
         <div class="d-flex align-items-center gap-2">
-          <span class="badge bg-success" id="online_count_{{ srv.id }}">— online</span>
-          <button class="btn btn-sm btn-outline-secondary" onclick="refreshOnline({{ srv.id }})">
-            <i class="fas fa-sync"></i>
+          <span class="badge bg-primary-subtle text-primary-emphasis rounded-circle p-1"
+                style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;">
+            <i class="fas fa-server" style="font-size:.7rem;"></i>
+          </span>
+          <span class="fw-semibold">{{ srv.name }}</span>
+          {% if cat_map and srv.category_id %}
+          <span class="badge bg-secondary-subtle text-secondary-emphasis">{{ cat_map.get(srv.category_id, '') }}</span>
+          {% endif %}
+        </div>
+        <div class="d-flex align-items-center gap-2">
+          <span class="badge bg-success-subtle text-success-emphasis px-2" id="badge_{{ srv.id }}">
+            <i class="fas fa-circle me-1" style="font-size:.55rem;vertical-align:middle;"></i>
+            <span id="cnt_{{ srv.id }}">—</span>
+          </span>
+          <button class="btn btn-sm btn-outline-secondary py-0 px-2"
+                  onclick="refreshOne({{ srv.id }})" title="Atualizar este servidor">
+            <i class="fas fa-sync" style="font-size:.75rem;" id="icon_{{ srv.id }}"></i>
           </button>
         </div>
       </div>
-      <div class="card-body p-0">
-        <table class="table table-sm mb-0">
+
+      {# Tabela de usuários online #}
+      <div class="card-body p-0" style="overflow-x:auto;">
+        <table class="table table-sm table-hover align-middle mb-0" style="font-size:.82rem;">
           <thead class="table-secondary">
             <tr>
-              <th>Usuário</th>
-              <th>Dono</th>
-              <th>Conexões</th>
-              <th>Limite</th>
-              <th>Uso</th>
+              <th class="ps-3">Usuário</th>
+              {% if is_admin %}<th>Dono</th>{% endif %}
+              <th class="text-center">Conn.</th>
+              <th style="min-width:80px;">Uso</th>
               <th>Vencimento</th>
             </tr>
           </thead>
-          <tbody id="online_tbody_{{ srv.id }}">
-            <tr><td colspan="6" class="text-center text-muted py-3">Carregando...</td></tr>
+          <tbody id="tbody_{{ srv.id }}">
+            <tr>
+              <td colspan="{{ 5 if is_admin else 4 }}" class="text-center text-muted py-4">
+                <span class="spinner-border spinner-border-sm me-2"></span>Carregando…
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>
+
     </div>
-  </div>
-  {% else %}
-  <div class="col-12 text-center text-muted py-5">
-    <i class="fas fa-server fa-3x mb-3 opacity-25"></i>
-    <p>Nenhum servidor configurado.</p>
   </div>
   {% endfor %}
 </div>
 
+{% else %}
+<div class="text-center text-muted py-5">
+  <i class="fas fa-server fa-3x mb-3 opacity-25"></i>
+  <p class="mb-0">Nenhum servidor configurado.</p>
+</div>
+{% endif %}
+
 <script>
-// Store all online data per server for client-side filtering
-const _onlineData = {};
-let _searchTerm = '';
+const IS_ADMIN   = {{ 'true' if is_admin else 'false' }};
+const COLS       = IS_ADMIN ? 5 : 4;
+const serverIds  = [{% for srv in servers %}{{ srv.id }}{% if not loop.last %},{% endif %}{% endfor %}];
+const _data      = {};      // serverId → array of user objects
+let _countdown   = 15;
+let _timerHandle = null;
 
-function renderOnline(serverId, data) {
-  const tbody = document.getElementById('online_tbody_' + serverId);
-  const countBadge = document.getElementById('online_count_' + serverId);
-  const users = data.online || [];
-  _onlineData[serverId] = users;
-  countBadge.textContent = users.length + ' online';
-  _applyFilter();
-  _updateTotal();
-}
-
-function _applyFilter() {
-  const term     = _searchTerm.toLowerCase();
-  const ownerFlt = (document.getElementById('resellerFilter')?.value || '').toLowerCase();
-  Object.entries(_onlineData).forEach(([serverId, users]) => {
-    const tbody = document.getElementById('online_tbody_' + serverId);
-    if (!tbody) return;
-    const visible = users.filter(u => {
-      const uname = (u.username || '').toLowerCase();
-      const owner = (u.owner   || '').toLowerCase();
-      const matchUser  = !term     || uname.includes(term)  || owner.includes(term);
-      const matchOwner = !ownerFlt || owner === ownerFlt;
-      return matchUser && matchOwner;
-    });
-
-    if (visible.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3">' +
-        ((term || ownerFlt) ? '<i class="fas fa-search me-1"></i>Nenhum resultado' : '<i class="fas fa-moon me-1"></i>Nenhum online') +
-        '</td></tr>';
-      return;
-    }
-    tbody.innerHTML = visible.map(u => {
-      const limit = parseInt(u.limit) || 1;
-      const conns = parseInt(u.connections) || 0;
-      const pct = Math.min(100, Math.round((conns / limit) * 100));
-      const barColor = pct >= 90 ? 'bg-danger' : (pct >= 60 ? 'bg-warning' : 'bg-success');
-      return `<tr>
-        <td><i class="fas fa-circle text-success me-1" style="font-size:.6rem"></i><strong>${u.username}</strong></td>
-        <td><small class="text-muted">${u.owner || '—'}</small></td>
-        <td><span class="badge bg-primary">${conns}</span></td>
-        <td>${limit}</td>
-        <td>
-          <div class="progress" style="height:6px;min-width:50px">
-            <div class="progress-bar ${barColor}" style="width:${pct}%"></div>
-          </div>
-        </td>
-        <td><small>${u.expires_at || '—'}</small></td>
-      </tr>`;
-    }).join('');
-  });
-}
-
-function _updateTotal() {
-  let total = 0;
-  Object.values(_onlineData).forEach(users => { total += users.length; });
-  document.getElementById('totalOnlineBadge').textContent = total + ' online';
-}
-
-function filterOnline(term) {
-  _searchTerm = (term || '').toLowerCase();
-  _applyFilter();
-}
-
-function refreshOnline(serverId) {
-  fetch('/api/online/' + serverId)
+// ── Busca dados de um servidor ──────────────────────────────────────────
+function refreshOne(id, silent) {
+  if (!silent) {
+    const ic = document.getElementById('icon_' + id);
+    if (ic) ic.classList.add('fa-spin');
+  }
+  fetch('/api/online/' + id)
     .then(r => r.json())
-    .then(d => renderOnline(serverId, d))
+    .then(d => {
+      _data[id] = d.online || [];
+      renderServer(id);
+      updateTotals();
+    })
     .catch(() => {
-      const tbody = document.getElementById('online_tbody_' + serverId);
-      if (tbody) tbody.innerHTML =
-        '<tr><td colspan="6" class="text-center text-danger py-3"><i class="fas fa-exclamation-triangle me-2"></i>Erro ao conectar</td></tr>';
-      const badge = document.getElementById('online_count_' + serverId);
+      _data[id] = null;
+      const tb = document.getElementById('tbody_' + id);
+      if (tb) tb.innerHTML = `<tr><td colspan="${COLS}" class="text-center text-danger py-3">
+        <i class="fas fa-exclamation-triangle me-2"></i>Erro ao conectar</td></tr>`;
+      const badge = document.getElementById('cnt_' + id);
       if (badge) badge.textContent = 'erro';
+    })
+    .finally(() => {
+      const ic = document.getElementById('icon_' + id);
+      if (ic) ic.classList.remove('fa-spin');
     });
 }
 
-function refreshAll() {
-  serverIds.forEach(id => refreshOnline(id));
+// ── Renderiza tabela de um servidor aplicando filtros ───────────────────
+function renderServer(id) {
+  const tb   = document.getElementById('tbody_' + id);
+  const cnt  = document.getElementById('cnt_'   + id);
+  if (!tb) return;
+
+  const users = _data[id];
+  if (!users) return;
+
+  const term  = (document.getElementById('onlineSearch')?.value || '').toLowerCase();
+  const owner = IS_ADMIN ? (document.getElementById('resellerFilter')?.value || '').toLowerCase() : '';
+
+  const visible = users.filter(u => {
+    const uname = (u.username || '').toLowerCase();
+    const ownr  = (u.owner    || '').toLowerCase();
+    return (!term  || uname.includes(term) || ownr.includes(term))
+        && (!owner || ownr === owner);
+  });
+
+  cnt.textContent = users.length;
+
+  if (visible.length === 0) {
+    tb.innerHTML = `<tr><td colspan="${COLS}" class="text-center text-muted py-4">
+      <i class="fas fa-${term || owner ? 'search' : 'moon'} me-2 opacity-50"></i>
+      ${term || owner ? 'Nenhum resultado' : 'Nenhum usuário online'}
+    </td></tr>`;
+    return;
+  }
+
+  tb.innerHTML = visible.map(u => {
+    const limit    = parseInt(u.limit)       || 1;
+    const conns    = parseInt(u.connections) || 0;
+    const pct      = Math.min(100, Math.round((conns / limit) * 100));
+    const barClass = pct >= 90 ? 'bg-danger' : (pct >= 60 ? 'bg-warning' : 'bg-success');
+
+    // Vencimento com cor
+    let expHtml = '—';
+    if (u.expires_at) {
+      const today = new Date(); today.setHours(0,0,0,0);
+      const exp   = new Date(u.expires_at + 'T00:00:00');
+      const diff  = Math.round((exp - today) / 86400000);
+      const cls   = diff < 0 ? 'text-danger' : (diff <= 3 ? 'text-warning' : 'text-muted');
+      expHtml     = `<small class="${cls}">${u.expires_at}</small>`;
+    }
+
+    return `<tr>
+      <td class="ps-3">
+        <i class="fas fa-circle text-success me-1" style="font-size:.55rem;vertical-align:middle;"></i>
+        <strong>${u.username}</strong>
+      </td>
+      ${IS_ADMIN ? `<td><small class="text-muted">${u.owner || '—'}</small></td>` : ''}
+      <td class="text-center"><span class="badge bg-primary-subtle text-primary-emphasis">${conns}</span></td>
+      <td>
+        <div class="d-flex align-items-center gap-1">
+          <div class="progress flex-grow-1" style="height:5px;">
+            <div class="progress-bar ${barClass}" style="width:${pct}%"></div>
+          </div>
+          <small class="text-muted" style="white-space:nowrap;">${conns}/${limit}</small>
+        </div>
+      </td>
+      <td>${expHtml}</td>
+    </tr>`;
+  }).join('');
 }
 
-const serverIds = [{% for srv in servers %}{{ srv.id }}{% if not loop.last %},{% endif %}{% endfor %}];
-serverIds.forEach(id => {
-  refreshOnline(id);
-  setInterval(() => refreshOnline(id), 15000);
-});
+// ── Totais globais ──────────────────────────────────────────────────────
+function updateTotals() {
+  let totalUsers = 0, totalConns = 0;
+  Object.values(_data).forEach(users => {
+    if (!users) return;
+    totalUsers += users.length;
+    users.forEach(u => { totalConns += parseInt(u.connections) || 0; });
+  });
+  document.getElementById('totalOnlineCount').textContent = totalUsers;
+  document.getElementById('totalConCount').textContent    = totalConns;
+}
+
+// ── Filtro client-side ──────────────────────────────────────────────────
+function applyFilter() {
+  serverIds.forEach(id => renderServer(id));
+}
+
+// ── Refresh completo ────────────────────────────────────────────────────
+function refreshAll(manual) {
+  if (manual) {
+    _countdown = 15;
+    const ic = document.getElementById('refreshIcon');
+    ic.classList.add('fa-spin');
+    setTimeout(() => ic.classList.remove('fa-spin'), 800);
+  }
+  serverIds.forEach(id => refreshOne(id, !manual));
+}
+
+// ── Contador de auto-refresh ────────────────────────────────────────────
+function startTimer() {
+  const el = document.getElementById('refreshTimer');
+  clearInterval(_timerHandle);
+  _countdown = 15;
+  _timerHandle = setInterval(() => {
+    _countdown--;
+    if (el) el.textContent = `↻ ${_countdown}s`;
+    if (_countdown <= 0) {
+      _countdown = 15;
+      refreshAll(false);
+    }
+  }, 1000);
+}
+
+// ── Init ────────────────────────────────────────────────────────────────
+refreshAll(false);
+startTimer();
 </script>
 {% endblock %}
