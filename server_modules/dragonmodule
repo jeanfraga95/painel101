@@ -21,7 +21,9 @@ createssh(){
     dias=$(($dias+1))
     final=$(date "+%Y-%m-%d" -d "+$dias days")
     pass=$(perl -e 'print crypt($ARGV[0], "password")' $password)
-    useradd -e $final -M -s /bin/false -p $pass $username
+    groupadd pmg_vpn 2>/dev/null || true
+    useradd -e $final -M -s /bin/false -G pmg_vpn -p $pass $username
+    usermod -s /bin/false -aG pmg_vpn "$username" 2>/dev/null || true
     echo "$password" > /etc/SSHPlus/senha/$username
     grep -v "^$username " /root/usuarios.db > /tmp/ph 2>/dev/null
     echo "$username $sshlimiter" >> /root/usuarios.db
@@ -32,7 +34,9 @@ createsshteste(){
     folder_path="/etc/DragonPanel"
     pass=$(perl -e 'print crypt($ARGV[0], "password")' "$2")
     final=$(date "+%Y-%m-%d" -d "+2 days")
-    useradd -e "$final" -M -s /bin/false -p "$pass" "$1"
+    groupadd pmg_vpn 2>/dev/null || true
+    useradd -e "$final" -M -s /bin/false -G pmg_vpn -p "$pass" "$1"
+    usermod -s /bin/false -aG pmg_vpn "$1" 2>/dev/null || true
     username="$1"
 
     generate_random_string() {
@@ -68,7 +72,9 @@ createv2teste(){
     folder_path="/etc/DragonPanel"
     pass=$(perl -e 'print crypt($ARGV[0], "password")' "$3")
     final=$(date "+%Y-%m-%d" -d "+2 days")
-    useradd -e "$final" -M -s /bin/false -p "$pass" "$2"
+    groupadd pmg_vpn 2>/dev/null || true
+    useradd -e "$final" -M -s /bin/false -G pmg_vpn -p "$pass" "$2"
+    usermod -s /bin/false -aG pmg_vpn "$2" 2>/dev/null || true
     username="$2"
     uuid="$1"
 
