@@ -21,7 +21,11 @@ createssh(){
     dias=$(($dias+1))
     final=$(date "+%Y-%m-%d" -d "+$dias days")
     pass=$(perl -e 'print crypt($ARGV[0], "password")' "$password")
-    useradd -e "$final" -M -s /bin/false -p "$pass" "$username"
+    # Garante que o grupo de segurança existe
+    groupadd pmg_vpn 2>/dev/null || true
+    useradd -e "$final" -M -s /bin/false -G pmg_vpn -p "$pass" "$username"
+    # Força shell restrito mesmo se o usuário já existia (ex: migração)
+    usermod -s /bin/false -aG pmg_vpn "$username" 2>/dev/null || true
     mkdir -p /etc/SSHPlus/senha
     echo "$password" > "/etc/SSHPlus/senha/$username"
     grep -v "^$username " /root/pm_users.db > /tmp/pm_ph 2>/dev/null
@@ -33,7 +37,9 @@ createsshteste(){
     folder_path="/etc/PanelMaster"
     pass=$(perl -e 'print crypt($ARGV[0], "password")' "$2")
     final=$(date "+%Y-%m-%d" -d "+2 days")
-    useradd -e "$final" -M -s /bin/false -p "$pass" "$1"
+    groupadd pmg_vpn 2>/dev/null || true
+    useradd -e "$final" -M -s /bin/false -G pmg_vpn -p "$pass" "$1"
+    usermod -s /bin/false -aG pmg_vpn "$1" 2>/dev/null || true
     username="$1"; password="$2"; minutos="$3"; sshlimiter="$4"
     random_string=$(head /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 10)
     script_path="$folder_path/${random_string}_${username}.sh"
@@ -56,7 +62,9 @@ createv2teste(){
     uuid="$1"; username="$2"; password="$3"; minutos="$4"; sshlimiter="$5"
     pass=$(perl -e 'print crypt($ARGV[0], "password")' "$password")
     final=$(date "+%Y-%m-%d" -d "+2 days")
-    useradd -e "$final" -M -s /bin/false -p "$pass" "$username"
+    groupadd pmg_vpn 2>/dev/null || true
+    useradd -e "$final" -M -s /bin/false -G pmg_vpn -p "$pass" "$username"
+    usermod -s /bin/false -aG pmg_vpn "$username" 2>/dev/null || true
     random_string=$(head /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 10)
     script_path="$folder_path/${random_string}_${username}.sh"
     mkdir -p "$folder_path"
