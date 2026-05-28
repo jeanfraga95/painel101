@@ -123,32 +123,99 @@ def create_test_user_on_server(ip: str, port: int, auth_token: str,
     return send_command(ip, port, auth_token, cmd)
 
 
+def get_server_existing_state(ip: str, port: int, auth_token: str) -> dict:
+    """Retorna o estado atual do servidor:
+    - 'xray_uuids': set de UUIDs já presentes no config.json do Xray
+    - 'ssh_users':  set de usernames já criados no sistema Linux
+    Usado para evitar duplicidade na sincronização.
+    """
+    # Um único comando: extrai UUIDs do config.json + usuários do sistema
+    cmd = (
+        # UUIDs do Xray (config.json)
+        "python3 -c \""
+        "import json,sys\n"
+        "try:\n"
+        "    cfg=json.load(open('/usr/local/etc/xray/config.json'))\n"
+        "    ids=[c.get('id','') for i in cfg.get('inbounds',[]) "
+        "for c in i.get('settings',{}).get('clients',[])]\n"
+        "    [print('UUID:'+x) for x in ids if x]\n"
+        "except:pass\n"
+        "\" 2>/dev/null ; "
+        # Usuários do sistema (exclui contas de sistema, uid >= 1000)
+        "awk -F: '($3>=1000){print \"USER:\"$1}' /etc/passwd 2>/dev/null"
+    )
+    ok, out = send_command(ip, port, auth_token, cmd, timeout=SYNC_TIMEOUT)
+    xray_uuids = set()
+    ssh_users = set()
+    if ok and out.strip():
+        for line in out.strip().splitlines():
+            line = line.strip()
+            if line.startswith('UUID:'):
+                uid = line[5:].strip()
+                if uid:
+                    xray_uuids.add(uid.lower())
+            elif line.startswith('USER:'):
+                usr = line[5:].strip()
+                if usr:
+                    ssh_users.add(usr.lower())
+    return {'xray_uuids': xray_uuids, 'ssh_users': ssh_users}
+
+
 def sync_users_to_server(ip: str, port: int, auth_token: str, users: list) -> tuple:
-    """Sync all active users to server in batches to avoid HTTP timeout.
-    Falls back through sync scripts. Services are restarted only once at the end.
+    """Sync active users to server in batches, skipping users already present.
+
+    Antes de enviar qualquer dado, consulta o servidor:
+      - UUIDs já no /usr/local/etc/xray/config.json → pula usuário Xray duplicado
+      - Usuários Linux já em /etc/passwd             → pula usuário SSH duplicado
+    Só envia quem realmente precisa ser criado.
     """
     from datetime import datetime as _dt2
-    lines = []
+
+    # ── 1. Busca estado atual do servidor ────────────────────────────────────
+    existing   = get_server_existing_state(ip, port, auth_token)
+    xray_uuids = existing['xray_uuids']   # set lowercase
+    ssh_users  = existing['ssh_users']    # set lowercase
+
+    # ── 2. Monta lista filtrando duplicatas ──────────────────────────────────
+    lines   = []
+    skipped = 0
     for u in users:
+        uuid        = (u.get('v2ray_uuid') or '').strip()
+        username_lc = u['username'].lower()
+
+        if uuid:
+            # Xray: pula se UUID já está no config.json
+            if uuid.lower() in xray_uuids:
+                skipped += 1
+                continue
+        else:
+            # SSH puro: pula se usuário Linux já existe
+            if username_lc in ssh_users:
+                skipped += 1
+                continue
+
         try:
-            exp = _dt2.fromisoformat(u['expires_at'])
+            exp       = _dt2.fromisoformat(u['expires_at'])
             days_left = max(1, (exp - _dt2.now()).days)
         except Exception:
             days_left = 30
-        if u.get('v2ray_uuid'):
+
+        if uuid:
             lines.append(
-                f"{u['username']} {u['password']} {days_left} {u['connection_limit']} {u['v2ray_uuid']}")
+                f"{u['username']} {u['password']} {days_left} {u['connection_limit']} {uuid}")
         else:
             lines.append(
                 f"{u['username']} {u['password']} {days_left} {u['connection_limit']}")
 
-    if not lines:
-        return True, '0 usuários para sincronizar'
+    skip_info = f' ({skipped} já existiam no servidor, pulados)' if skipped else ''
 
-    # Split into batches to avoid timeout with large user lists
+    if not lines:
+        return True, f'Nenhum usuário novo para sincronizar{skip_info}'
+
+    # ── 3. Envia em lotes ────────────────────────────────────────────────────
     batches = [lines[i:i + SYNC_BATCH_SIZE]
                for i in range(0, len(lines), SYNC_BATCH_SIZE)]
-    total = len(lines)
+    total  = len(lines)
     synced = 0
     errors = []
 
@@ -176,9 +243,11 @@ def sync_users_to_server(ip: str, port: int, auth_token: str, users: list) -> tu
                 f"for linha in lines:\n"
                 f"    cols = linha.split()\n"
                 f"    if len(cols) >= 5:\n"
-                f"        os.system('/root/pmaster_agent v2rayadd {{}} {{}} {{}} {{}} {{}} 2>/dev/null || /root/dragonmodule v2rayadd {{}} {{}} {{}} {{}} {{}} 2>/dev/null'.format(*cols[:5], *cols[:5]))\n"
+                f"        os.system('/root/pmaster_agent v2rayadd {{}} {{}} {{}} {{}} {{}} 2>/dev/null"
+                f" || /root/dragonmodule v2rayadd {{}} {{}} {{}} {{}} {{}} 2>/dev/null'.format(*cols[:5], *cols[:5]))\n"
                 f"    elif len(cols) >= 4:\n"
-                f"        os.system('/root/pmaster_agent createssh {{}} {{}} {{}} {{}} 2>/dev/null || /root/dragonmodule createssh {{}} {{}} {{}} {{}} 2>/dev/null'.format(*cols[:4], *cols[:4]))\n"
+                f"        os.system('/root/pmaster_agent createssh {{}} {{}} {{}} {{}} 2>/dev/null"
+                f" || /root/dragonmodule createssh {{}} {{}} {{}} {{}} 2>/dev/null'.format(*cols[:4], *cols[:4]))\n"
                 f"os.remove('/tmp/pmg_sync_batch.txt')\n"
                 f"print('BATCH_OK:{len(batch)}')\n"
                 f"PYEOF"
@@ -192,8 +261,10 @@ def sync_users_to_server(ip: str, port: int, auth_token: str, users: list) -> tu
             errors.append(f"lote {idx + 1}/{len(batches)}: {out or 'sem resposta'}")
 
     if errors:
-        return False, f'{synced}/{total} sincronizados. Erros: {"; ".join(errors)}'
-    return True, f'{synced} usuários sincronizados'
+        return False, f'{synced}/{total} criados{skip_info}. Erros: {"; ".join(errors)}'
+    return True, f'{synced} usuários sincronizados{skip_info}'
+
+
 
 
 def install_modules_ssh(ip: str, root_user: str, root_password: str, auth_token: str) -> tuple:
