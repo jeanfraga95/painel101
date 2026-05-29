@@ -30,13 +30,28 @@
             <input type="number" id="cu_limit" class="form-control" value="1" min="1">
           </div>
           <div class="col-md-4">
-            <label class="form-label">Servidor</label>
-            <select id="cu_server" class="form-select">
-              <option value="">Selecione...</option>
-              {% for s in servers if servers is defined %}
-              <option value="{{ s.id }}">{{ s.name }}</option>
-              {% endfor %}
+            <label class="form-label">Servidor <span class="text-danger">*</span></label>
+            <select id="cu_server" class="form-select" required>
+              <option value="">— Selecione o servidor —</option>
+              {% if categories is defined %}
+                {% for cat in categories %}
+                  {% set cat_srvs = servers | selectattr('category_id', 'equalto', cat.id) | list if servers is defined else [] %}
+                  {% if cat_srvs %}
+                  <optgroup label="{{ cat.name }}">
+                    {% for s in cat_srvs %}
+                    <option value="{{ s.id }}">{{ s.name }}</option>
+                    {% endfor %}
+                  </optgroup>
+                  {% endif %}
+                {% endfor %}
+              {% endif %}
+              {% if servers is defined %}
+                {% for s in servers if not s.category_id %}
+                <option value="{{ s.id }}">{{ s.name }}</option>
+                {% endfor %}
+              {% endif %}
             </select>
+            <div class="invalid-feedback">Selecione um servidor.</div>
           </div>
           <div class="col-12">
             <div class="form-check form-switch">
@@ -100,13 +115,28 @@
             <input type="number" id="ct_limit" class="form-control" value="1" min="1">
           </div>
           <div class="col-6">
-            <label class="form-label">Servidor</label>
-            <select id="ct_server" class="form-select">
-              <option value="">Selecione...</option>
-              {% for s in servers if servers is defined %}
-              <option value="{{ s.id }}">{{ s.name }}</option>
-              {% endfor %}
+            <label class="form-label">Servidor <span class="text-danger">*</span></label>
+            <select id="ct_server" class="form-select" required>
+              <option value="">— Selecione o servidor —</option>
+              {% if categories is defined %}
+                {% for cat in categories %}
+                  {% set cat_srvs = servers | selectattr('category_id', 'equalto', cat.id) | list if servers is defined else [] %}
+                  {% if cat_srvs %}
+                  <optgroup label="{{ cat.name }}">
+                    {% for s in cat_srvs %}
+                    <option value="{{ s.id }}">{{ s.name }}</option>
+                    {% endfor %}
+                  </optgroup>
+                  {% endif %}
+                {% endfor %}
+              {% endif %}
+              {% if servers is defined %}
+                {% for s in servers if not s.category_id %}
+                <option value="{{ s.id }}">{{ s.name }}</option>
+                {% endfor %}
+              {% endif %}
             </select>
+            <div class="invalid-feedback">Selecione um servidor.</div>
           </div>
           <div class="col-12">
             <div class="form-check form-switch">
@@ -203,15 +233,22 @@ function copyResult(btnEl) {
 // pmCopy removed — universalCopy (defined in base.html) handles all cases including HTTP + modal focus-trap
 
 function submitCreateUser() {
+  const srvEl = document.getElementById('cu_server');
+  if (!srvEl.value) {
+    srvEl.classList.add('is-invalid');
+    srvEl.focus();
+    return;
+  }
+  srvEl.classList.remove('is-invalid');
   const v2 = document.getElementById('cu_v2ray').checked;
   apiPost('/users/create', {
-    username: document.getElementById('cu_username').value,
-    password: document.getElementById('cu_password').value,
-    days: document.getElementById('cu_days').value,
-    limit: document.getElementById('cu_limit').value,
-    server_id: document.getElementById('cu_server').value,
+    username:  document.getElementById('cu_username').value,
+    password:  document.getElementById('cu_password').value,
+    days:      document.getElementById('cu_days').value,
+    limit:     document.getElementById('cu_limit').value,
+    server_id: srvEl.value,
     use_v2ray: v2 ? '1' : '0',
-    uuid: v2 ? document.getElementById('cu_uuid').value : '',
+    uuid:      v2 ? document.getElementById('cu_uuid').value : '',
   }, d => {
     if (d.success) showResult(d.user);
     else showToast(d.message, 'danger');
@@ -219,13 +256,20 @@ function submitCreateUser() {
 }
 
 function submitCreateTest() {
+  const srvEl = document.getElementById('ct_server');
+  if (!srvEl.value) {
+    srvEl.classList.add('is-invalid');
+    srvEl.focus();
+    return;
+  }
+  srvEl.classList.remove('is-invalid');
   const v2 = document.getElementById('ct_v2ray').checked;
   apiPost('/users/test', {
-    username: document.getElementById('ct_username').value,
-    password: document.getElementById('ct_password').value,
-    hours: document.getElementById('ct_hours').value,
-    limit: document.getElementById('ct_limit').value,
-    server_id: document.getElementById('ct_server').value,
+    username:  document.getElementById('ct_username').value,
+    password:  document.getElementById('ct_password').value,
+    hours:     document.getElementById('ct_hours').value,
+    limit:     document.getElementById('ct_limit').value,
+    server_id: srvEl.value,
     use_v2ray: v2 ? '1' : '0',
   }, d => {
     if (d.success) showResult(d.user);
