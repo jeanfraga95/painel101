@@ -283,8 +283,11 @@ def users_list():
     page = min(page, total_pages)
     users_page = users[(page - 1) * per_page: page * per_page]
 
-    servers = db.get_servers()
+    servers    = db.get_servers()
     server_map = {s['id']: s for s in servers}
+    # Servidores visíveis ao usuário atual (para o modal de criação)
+    user_servers   = db.get_servers_for_user(user)
+    categories     = db.get_server_categories()
 
     all_panel_users_map = {}
     for pu in db.get_db().execute("SELECT id, username FROM panel_users").fetchall():
@@ -297,7 +300,8 @@ def users_list():
         all_resellers = db.get_all_resellers_under(user['id'])
 
     return render_template('shared/users.html',
-                           users=users_page, servers=servers, server_map=server_map,
+                           users=users_page, servers=user_servers, server_map=server_map,
+                           categories=categories,
                            owner_map=all_panel_users_map,
                            all_resellers=all_resellers,
                            sort=sort, search=search, filter_type=filter_type,
@@ -330,6 +334,9 @@ def create_user():
 
         if not username:
             return jsonify(success=False, message='Username inválido')
+
+        if not server_id:
+            return jsonify(success=False, message='Selecione um servidor')
 
         expires_at = (now_br() + timedelta(days=days)).strftime('%Y-%m-%d')
 
@@ -392,7 +399,6 @@ def create_user():
 @login_required
 def create_test():
     current_user = get_current_user()
-    servers = db.get_servers_for_user(current_user)
 
     username  = request.form.get('username', '').strip().lower()
     password  = request.form.get('password', '').strip()
@@ -401,6 +407,9 @@ def create_test():
     server_id = request.form.get('server_id', type=int)
     use_v2ray = request.form.get('use_v2ray') == '1'
     uuid      = db.random_uuid() if use_v2ray else None
+
+    if not server_id:
+        return jsonify(success=False, message='Selecione um servidor para o teste')
 
     if current_user['role'] != 'admin':
         if current_user['account_limit'] != -1:
@@ -411,7 +420,6 @@ def create_test():
     if not username:
         return jsonify(success=False, message='Username inválido')
 
-    # Store exact expiry in hours so job_cleanup_tests is accurate
     expires_at = (now_br() + timedelta(hours=hours)).strftime('%Y-%m-%d %H:%M:%S')
 
     ok, msg, new_id = db.create_ssh_user(
@@ -421,7 +429,6 @@ def create_test():
     if not ok:
         return jsonify(success=False, message=msg)
 
-    # Create on server using exact minutes to match panel expiry
     server_msg = ''
     if server_id:
         srv = db.get_server(server_id)
@@ -432,6 +439,16 @@ def create_test():
                 uuid if use_v2ray else None
             )
             server_msg = s_msg
+            # Cria em todos os outros servidores da mesma categoria
+            if srv['category_id']:
+                cat_servers = db.get_servers_by_category(srv['category_id'])
+                for cat_srv in cat_servers:
+                    if cat_srv['id'] != server_id:
+                        sc.create_test_user_on_server(
+                            cat_srv['ip'], cat_srv['module_port'], cat_srv['auth_token'],
+                            username, password, hours, limit,
+                            uuid if use_v2ray else None
+                        )
 
     app_link = db.get_setting('app_link', '')
     return jsonify(
@@ -447,6 +464,7 @@ def create_test():
             'server_msg': server_msg,
         }
     )
+
 
 
 @app.route('/users/delete/<int:user_id>', methods=['POST'])
@@ -488,12 +506,20 @@ def renew_user(user_id):
     days = int(request.form.get('days', 30))
     if days < 1:
         return jsonify(success=False, message='Informe quantos dias renovar')
+
+    was_suspended = u['status'] == 'suspended'
     db.renew_ssh_user(user_id, days)
 
-    # Reload user to get the updated expires_at (which already has days stacked on top)
+    # Auto-reativa se estava suspenso — sem precisar clicar no botão de suspender
+    if was_suspended:
+        db.update_ssh_user(user_id, status='active')
+        unlock_cmd = (
+            f"passwd -u {u['username']} 2>/dev/null; "
+            f"/root/pmaster_agent unblockuser {u['username']} 2>/dev/null || true"
+        )
+        sc.broadcast_command(u, unlock_cmd, db)
+
     updated = db.get_ssh_user(user_id)
-    # Calculate TOTAL remaining days from today so the server sets the correct expiry
-    # (pmaster_agent timedata sets expiry = N days from now, it does NOT add)
     try:
         from datetime import date as _date
         exp_date = _date.fromisoformat(updated['expires_at'][:10])
@@ -501,12 +527,15 @@ def renew_user(user_id):
     except Exception:
         days_for_server = days
 
-    # Renew on ALL servers (primary + extras)
     srv_results = sc.broadcast_renew(u, days_for_server, db)
-    server_msg = '; '.join(f"{n}:{'OK' if ok else msg}" for n, ok, msg in srv_results) if srv_results else ''
+    server_msg  = '; '.join(f"{n}:{'OK' if ok else msg}" for n, ok, msg in srv_results) if srv_results else ''
 
-    new_exp = updated['expires_at'][:10] if updated else ''
-    return jsonify(success=True, message=f'Renovado +{days} dias. Novo vencimento: {new_exp}', server_msg=server_msg, new_expiry=new_exp)
+    new_exp    = updated['expires_at'][:10] if updated else ''
+    reativado  = ' e reativado' if was_suspended else ''
+    return jsonify(success=True,
+                   message=f'Renovado{reativado} +{days} dias. Novo vencimento: {new_exp}',
+                   server_msg=server_msg, new_expiry=new_exp,
+                   was_suspended=was_suspended)
 
 
 @app.route('/users/update/<int:user_id>', methods=['POST'])
@@ -847,7 +876,9 @@ def resellers_list():
     return render_template('shared/resellers.html',
                            resellers=resellers, parent_map=parent_map,
                            all_servers=all_servers,
+                           all_categories=db.get_server_categories(),
                            server_assign_map=server_assign_map,
+                           category_assign_map={r['id']: db.get_reseller_categories(r['id']) for r in resellers},
                            usage_map=usage_map,
                            filter_resellers=filter_resellers,
                            f_type=f_type, f_parent=f_parent)
@@ -930,6 +961,18 @@ def set_reseller_servers_route(reseller_id):
     sids = [int(x) for x in server_ids_raw.split(',') if x.strip().isdigit()]
     db.set_reseller_servers(reseller_id, sids)
     return jsonify(success=True, message=f'{len(sids)} servidor(es) atribuído(s)')
+
+
+@app.route('/resellers/set_categories/<int:reseller_id>', methods=['POST'])
+@login_required
+def set_reseller_categories_route(reseller_id):
+    current_user = get_current_user()
+    if current_user['role'] != 'admin':
+        return jsonify(success=False, message='Apenas admin pode atribuir categorias')
+    cat_ids_raw = request.form.get('category_ids', '')
+    cids = [int(x) for x in cat_ids_raw.split(',') if x.strip().isdigit()]
+    db.set_reseller_categories(reseller_id, cids)
+    return jsonify(success=True, message=f'{len(cids)} categoria(s) atribuída(s)')
 
 
 @app.route('/resellers/delete/<int:reseller_id>', methods=['POST'])
