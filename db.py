@@ -80,6 +80,14 @@ CREATE TABLE IF NOT EXISTS reseller_servers (
     FOREIGN KEY (server_id)   REFERENCES servers(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS reseller_categories (
+    reseller_id INTEGER NOT NULL,
+    category_id INTEGER NOT NULL,
+    PRIMARY KEY (reseller_id, category_id),
+    FOREIGN KEY (reseller_id) REFERENCES panel_users(id) ON DELETE CASCADE,
+    FOREIGN KEY (category_id) REFERENCES server_categories(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS server_categories (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     name       TEXT    NOT NULL UNIQUE,
@@ -665,36 +673,73 @@ def set_reseller_servers(reseller_id: int, server_ids: list):
     conn.close()
 
 
+def get_reseller_categories(reseller_id: int) -> list:
+    """Return list of category_ids assigned to a reseller."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT category_id FROM reseller_categories WHERE reseller_id=?",
+        (reseller_id,)
+    ).fetchall()
+    conn.close()
+    return [r['category_id'] for r in rows]
+
+
+def set_reseller_categories(reseller_id: int, category_ids: list):
+    """Replace all category assignments for a reseller."""
+    conn = get_db()
+    conn.execute("DELETE FROM reseller_categories WHERE reseller_id=?", (reseller_id,))
+    for cid in category_ids:
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO reseller_categories (reseller_id, category_id) VALUES (?,?)",
+                (reseller_id, int(cid))
+            )
+        except Exception:
+            pass
+    conn.commit()
+    conn.close()
+
+
 def get_servers_for_user(panel_user) -> list:
-    """Return servers available to a panel user (admin=all, reseller=assigned)."""
+    """Return servers available to a panel user (admin=all, reseller=assigned servers + category servers)."""
     conn = get_db()
     if panel_user['role'] == 'admin':
         rows = conn.execute("SELECT * FROM servers ORDER BY name").fetchall()
         conn.close()
         return rows
-    
-    server_ids = get_reseller_servers(panel_user['id'])
+
+    def _collect_ids(uid):
+        """Return set of server IDs from individual + category assignments."""
+        ids = set(get_reseller_servers(uid))
+        for cat_id in get_reseller_categories(uid):
+            for s in get_servers_by_category(cat_id):
+                ids.add(s['id'])
+        return ids
+
+    server_ids = _collect_ids(panel_user['id'])
+
     if not server_ids:
         # walk up hierarchy
         parent_id = panel_user['parent_id']
         while parent_id:
-            server_ids = get_reseller_servers(parent_id)
+            server_ids = _collect_ids(parent_id)
             if server_ids:
                 break
             parent = conn.execute("SELECT parent_id FROM panel_users WHERE id=?", (parent_id,)).fetchone()
             parent_id = parent['parent_id'] if parent else None
-    
+
     if not server_ids:
         conn.close()
         return []
-    
+
     placeholders = ','.join('?' * len(server_ids))
     rows = conn.execute(
         f"SELECT * FROM servers WHERE id IN ({placeholders}) ORDER BY name",
-        server_ids
+        list(server_ids)
     ).fetchall()
     conn.close()
     return rows
+
 
 
 def migrate_schema():
@@ -712,6 +757,11 @@ def migrate_schema():
             reseller_id INTEGER NOT NULL,
             server_id   INTEGER NOT NULL,
             PRIMARY KEY (reseller_id, server_id)
+        );
+        CREATE TABLE IF NOT EXISTS reseller_categories (
+            reseller_id INTEGER NOT NULL,
+            category_id INTEGER NOT NULL,
+            PRIMARY KEY (reseller_id, category_id)
         );
     """)
     conn.commit()
