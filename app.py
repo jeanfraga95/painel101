@@ -599,6 +599,7 @@ def recreate_user_on_server(user_id):
     u = db.get_ssh_user(user_id)
     if not u:
         return jsonify(success=False, message='Usuário não encontrado')
+    u = dict(u)  # sqlite3.Row → dict (necessário para usar .get())
     if current_user['role'] != 'admin':
         tree_ids = [current_user['id']] + [s['id'] for s in db.get_all_resellers_under(current_user['id'])]
         if u['owner_id'] not in tree_ids:
