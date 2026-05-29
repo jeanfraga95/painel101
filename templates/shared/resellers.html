@@ -114,7 +114,7 @@
                 </button>
                 {% if current_user.role == 'admin' %}
                 <button class="btn btn-outline-secondary" title="Atribuir servidores"
-                        onclick="openServers({{ r.id }}, '{{ r.username }}', {{ server_assign_map.get(r.id, [])|tojson }})">
+                        onclick="openServers({{ r.id }}, '{{ r.username }}', {{ server_assign_map.get(r.id, [])|tojson }}, {{ category_assign_map.get(r.id, [])|tojson }})">
                   <i class="fas fa-server"></i>
                 </button>
                 <button class="btn btn-outline-primary" title="Transferir revenda"
@@ -243,23 +243,66 @@
   <div class="modal-dialog">
     <div class="modal-content">
       <div class="modal-header">
-        <h6 class="modal-title"><i class="fas fa-server me-2"></i>Servidores — <span id="srv_name"></span></h6>
+        <h6 class="modal-title"><i class="fas fa-server me-2"></i>Acesso — <span id="srv_name"></span></h6>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
-      <div class="modal-body" id="srv_body">
-        {% if all_servers %}
-          {% for s in all_servers %}
-          <div class="form-check">
-            <input class="form-check-input srv_cb" type="checkbox"
-                   value="{{ s.id }}" id="srv_chk_{{ s.id }}">
-            <label class="form-check-label" for="srv_chk_{{ s.id }}">
-              {{ s.name }} <small class="text-muted">({{ s.ip }})</small>
-            </label>
+      <div class="modal-body">
+        <!-- Tabs -->
+        <ul class="nav nav-tabs nav-sm mb-3" id="srvTabs">
+          <li class="nav-item">
+            <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab_servers">
+              <i class="fas fa-server me-1"></i>Servidores
+            </button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab_categories">
+              <i class="fas fa-layer-group me-1"></i>Categorias
+            </button>
+          </li>
+        </ul>
+        <div class="tab-content">
+
+          <!-- Servidores individuais -->
+          <div class="tab-pane fade show active" id="tab_servers">
+            <p class="text-muted small mb-2">Servidores específicos que a revenda pode usar:</p>
+            {% if all_servers %}
+              {% for s in all_servers %}
+              <div class="form-check">
+                <input class="form-check-input srv_cb" type="checkbox"
+                       value="{{ s.id }}" id="srv_chk_{{ s.id }}">
+                <label class="form-check-label" for="srv_chk_{{ s.id }}">
+                  {{ s.name }} <small class="text-muted">({{ s.ip }})</small>
+                </label>
+              </div>
+              {% endfor %}
+            {% else %}
+              <p class="text-muted small">Nenhum servidor cadastrado.</p>
+            {% endif %}
           </div>
-          {% endfor %}
-        {% else %}
-          <p class="text-muted">Nenhum servidor cadastrado. Adicione servidores primeiro.</p>
-        {% endif %}
+
+          <!-- Categorias -->
+          <div class="tab-pane fade" id="tab_categories">
+            <p class="text-muted small mb-2">
+              Ao atribuir uma categoria, a revenda terá acesso a <strong>todos</strong> os servidores dela,
+              incluindo novos que forem adicionados futuramente:
+            </p>
+            {% if all_categories %}
+              {% for cat in all_categories %}
+              <div class="form-check">
+                <input class="form-check-input cat_cb" type="checkbox"
+                       value="{{ cat.id }}" id="cat_chk_{{ cat.id }}">
+                <label class="form-check-label" for="cat_chk_{{ cat.id }}">
+                  <i class="fas fa-layer-group me-1 text-primary"></i>
+                  <strong>{{ cat.name }}</strong>
+                </label>
+              </div>
+              {% endfor %}
+            {% else %}
+              <p class="text-muted small">Nenhuma categoria cadastrada. Crie categorias em <a href="/servers">Servidores</a>.</p>
+            {% endif %}
+          </div>
+
+        </div>
       </div>
       <div class="modal-footer">
         <input type="hidden" id="srv_reseller_id">
@@ -371,22 +414,34 @@ function submitChangePw() {
   });
 }
 
-function openServers(id, name, assigned) {
+function openServers(id, name, assigned, assignedCats) {
   document.getElementById('srv_reseller_id').value = id;
-  document.getElementById('srv_name').textContent = name;
+  document.getElementById('srv_name').textContent  = name;
   document.querySelectorAll('.srv_cb').forEach(cb => {
     cb.checked = assigned.includes(parseInt(cb.value));
   });
+  document.querySelectorAll('.cat_cb').forEach(cb => {
+    cb.checked = (assignedCats || []).includes(parseInt(cb.value));
+  });
+  // Reset to servers tab
+  document.querySelector('[data-bs-target="#tab_servers"]').click();
   new bootstrap.Modal(document.getElementById('serversModal')).show();
 }
 
 function submitServers() {
-  const id = document.getElementById('srv_reseller_id').value;
-  const sids = [...document.querySelectorAll('.srv_cb:checked')].map(c=>c.value).join(',');
-  apiPost(`/resellers/set_servers/${id}`, {server_ids: sids}, d => {
-    showToast(d.message, d.success ? 'success' : 'danger');
-    if (d.success) { bootstrap.Modal.getInstance(document.getElementById('serversModal'))?.hide(); setTimeout(()=>location.reload(),800); }
-  });
+  const id   = document.getElementById('srv_reseller_id').value;
+  const sids = [...document.querySelectorAll('.srv_cb:checked')].map(c => c.value).join(',');
+  const cids = [...document.querySelectorAll('.cat_cb:checked')].map(c => c.value).join(',');
+
+  // Save servers and categories in parallel
+  Promise.all([
+    fetch(`/resellers/set_servers/${id}`,    {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:`server_ids=${sids}`}),
+    fetch(`/resellers/set_categories/${id}`, {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:`category_ids=${cids}`}),
+  ]).then(() => {
+    showToast('Acesso atualizado com sucesso', 'success');
+    bootstrap.Modal.getInstance(document.getElementById('serversModal'))?.hide();
+    setTimeout(() => location.reload(), 700);
+  }).catch(() => showToast('Erro ao salvar', 'danger'));
 }
 
 function renewReseller(id) {
