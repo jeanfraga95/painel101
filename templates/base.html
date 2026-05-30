@@ -164,13 +164,20 @@ function showToast(msg, type='success') {
   setTimeout(() => document.getElementById(id)?.remove(), 4000);
 }
 
-function apiPost(url, data, cb) {
+function apiPost(url, data, cb, errCb) {
   const fd = new FormData();
   for (const [k,v] of Object.entries(data)) fd.append(k, v);
-  fetch(url, {method:'POST', body:fd})
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 60000); // 60s timeout
+  fetch(url, {method:'POST', body:fd, signal: ctrl.signal})
     .then(r => r.json())
-    .then(d => cb(d))
-    .catch(e => showToast('Erro: ' + e.message, 'danger'));
+    .then(d => { clearTimeout(timer); cb(d); })
+    .catch(e => {
+      clearTimeout(timer);
+      const msg = e.name === 'AbortError' ? 'Tempo de resposta esgotado' : ('Erro: ' + e.message);
+      if (errCb) errCb(e);
+      else showToast(msg, 'danger');
+    });
 }
 
 // ── Universal Copy ──────────────────────────────────────────────────────────
