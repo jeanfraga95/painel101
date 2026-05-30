@@ -8,6 +8,7 @@ import json
 import os
 import secrets
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
 from datetime import datetime, timedelta
 from functools import wraps
 
@@ -365,20 +366,31 @@ def create_user():
         if not ok:
             return jsonify(success=False, message=msg)
 
-        # Cria em TODOS os servidores da categoria
-        server_msg = ''
-        for srv in target_servers:
-            s_ok, s_msg = sc.create_ssh_user_on_server(
+        # Cria em TODOS os servidores da categoria em paralelo
+        def _create_on(srv):
+            return sc.create_ssh_user_on_server(
                 srv['ip'], srv['module_port'], srv['auth_token'],
                 username, password, days, limit, uuid if use_v2ray else None
             )
-            if not server_msg:
-                server_msg = s_msg
+
+        server_msg = ''
+        ok_count   = 0
+        with ThreadPoolExecutor(max_workers=len(target_servers)) as pool:
+            futures = {pool.submit(_create_on, srv): srv for srv in target_servers}
+            try:
+                for fut in as_completed(futures, timeout=30):
+                    s_ok, s_msg = fut.result()
+                    if s_ok:
+                        ok_count += 1
+                    if not server_msg:
+                        server_msg = s_msg
+            except FuturesTimeout:
+                server_msg = 'Alguns servidores demoraram e foram ignorados'
 
         app_link = db.get_setting('app_link', '')
         return jsonify(
             success=True,
-            message=f'Usuário criado em {len(target_servers)} servidor(es)',
+            message=f'Usuário criado em {ok_count}/{len(target_servers)} servidor(es)',
             user={
                 'username':   username,
                 'password':   password,
@@ -439,21 +451,32 @@ def create_test():
     if not ok:
         return jsonify(success=False, message=msg)
 
-    # Cria em TODOS os servidores da categoria
-    server_msg = ''
-    for srv in target_servers:
-        s_ok, s_msg = sc.create_test_user_on_server(
+    # Cria em TODOS os servidores da categoria em paralelo
+    def _create_test_on(srv):
+        return sc.create_test_user_on_server(
             srv['ip'], srv['module_port'], srv['auth_token'],
             username, password, hours, limit,
             uuid if use_v2ray else None
         )
-        if not server_msg:
-            server_msg = s_msg
+
+    server_msg = ''
+    ok_count   = 0
+    with ThreadPoolExecutor(max_workers=len(target_servers)) as pool:
+        futures = {pool.submit(_create_test_on, srv): srv for srv in target_servers}
+        try:
+            for fut in as_completed(futures, timeout=30):
+                s_ok, s_msg = fut.result()
+                if s_ok:
+                    ok_count += 1
+                if not server_msg:
+                    server_msg = s_msg
+        except FuturesTimeout:
+            server_msg = 'Alguns servidores demoraram e foram ignorados'
 
     app_link = db.get_setting('app_link', '')
     return jsonify(
         success=True,
-        message=f'Teste criado em {len(target_servers)} servidor(es)',
+        message=f'Teste criado em {ok_count}/{len(target_servers)} servidor(es)',
         user={
             'username':   username,
             'password':   password,
