@@ -285,9 +285,16 @@ def users_list():
 
     servers    = db.get_servers()
     server_map = {s['id']: s for s in servers}
-    # Servidores visíveis ao usuário atual (para o modal de criação)
-    user_servers   = db.get_servers_for_user(user)
-    categories     = db.get_server_categories()
+    categories = db.get_server_categories()
+
+    # Categorias disponíveis para o usuário logado (para o modal de criação)
+    user_servers = db.get_servers_for_user(user)
+    if user['role'] == 'admin':
+        user_categories = categories
+    else:
+        avail_cat_ids = set(s['category_id'] for s in user_servers if s['category_id'])
+        avail_cat_ids.update(db.get_reseller_categories(user['id']))
+        user_categories = [c for c in categories if c['id'] in avail_cat_ids]
 
     all_panel_users_map = {}
     for pu in db.get_db().execute("SELECT id, username FROM panel_users").fetchall():
@@ -301,7 +308,7 @@ def users_list():
 
     return render_template('shared/users.html',
                            users=users_page, servers=user_servers, server_map=server_map,
-                           categories=categories,
+                           categories=user_categories,
                            owner_map=all_panel_users_map,
                            all_resellers=all_resellers,
                            sort=sort, search=search, filter_type=filter_type,
@@ -314,85 +321,83 @@ def users_list():
 @login_required
 def create_user():
     current_user = get_current_user()
-    servers = db.get_servers_for_user(current_user)
 
     if request.method == 'POST':
-        username = request.form.get('username', '').strip().lower()
-        password = request.form.get('password', '').strip()
-        days = int(request.form.get('days', 30))
-        limit = int(request.form.get('limit', 1))
-        server_id = request.form.get('server_id', type=int)
-        use_v2ray = request.form.get('use_v2ray') == '1'
-        uuid = request.form.get('uuid', '').strip() or (db.random_uuid() if use_v2ray else None)
+        username    = request.form.get('username', '').strip().lower()
+        password    = request.form.get('password', '').strip()
+        days        = int(request.form.get('days', 30))
+        limit       = int(request.form.get('limit', 1))
+        category_id = request.form.get('category_id', type=int)
+        use_v2ray   = request.form.get('use_v2ray') == '1'
+        uuid        = request.form.get('uuid', '').strip() or (db.random_uuid() if use_v2ray else None)
 
-        # Check panel user limits
         if current_user['role'] != 'admin':
-            if current_user['account_limit'] != -1:  # -1 = unlimited
+            if current_user['account_limit'] != -1:
                 avail = current_user['account_limit'] - current_user['accounts_used']
                 if avail <= 0:
                     return jsonify(success=False, message='Limite de contas atingido')
 
         if not username:
             return jsonify(success=False, message='Username inválido')
+        if not category_id:
+            return jsonify(success=False, message='Selecione uma categoria')
 
-        if not server_id:
-            return jsonify(success=False, message='Selecione um servidor')
+        target_servers = db.get_servers_by_category(category_id)
+        if not target_servers:
+            return jsonify(success=False, message='Nenhum servidor ativo nesta categoria')
 
+        primary_server_id = target_servers[0]['id']
         expires_at = (now_br() + timedelta(days=days)).strftime('%Y-%m-%d')
 
-        # Check if user already exists on the server
-        if server_id:
-            srv = db.get_server(server_id)
-            if srv:
-                chk_ok, chk_out = sc.send_command(
-                    srv['ip'], srv['module_port'], srv['auth_token'],
-                    f"id {username} 2>/dev/null && echo EXISTS || echo NOTFOUND"
-                )
-                if chk_ok and 'EXISTS' in chk_out:
-                    return jsonify(success=False, message=f'Usuário "{username}" já existe no servidor SSH. Escolha outro nome.')
+        # Verifica duplicidade no primeiro servidor da categoria
+        first_srv = target_servers[0]
+        chk_ok, chk_out = sc.send_command(
+            first_srv['ip'], first_srv['module_port'], first_srv['auth_token'],
+            f"id {username} 2>/dev/null && echo EXISTS || echo NOTFOUND"
+        )
+        if chk_ok and 'EXISTS' in chk_out:
+            return jsonify(success=False, message=f'Usuário "{username}" já existe no servidor. Escolha outro nome.')
 
         ok, msg, new_id = db.create_ssh_user(
-            username, password, current_user['id'], server_id,
+            username, password, current_user['id'], primary_server_id,
             expires_at, limit, uuid if use_v2ray else None, 0
         )
         if not ok:
             return jsonify(success=False, message=msg)
 
-        # Create on server(s) - including all servers in the same category
+        # Cria em TODOS os servidores da categoria
         server_msg = ''
-        if server_id:
-            srv = db.get_server(server_id)
-            if srv:
-                s_ok, s_msg = sc.create_ssh_user_on_server(
-                    srv['ip'], srv['module_port'], srv['auth_token'],
-                    username, password, days, limit, uuid if use_v2ray else None
-                )
+        for srv in target_servers:
+            s_ok, s_msg = sc.create_ssh_user_on_server(
+                srv['ip'], srv['module_port'], srv['auth_token'],
+                username, password, days, limit, uuid if use_v2ray else None
+            )
+            if not server_msg:
                 server_msg = s_msg
-                # Also create on other servers in same category
-                if srv['category_id']:
-                    cat_servers = db.get_servers_by_category(srv['category_id'])
-                    for cat_srv in cat_servers:
-                        if cat_srv['id'] != server_id:
-                            sc.create_ssh_user_on_server(
-                                cat_srv['ip'], cat_srv['module_port'], cat_srv['auth_token'],
-                                username, password, days, limit, uuid if use_v2ray else None
-                            )
 
         app_link = db.get_setting('app_link', '')
         return jsonify(
             success=True,
-            message='Usuário criado com sucesso',
+            message=f'Usuário criado em {len(target_servers)} servidor(es)',
             user={
-                'username': username,
-                'password': password,
+                'username':   username,
+                'password':   password,
                 'expires_at': expires_at,
-                'uuid': uuid if use_v2ray else None,
-                'app_link': app_link,
+                'uuid':       uuid if use_v2ray else None,
+                'app_link':   app_link,
                 'server_msg': server_msg,
             }
         )
 
-    return render_template('shared/create_user.html', servers=servers, is_test=False)
+    user_servers   = db.get_servers_for_user(current_user)
+    all_cats       = db.get_server_categories()
+    avail_cat_ids  = set(s['category_id'] for s in user_servers if s['category_id'])
+    if current_user['role'] != 'admin':
+        avail_cat_ids.update(db.get_reseller_categories(current_user['id']))
+        user_categories = [c for c in all_cats if c['id'] in avail_cat_ids]
+    else:
+        user_categories = all_cats
+    return render_template('shared/create_user.html', categories=user_categories, is_test=False)
 
 
 @app.route('/users/test', methods=['POST'])
@@ -400,16 +405,16 @@ def create_user():
 def create_test():
     current_user = get_current_user()
 
-    username  = request.form.get('username', '').strip().lower()
-    password  = request.form.get('password', '').strip()
-    hours     = max(1, int(request.form.get('hours', request.form.get('days', 2))))
-    limit     = int(request.form.get('limit', 1))
-    server_id = request.form.get('server_id', type=int)
-    use_v2ray = request.form.get('use_v2ray') == '1'
-    uuid      = db.random_uuid() if use_v2ray else None
+    username    = request.form.get('username', '').strip().lower()
+    password    = request.form.get('password', '').strip()
+    hours       = max(1, int(request.form.get('hours', request.form.get('days', 2))))
+    limit       = int(request.form.get('limit', 1))
+    category_id = request.form.get('category_id', type=int)
+    use_v2ray   = request.form.get('use_v2ray') == '1'
+    uuid        = db.random_uuid() if use_v2ray else None
 
-    if not server_id:
-        return jsonify(success=False, message='Selecione um servidor para o teste')
+    if not category_id:
+        return jsonify(success=False, message='Selecione uma categoria para o teste')
 
     if current_user['role'] != 'admin':
         if current_user['account_limit'] != -1:
@@ -420,47 +425,42 @@ def create_test():
     if not username:
         return jsonify(success=False, message='Username inválido')
 
+    target_servers = db.get_servers_by_category(category_id)
+    if not target_servers:
+        return jsonify(success=False, message='Nenhum servidor ativo nesta categoria')
+
+    primary_server_id = target_servers[0]['id']
     expires_at = (now_br() + timedelta(hours=hours)).strftime('%Y-%m-%d %H:%M:%S')
 
     ok, msg, new_id = db.create_ssh_user(
-        username, password, current_user['id'], server_id,
+        username, password, current_user['id'], primary_server_id,
         expires_at, limit, uuid if use_v2ray else None, 1
     )
     if not ok:
         return jsonify(success=False, message=msg)
 
+    # Cria em TODOS os servidores da categoria
     server_msg = ''
-    if server_id:
-        srv = db.get_server(server_id)
-        if srv:
-            s_ok, s_msg = sc.create_test_user_on_server(
-                srv['ip'], srv['module_port'], srv['auth_token'],
-                username, password, hours, limit,
-                uuid if use_v2ray else None
-            )
+    for srv in target_servers:
+        s_ok, s_msg = sc.create_test_user_on_server(
+            srv['ip'], srv['module_port'], srv['auth_token'],
+            username, password, hours, limit,
+            uuid if use_v2ray else None
+        )
+        if not server_msg:
             server_msg = s_msg
-            # Cria em todos os outros servidores da mesma categoria
-            if srv['category_id']:
-                cat_servers = db.get_servers_by_category(srv['category_id'])
-                for cat_srv in cat_servers:
-                    if cat_srv['id'] != server_id:
-                        sc.create_test_user_on_server(
-                            cat_srv['ip'], cat_srv['module_port'], cat_srv['auth_token'],
-                            username, password, hours, limit,
-                            uuid if use_v2ray else None
-                        )
 
     app_link = db.get_setting('app_link', '')
     return jsonify(
         success=True,
-        message='Teste criado',
+        message=f'Teste criado em {len(target_servers)} servidor(es)',
         user={
-            'username': username,
-            'password': password,
+            'username':   username,
+            'password':   password,
             'expires_at': expires_at,
-            'uuid': uuid if use_v2ray else None,
-            'app_link': app_link,
-            'hours': hours,
+            'uuid':       uuid if use_v2ray else None,
+            'app_link':   app_link,
+            'hours':      hours,
             'server_msg': server_msg,
         }
     )
