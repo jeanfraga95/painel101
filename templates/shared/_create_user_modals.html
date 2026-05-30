@@ -58,7 +58,7 @@
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-        <button type="button" class="btn btn-primary" onclick="submitCreateUser()">
+        <button type="button" id="btnCreateUser" class="btn btn-primary" onclick="submitCreateUser()">
           <i class="fas fa-plus me-2"></i>Criar Usuário
         </button>
       </div>
@@ -124,7 +124,7 @@
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-        <button type="button" class="btn btn-warning text-dark" onclick="submitCreateTest()">
+        <button type="button" id="btnCreateTest" class="btn btn-warning text-dark" onclick="submitCreateTest()">
           <i class="fas fa-plus me-2"></i>Criar Teste
         </button>
       </div>
@@ -215,9 +215,19 @@ function autoSelectCategory(selectId) {
   const opts = [...sel.options].filter(o => o.value !== '');
   if (opts.length === 1) {
     sel.value = opts[0].value;
-    sel.closest('.col-6, .col-md-4')
-       ?.querySelector('.invalid-feedback')
-       ?.remove();
+  }
+}
+
+function _setBtnLoading(btnId, loading) {
+  const btn = document.getElementById(btnId);
+  if (!btn) return;
+  if (loading) {
+    btn.disabled = true;
+    btn._origHtml = btn.innerHTML;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Criando...';
+  } else {
+    btn.disabled = false;
+    if (btn._origHtml) btn.innerHTML = btn._origHtml;
   }
 }
 
@@ -230,6 +240,7 @@ function submitCreateUser() {
   }
   catEl.classList.remove('is-invalid');
   const v2 = document.getElementById('cu_v2ray').checked;
+  _setBtnLoading('btnCreateUser', true);
   apiPost('/users/create', {
     username:    document.getElementById('cu_username').value,
     password:    document.getElementById('cu_password').value,
@@ -239,8 +250,12 @@ function submitCreateUser() {
     use_v2ray:   v2 ? '1' : '0',
     uuid:        v2 ? document.getElementById('cu_uuid').value : '',
   }, d => {
+    _setBtnLoading('btnCreateUser', false);
     if (d.success) showResult(d.user);
     else showToast(d.message, 'danger');
+  }, () => {
+    _setBtnLoading('btnCreateUser', false);
+    showToast('Erro de conexão ao criar usuário', 'danger');
   });
 }
 
@@ -253,6 +268,7 @@ function submitCreateTest() {
   }
   catEl.classList.remove('is-invalid');
   const v2 = document.getElementById('ct_v2ray').checked;
+  _setBtnLoading('btnCreateTest', true);
   apiPost('/users/test', {
     username:    document.getElementById('ct_username').value,
     password:    document.getElementById('ct_password').value,
@@ -261,8 +277,12 @@ function submitCreateTest() {
     category_id: catEl.value,
     use_v2ray:   v2 ? '1' : '0',
   }, d => {
+    _setBtnLoading('btnCreateTest', false);
     if (d.success) showResult(d.user);
     else showToast(d.message, 'danger');
+  }, () => {
+    _setBtnLoading('btnCreateTest', false);
+    showToast('Erro de conexão ao criar teste', 'danger');
   });
 }
 
