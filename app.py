@@ -231,7 +231,12 @@ def dashboard():
             'days_panel': days_panel,
         }
         servers = db.get_servers_for_user(user)
-        return render_template('reseller/dashboard.html', stats=stats, expiring=expiring, servers=servers)
+        all_cats      = db.get_server_categories()
+        avail_cat_ids = set(s['category_id'] for s in servers if s['category_id'])
+        avail_cat_ids.update(db.get_reseller_categories(user['id']))
+        user_categories = [c for c in all_cats if c['id'] in avail_cat_ids]
+        return render_template('reseller/dashboard.html', stats=stats, expiring=expiring,
+                               servers=servers, categories=user_categories)
 
 
 # ---------------------------------------------------------------------------
