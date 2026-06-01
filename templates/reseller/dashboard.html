@@ -86,55 +86,65 @@
 {# ========== MODAIS (mesmos da página de usuários) ========== #}
 {% include 'shared/_create_user_modals.html' %}
 
-{# ========== FALLBACK PARA CARREGAR SERVIDORES VIA API ========== #}
+{# ========== HACK: extrair servidores da página /users via fetch ========== #}
 <script>
   (function() {
-    // Se a variável 'servers' já foi passada pelo backend, os modais já virão preenchidos.
-    // Caso contrário, buscamos via fetch.
-    if (typeof servers !== 'undefined' && servers && servers.length) {
-      return; // já tem servidores, não precisa fazer nada
-    }
-
-    function populateServerSelects(serversList) {
+    // Função que preenche os selects com as opções extraídas
+    function populateServerSelects(optionsData) {
       const selects = document.querySelectorAll('#createUserModal select[name="server_id"], #createTestModal select[name="server_id"]');
       selects.forEach(select => {
-        // Limpa as opções existentes (exceto a primeira se for placeholder)
-        const firstOption = select.options[0];
+        // Guarda o primeiro option se for placeholder (value vazio)
+        const firstOpt = select.options[0];
         select.innerHTML = '';
-        if (firstOption && firstOption.value === '') {
-          select.appendChild(firstOption);
-        }
-        serversList.forEach(srv => {
-          const opt = document.createElement('option');
-          opt.value = srv.id;
-          opt.textContent = srv.name + (srv.ip ? ' (' + srv.ip + ')' : '');
-          select.appendChild(opt);
+        if (firstOpt && firstOpt.value === '') select.appendChild(firstOpt);
+        optionsData.forEach(opt => {
+          const option = document.createElement('option');
+          option.value = opt.value;
+          option.textContent = opt.text;
+          select.appendChild(option);
         });
       });
     }
 
-    // Tenta buscar servidores via API (ajuste a URL conforme sua aplicação)
-    fetch('/api/servers')
-      .then(response => response.json())
-      .then(data => {
-        if (data.servers && Array.isArray(data.servers) && data.servers.length) {
-          populateServerSelects(data.servers);
-        } else if (data && Array.isArray(data)) {
-          // Caso a API retorne diretamente um array
-          populateServerSelects(data);
+    // Verifica se os selects já estão populados (caso o backend tenha passado a variável 'servers')
+    const serverSelects = document.querySelectorAll('#createUserModal select[name="server_id"], #createTestModal select[name="server_id"]');
+    let alreadyPopulated = false;
+    serverSelects.forEach(sel => {
+      if (sel.options.length > 1) alreadyPopulated = true;
+    });
+    if (alreadyPopulated) return; // já tem opções, não precisa buscar
+
+    // Busca a página de listagem de usuários (a mesma que tem os modais funcionando)
+    fetch('{{ url_for("users_list") }}')
+      .then(response => response.text())
+      .then(html => {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        // Tenta encontrar o select de servidores dentro do modal (qualquer um dos dois modais)
+        let sourceSelect = doc.querySelector('#createUserModal select[name="server_id"]');
+        if (!sourceSelect) sourceSelect = doc.querySelector('#createTestModal select[name="server_id"]');
+        if (!sourceSelect) sourceSelect = doc.querySelector('select[name="server_id"]'); // fallback genérico
+
+        if (sourceSelect && sourceSelect.options.length > 1) {
+          const options = [];
+          for (let i = 0; i < sourceSelect.options.length; i++) {
+            const opt = sourceSelect.options[i];
+            if (opt.value !== '') { // ignora placeholder vazio
+              options.push({ value: opt.value, text: opt.textContent });
+            }
+          }
+          if (options.length) {
+            populateServerSelects(options);
+            console.log('✅ Servidores carregados da página /users');
+          } else {
+            console.warn('⚠️ Nenhuma opção válida encontrada');
+          }
         } else {
-          console.warn('Nenhum servidor encontrado na API.');
+          console.warn('⚠️ Não foi possível extrair servidores da página /users. Verifique se o modal está presente no HTML retornado.');
         }
       })
       .catch(err => {
-        console.warn('Erro ao carregar servidores para os modais:', err);
-        // Tenta uma segunda rota alternativa (se existir)
-        fetch('/servers/list')
-          .then(r => r.json())
-          .then(data => {
-            if (data.servers) populateServerSelects(data.servers);
-          })
-          .catch(e => console.warn('Falha também na rota alternativa:', e));
+        console.warn('❌ Erro ao buscar /users:', err);
       });
   })();
 </script>
