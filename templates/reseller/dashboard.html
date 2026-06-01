@@ -83,6 +83,59 @@
   {% endif %}
 </div>
 
-{# Pass servers to the modals — critical for reseller dashboard #}
+{# ========== MODAIS (mesmos da página de usuários) ========== #}
 {% include 'shared/_create_user_modals.html' %}
+
+{# ========== FALLBACK PARA CARREGAR SERVIDORES VIA API ========== #}
+<script>
+  (function() {
+    // Se a variável 'servers' já foi passada pelo backend, os modais já virão preenchidos.
+    // Caso contrário, buscamos via fetch.
+    if (typeof servers !== 'undefined' && servers && servers.length) {
+      return; // já tem servidores, não precisa fazer nada
+    }
+
+    function populateServerSelects(serversList) {
+      const selects = document.querySelectorAll('#createUserModal select[name="server_id"], #createTestModal select[name="server_id"]');
+      selects.forEach(select => {
+        // Limpa as opções existentes (exceto a primeira se for placeholder)
+        const firstOption = select.options[0];
+        select.innerHTML = '';
+        if (firstOption && firstOption.value === '') {
+          select.appendChild(firstOption);
+        }
+        serversList.forEach(srv => {
+          const opt = document.createElement('option');
+          opt.value = srv.id;
+          opt.textContent = srv.name + (srv.ip ? ' (' + srv.ip + ')' : '');
+          select.appendChild(opt);
+        });
+      });
+    }
+
+    // Tenta buscar servidores via API (ajuste a URL conforme sua aplicação)
+    fetch('/api/servers')
+      .then(response => response.json())
+      .then(data => {
+        if (data.servers && Array.isArray(data.servers) && data.servers.length) {
+          populateServerSelects(data.servers);
+        } else if (data && Array.isArray(data)) {
+          // Caso a API retorne diretamente um array
+          populateServerSelects(data);
+        } else {
+          console.warn('Nenhum servidor encontrado na API.');
+        }
+      })
+      .catch(err => {
+        console.warn('Erro ao carregar servidores para os modais:', err);
+        // Tenta uma segunda rota alternativa (se existir)
+        fetch('/servers/list')
+          .then(r => r.json())
+          .then(data => {
+            if (data.servers) populateServerSelects(data.servers);
+          })
+          .catch(e => console.warn('Falha também na rota alternativa:', e));
+      });
+  })();
+</script>
 {% endblock %}
