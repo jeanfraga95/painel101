@@ -32,6 +32,16 @@ detect_os() {
     info "Sistema: ${OS_ID} ${VERSION_ID:-}"
 }
 
+# ── Get PID listening on a port (compatível com awk POSIX/gawk/mawk) ───────────
+# Evita match(str, regex, array) que não existe no mawk (Debian/Ubuntu padrão)
+pid_on_port() {
+    local port="$1"
+    ss -tlnp 2>/dev/null \
+        | grep ":${port} " \
+        | grep -oP 'pid=\K[0-9]+' \
+        | head -1
+}
+
 # ── Stop whatever is using port 80 (apache, lighttpd, old nginx, etc.) ─────────
 stop_conflicting_webservers() {
     info "Liberando porta 80..."
@@ -42,11 +52,11 @@ stop_conflicting_webservers() {
             systemctl disable "$svc" 2>/dev/null || true
         fi
     done
-    # kill anything else still bound to port 80 (but not our own nginx)
+
     local nginx_pid
     nginx_pid=$(systemctl show -p MainPID nginx 2>/dev/null | cut -d= -f2)
     local pid80
-    pid80=$(ss -tlnp 2>/dev/null | awk '/:80 /{match($0,/pid=([0-9]+)/,a); if(a[1]) print a[1]}' | head -1)
+    pid80=$(pid_on_port 80)
     if [ -n "$pid80" ] && [ "$pid80" != "$nginx_pid" ] && [ "$pid80" != "0" ]; then
         warn "Processo $pid80 na porta 80 — encerrando..."
         kill -9 "$pid80" 2>/dev/null || true
@@ -58,7 +68,7 @@ stop_conflicting_webservers() {
 # ── Free panel port if something else is using it ──────────────────────────────
 free_panel_port() {
     local pid
-    pid=$(ss -tlnp 2>/dev/null | awk "/:${PANEL_PORT} /{match(\$0,/pid=([0-9]+)/,a); if(a[1]) print a[1]}" | head -1)
+    pid=$(pid_on_port "$PANEL_PORT")
     if [ -n "$pid" ] && [ "$pid" != "0" ]; then
         warn "Porta ${PANEL_PORT} em uso pelo PID $pid — encerrando..."
         kill -9 "$pid" 2>/dev/null || true
@@ -82,7 +92,7 @@ uninstall_existing() {
 install_system_deps() {
     banner "Instalando dependências..."
     case "${OS_ID}" in
-        ubuntu|debian|linuxmint)
+        ubuntu|debian|linuxmint|raspbian)
             apt-get update -qq 2>/dev/null
             DEBIAN_FRONTEND=noninteractive apt-get install -y \
                 curl wget git build-essential libssl-dev libffi-dev \
@@ -163,7 +173,6 @@ install_python_deps() {
 configure_nginx() {
     local domain="$1"
 
-    # Shared proxy snippet
     mkdir -p /etc/nginx/snippets /var/www/letsencrypt/.well-known/acme-challenge
 
     cat > /etc/nginx/snippets/proxy_params.conf << 'SNIPPET'
@@ -178,10 +187,8 @@ proxy_read_timeout 120s;
 client_max_body_size 110M;
 SNIPPET
 
-    # Remove Ubuntu default site that conflicts on port 80
     rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
 
-    # Self-signed cert for HTTPS catch-all (port 443 without domain)
     if [ ! -f /etc/nginx/ssl/pmg-selfsigned.crt ]; then
         mkdir -p /etc/nginx/ssl
         openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
@@ -190,25 +197,18 @@ SNIPPET
             -subj "/CN=painel-master/O=PMG/C=BR" 2>/dev/null
     fi
 
-    # Main nginx config
-    # HTTP port 80: catch-all + optional domain name
-    # HTTPS port 443: catch-all with self-signed (Cloudflare Full SSL / acesso direto)
     local server_name="_"
     [ -n "$domain" ] && server_name="${domain} www.${domain} _"
 
+    # ATENÇÃO: heredoc sem aspas no delimitador para expandir variáveis corretamente
     cat > /etc/nginx/sites-available/painel-master << NGCONF
 # Painel Master — gerado automaticamente
-# Compatível com Cloudflare Proxy (nuvem laranja):
-#   Cloudflare recebe HTTPS e repassa HTTP para este servidor.
-# Compatível com acesso direto por IP (HTTP e HTTPS com cert autoassinado).
 
-# HTTP — porta 80
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
     server_name ${server_name};
 
-    # Cloudflare real IP passthrough
     set_real_ip_from 103.21.244.0/22;
     set_real_ip_from 103.22.200.0/22;
     set_real_ip_from 103.31.4.0/22;
@@ -226,7 +226,6 @@ server {
     set_real_ip_from 198.41.128.0/17;
     real_ip_header CF-Connecting-IP;
 
-    # ACME challenge for certbot (used when requesting Let's Encrypt)
     location /.well-known/acme-challenge/ {
         root /var/www/letsencrypt;
     }
@@ -237,7 +236,6 @@ server {
     }
 }
 
-# HTTPS — porta 443 (cert autoassinado; troca para Let's Encrypt com pmgctl ssl)
 server {
     listen 443 ssl default_server;
     listen [::]:443 ssl default_server;
@@ -284,12 +282,15 @@ configure_service() {
     local secret_key
     secret_key=$(openssl rand -hex 32)
 
+    # NOTA: StartLimitIntervalSec e StartLimitBurst pertencem à seção [Unit] no
+    # systemd < 230 (Debian 9/Ubuntu 16). Movidos para [Unit] para compatibilidade.
     cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
 [Unit]
 Description=Painel Master
-# Wait for full network stack before starting
 After=network.target network-online.target nginx.service
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -298,7 +299,6 @@ WorkingDirectory=${INSTALL_DIR}
 Environment="PORT=${PANEL_PORT}"
 Environment="SECRET_KEY=${secret_key}"
 
-# Flush iptables rules on start (removes blocks from previous session)
 ExecStartPre=/sbin/iptables -F
 ExecStartPre=/sbin/iptables -t nat -F
 ExecStartPre=/sbin/iptables -t mangle -F
@@ -307,20 +307,74 @@ ExecStart=${INSTALL_DIR}/venv/bin/python ${INSTALL_DIR}/app.py
 Restart=always
 RestartSec=5
 TimeoutStartSec=30
-# Prevent restart storm after 5 failures in 60s
-StartLimitIntervalSec=60
-StartLimitBurst=5
 StandardOutput=journal
 StandardError=journal
 
 [Install]
-# Ensures service starts automatically on every boot
 WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
     systemctl enable "$SERVICE_NAME"
     log "Serviço configurado (auto-start no boot)"
+}
+
+# ── Set admin password directly in the database ────────────────────────────────
+# Não depende de db.py para o hash — gera o SHA-256 e faz UPDATE direto no SQLite.
+# Isso evita falha silenciosa caso db.py ou migrate_schema() tenha erro.
+set_admin_password() {
+    local plain_pass="$1"
+
+    info "Inicializando banco e configurando senha admin..."
+
+    # 1) Inicializa o banco via app/db (cria tabelas se não existirem)
+    "${INSTALL_DIR}/venv/bin/python" << 'PYINIT' 2>/dev/null
+import sys
+sys.path.insert(0, '/opt/painel-master')
+try:
+    import db
+    db.init_db()
+    for fn in ('migrate_schema', 'migrate_schema_v2', 'migrate_schema_v3'):
+        try:
+            getattr(db, fn)()
+        except Exception:
+            pass
+    print("DB inicializado")
+except Exception as e:
+    print(f"Aviso DB init: {e}")
+PYINIT
+
+    # 2) Gera hash e aplica — variáveis do shell expandidas aqui (sem aspas no heredoc)
+    local pw_hash
+    pw_hash=$("${INSTALL_DIR}/venv/bin/python" -c \
+        "import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" \
+        "${plain_pass}" 2>/dev/null)
+
+    if [ -z "$pw_hash" ]; then
+        warn "Não foi possível gerar hash da senha — usando sqlite3 direto"
+        pw_hash=$(echo -n "${plain_pass}" | openssl dgst -sha256 | awk '{print $2}')
+    fi
+
+    if [ -n "$pw_hash" ]; then
+        # UPDATE direto no SQLite — não depende de nenhum import do app
+        sqlite3 "${INSTALL_DIR}/painel.db" \
+            "UPDATE panel_users SET password_hash='${pw_hash}' WHERE username='admin';" \
+            2>/dev/null && log "Senha admin definida no banco" || \
+            warn "sqlite3 UPDATE falhou — verifique manualmente"
+
+        # Confirma linha afetada
+        local rows
+        rows=$(sqlite3 "${INSTALL_DIR}/painel.db" \
+            "SELECT COUNT(*) FROM panel_users WHERE username='admin' AND password_hash='${pw_hash}';" \
+            2>/dev/null || echo "0")
+        if [ "$rows" = "1" ]; then
+            log "Senha admin confirmada no banco ✔"
+        else
+            warn "Linha admin não encontrada após UPDATE — o app pode criar na 1ª inicialização"
+        fi
+    else
+        warn "Hash vazio — senha admin pode não ter sido definida"
+    fi
 }
 
 # ── Start service and show logs ─────────────────────────────────────────────────
@@ -353,7 +407,6 @@ start_service() {
 
 # ── Firewall ────────────────────────────────────────────────────────────────────
 open_firewall() {
-    # Flush first, then allow the needed ports
     iptables -F 2>/dev/null || true
     iptables -t nat -F 2>/dev/null || true
 
@@ -375,17 +428,17 @@ open_firewall() {
     log "Firewall configurado"
 }
 
-# ── nginx watchdog (restart nginx + painel if down after reboot) ───────────────
+# ── nginx watchdog ─────────────────────────────────────────────────────────────
 setup_watchdog() {
     cat > /etc/systemd/system/pmg-watchdog.service << 'WD'
 [Unit]
-Description=Painel Master — watchdog (reinicia nginx e painel se caírem)
+Description=Painel Master — watchdog
 After=network.target
 
 [Service]
 Type=oneshot
 ExecStart=/bin/bash -c '\
-    systemctl is-active nginx      2>/dev/null || systemctl start nginx      2>/dev/null; \
+    systemctl is-active nginx         2>/dev/null || systemctl start nginx         2>/dev/null; \
     systemctl is-active painel-master 2>/dev/null || systemctl start painel-master 2>/dev/null; \
     iptables -F 2>/dev/null || true'
 WD
@@ -410,10 +463,11 @@ WDT
 
 # ── Print final info ────────────────────────────────────────────────────────────
 print_info() {
-    local domain="$1" admin_pass="$2"
+    local domain="${1}"
+    local admin_pass="${2}"
     local SERVER_IP
     SERVER_IP=$(curl -s --max-time 5 https://ipv4.icanhazip.com 2>/dev/null || \
-                curl -s --max-time 5 https://api.ipify.org   2>/dev/null || \
+                curl -s --max-time 5 https://api.ipify.org      2>/dev/null || \
                 hostname -I 2>/dev/null | awk '{print $1}')
 
     local svc_status
@@ -435,16 +489,16 @@ print_info() {
     echo -e "${CYAN}║          PAINEL MASTER — INSTALAÇÃO CONCLUÍDA        ║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo -e "  Serviço:   $(echo -e $svc_status)"
-    echo -e "  nginx:     $(echo -e $nginx_status)"
+    echo -e "  Serviço:   $(echo -e "$svc_status")"
+    echo -e "  nginx:     $(echo -e "$nginx_status")"
     echo ""
     echo -e "  ${BOLD}Modos de acesso:${NC}"
     echo -e "    Direto (IP + porta): ${BOLD}http://${SERVER_IP}:${PANEL_PORT}${NC}"
     echo -e "    nginx  HTTP:         ${BOLD}http://${SERVER_IP}${NC}"
     echo -e "    nginx  HTTPS:        ${BOLD}https://${SERVER_IP}${NC}  (cert autoassinado)"
-    [ -n "$domain" ] && {
+    if [ -n "$domain" ]; then
         echo -e "    Domínio:             ${BOLD}https://${domain}${NC}  (via Cloudflare)"
-    }
+    fi
     echo ""
     echo -e "  Login padrão:  ${BOLD}admin / ${admin_pass}${NC}"
     echo -e "  Diretório:     ${INSTALL_DIR}"
@@ -489,17 +543,19 @@ if [ "$MODE" = "update" ]; then
     check_python
 
     # Backup db
-    [ -f "${INSTALL_DIR}/painel.db" ] && \
-        cp "${INSTALL_DIR}/painel.db" "/tmp/pmg_backup_$(date +%s).db" && \
+    if [ -f "${INSTALL_DIR}/painel.db" ]; then
+        cp "${INSTALL_DIR}/painel.db" "/tmp/pmg_backup_$(date +%s).db"
         info "Banco salvo em /tmp/"
+    fi
 
     systemctl stop "$SERVICE_NAME" 2>/dev/null || true
     copy_files
 
-    # Restore db if it was wiped by git clean
-    local_db="/tmp/pmg_backup_$(ls -t /tmp/pmg_backup_*.db 2>/dev/null | head -1 | xargs basename 2>/dev/null)"
-    [ -f "$local_db" ] && [ ! -f "${INSTALL_DIR}/painel.db" ] && \
+    # Restaura db se foi apagado pelo git clean
+    local_db=$(ls -t /tmp/pmg_backup_*.db 2>/dev/null | head -1)
+    if [ -n "$local_db" ] && [ ! -f "${INSTALL_DIR}/painel.db" ]; then
         cp "$local_db" "${INSTALL_DIR}/painel.db"
+    fi
 
     "${INSTALL_DIR}/venv/bin/pip" install -r "${INSTALL_DIR}/requirements.txt" -q 2>/dev/null || true
 
@@ -533,34 +589,22 @@ uninstall_existing
 copy_files
 install_python_deps
 
-# Set initial admin password
-info "Configurando senha admin..."
-PW_HASH=$("${INSTALL_DIR}/venv/bin/python" -c \
-    "import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" \
-    "$ADMIN_PASS" 2>/dev/null || echo "")
-
-if [ -n "$PW_HASH" ]; then
-    "${INSTALL_DIR}/venv/bin/python" << PYINIT 2>/dev/null
-import sys
-sys.path.insert(0, '${INSTALL_DIR}')
-import db
-db.init_db()
-db.migrate_schema()
-try: db.migrate_schema_v2()
-except: pass
-try: db.migrate_schema_v3()
-except: pass
-conn = db.get_db()
-conn.execute("UPDATE panel_users SET password_hash=? WHERE username='admin'", ('${PW_HASH}',))
-conn.commit()
-conn.close()
-print("Admin configurado")
-PYINIT
-fi
-
+# Inicia o serviço uma vez para criar o banco antes de definir a senha
 configure_service
 configure_nginx "$DOMAIN"
 open_firewall
 setup_watchdog
+
+# Sobe o app para criar/migrar o banco de dados
+info "Iniciando serviço para criar o banco de dados..."
+systemctl start "$SERVICE_NAME"
+sleep 4
+systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+sleep 1
+
+# Agora define a senha com o banco já criado
+set_admin_password "$ADMIN_PASS"
+
+# Sobe definitivamente
 start_service
 print_info "$DOMAIN" "$ADMIN_PASS"
