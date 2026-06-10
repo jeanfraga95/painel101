@@ -8,6 +8,7 @@ import json
 import os
 import secrets
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
 from datetime import datetime, timedelta
 from functools import wraps
 
@@ -36,7 +37,7 @@ app = Flask(
     static_folder=os.path.join(BASE_DIR, 'static'),
 )
 # Support Cloudflare / reverse-proxy: trust X-Forwarded-Proto, X-Forwarded-For
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100 MB for restore
@@ -44,15 +45,18 @@ app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100 MB for restore
 app.config['SESSION_COOKIE_SECURE'] = False   # Cloudflare handles TLS termination
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_HTTPONLY'] = True
-# Sessão permanente: sobrevive ao fechar o browser e dura 7 dias
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 
 TZ = pytz.timezone('America/Sao_Paulo')
 
-db.init_db()
-db.migrate_schema()
-db.migrate_schema_v2()
-db.migrate_schema_v3()
+try:
+    db.init_db()
+    db.migrate_schema()
+    db.migrate_schema_v2()
+    db.migrate_schema_v3()
+except Exception as _startup_err:
+    import traceback as _tb
+    print(f"[PMG STARTUP ERROR] DB init failed: {_startup_err}", flush=True)
+    _tb.print_exc()
 
 # ---------------------------------------------------------------------------
 # Helpers / decorators
@@ -173,7 +177,6 @@ def login():
                 if user['status'] == 'suspended':
                     flash('Conta suspensa. Contate o administrador.', 'danger')
                     return redirect(url_for('login'))
-                session.permanent  = True   # Mantém sessão viva por PERMANENT_SESSION_LIFETIME
                 session['user_id'] = int(user['id'])
                 session['role']    = str(user['role'])
                 session['username']= str(user['username'])
@@ -228,7 +231,12 @@ def dashboard():
             'days_panel': days_panel,
         }
         servers = db.get_servers_for_user(user)
-        return render_template('reseller/dashboard.html', stats=stats, expiring=expiring, servers=servers)
+        all_cats      = db.get_server_categories()
+        avail_cat_ids = set(s['category_id'] for s in servers if s['category_id'])
+        avail_cat_ids.update(db.get_reseller_categories(user['id']))
+        user_categories = [c for c in all_cats if c['id'] in avail_cat_ids]
+        return render_template('reseller/dashboard.html', stats=stats, expiring=expiring,
+                               servers=servers, categories=user_categories)
 
 
 # ---------------------------------------------------------------------------
@@ -281,8 +289,18 @@ def users_list():
     page = min(page, total_pages)
     users_page = users[(page - 1) * per_page: page * per_page]
 
-    servers = db.get_servers()
+    servers    = db.get_servers()
     server_map = {s['id']: s for s in servers}
+    categories = db.get_server_categories()
+
+    # Categorias disponíveis para o usuário logado (para o modal de criação)
+    user_servers = db.get_servers_for_user(user)
+    if user['role'] == 'admin':
+        user_categories = categories
+    else:
+        avail_cat_ids = set(s['category_id'] for s in user_servers if s['category_id'])
+        avail_cat_ids.update(db.get_reseller_categories(user['id']))
+        user_categories = [c for c in categories if c['id'] in avail_cat_ids]
 
     all_panel_users_map = {}
     for pu in db.get_db().execute("SELECT id, username FROM panel_users").fetchall():
@@ -295,7 +313,8 @@ def users_list():
         all_resellers = db.get_all_resellers_under(user['id'])
 
     return render_template('shared/users.html',
-                           users=users_page, servers=servers, server_map=server_map,
+                           users=users_page, servers=user_servers, server_map=server_map,
+                           categories=user_categories,
                            owner_map=all_panel_users_map,
                            all_resellers=all_resellers,
                            sort=sort, search=search, filter_type=filter_type,
@@ -308,97 +327,111 @@ def users_list():
 @login_required
 def create_user():
     current_user = get_current_user()
-    servers = db.get_servers_for_user(current_user)
 
     if request.method == 'POST':
-        username = request.form.get('username', '').strip().lower()
-        password = request.form.get('password', '').strip()
-        days = int(request.form.get('days', 30))
-        limit = int(request.form.get('limit', 1))
-        server_id = request.form.get('server_id', type=int)
-        use_v2ray = request.form.get('use_v2ray') == '1'
-        uuid = request.form.get('uuid', '').strip() or (db.random_uuid() if use_v2ray else None)
+        username    = request.form.get('username', '').strip().lower()
+        password    = request.form.get('password', '').strip()
+        days        = int(request.form.get('days', 30))
+        limit       = int(request.form.get('limit', 1))
+        category_id = request.form.get('category_id', type=int)
+        use_v2ray   = request.form.get('use_v2ray') == '1'
+        uuid        = request.form.get('uuid', '').strip() or (db.random_uuid() if use_v2ray else None)
 
-        # Check panel user limits
         if current_user['role'] != 'admin':
-            if current_user['account_limit'] != -1:  # -1 = unlimited
+            if current_user['account_limit'] != -1:
                 avail = current_user['account_limit'] - current_user['accounts_used']
                 if avail <= 0:
                     return jsonify(success=False, message='Limite de contas atingido')
 
         if not username:
             return jsonify(success=False, message='Username inválido')
+        if not category_id:
+            return jsonify(success=False, message='Selecione uma categoria')
 
+        target_servers = db.get_servers_by_category(category_id)
+        if not target_servers:
+            return jsonify(success=False, message='Nenhum servidor ativo nesta categoria')
+
+        primary_server_id = target_servers[0]['id']
         expires_at = (now_br() + timedelta(days=days)).strftime('%Y-%m-%d')
 
-        # Check if user already exists on the server
-        if server_id:
-            srv = db.get_server(server_id)
-            if srv:
-                chk_ok, chk_out = sc.send_command(
-                    srv['ip'], srv['module_port'], srv['auth_token'],
-                    f"id {username} 2>/dev/null && echo EXISTS || echo NOTFOUND"
-                )
-                if chk_ok and 'EXISTS' in chk_out:
-                    return jsonify(success=False, message=f'Usuário "{username}" já existe no servidor SSH. Escolha outro nome.')
+        # Verifica duplicidade no primeiro servidor da categoria
+        first_srv = target_servers[0]
+        chk_ok, chk_out = sc.send_command(
+            first_srv['ip'], first_srv['module_port'], first_srv['auth_token'],
+            f"id {username} 2>/dev/null && echo EXISTS || echo NOTFOUND"
+        )
+        if chk_ok and 'EXISTS' in chk_out:
+            return jsonify(success=False, message=f'Usuário "{username}" já existe no servidor. Escolha outro nome.')
 
         ok, msg, new_id = db.create_ssh_user(
-            username, password, current_user['id'], server_id,
+            username, password, current_user['id'], primary_server_id,
             expires_at, limit, uuid if use_v2ray else None, 0
         )
         if not ok:
             return jsonify(success=False, message=msg)
 
-        # Create on server(s) - including all servers in the same category
+        # Cria em TODOS os servidores da categoria em paralelo
+        def _create_on(srv):
+            return sc.create_ssh_user_on_server(
+                srv['ip'], srv['module_port'], srv['auth_token'],
+                username, password, days, limit, uuid if use_v2ray else None
+            )
+
         server_msg = ''
-        if server_id:
-            srv = db.get_server(server_id)
-            if srv:
-                s_ok, s_msg = sc.create_ssh_user_on_server(
-                    srv['ip'], srv['module_port'], srv['auth_token'],
-                    username, password, days, limit, uuid if use_v2ray else None
-                )
-                server_msg = s_msg
-                # Also create on other servers in same category
-                if srv['category_id']:
-                    cat_servers = db.get_servers_by_category(srv['category_id'])
-                    for cat_srv in cat_servers:
-                        if cat_srv['id'] != server_id:
-                            sc.create_ssh_user_on_server(
-                                cat_srv['ip'], cat_srv['module_port'], cat_srv['auth_token'],
-                                username, password, days, limit, uuid if use_v2ray else None
-                            )
+        ok_count   = 0
+        with ThreadPoolExecutor(max_workers=len(target_servers)) as pool:
+            futures = {pool.submit(_create_on, srv): srv for srv in target_servers}
+            try:
+                for fut in as_completed(futures, timeout=30):
+                    s_ok, s_msg = fut.result()
+                    if s_ok:
+                        ok_count += 1
+                    if not server_msg:
+                        server_msg = s_msg
+            except FuturesTimeout:
+                server_msg = 'Alguns servidores demoraram e foram ignorados'
 
         app_link = db.get_setting('app_link', '')
         return jsonify(
             success=True,
-            message='Usuário criado com sucesso',
+            message=f'Usuário criado em {ok_count}/{len(target_servers)} servidor(es)',
             user={
-                'username': username,
-                'password': password,
+                'username':   username,
+                'password':   password,
                 'expires_at': expires_at,
-                'uuid': uuid if use_v2ray else None,
-                'app_link': app_link,
+                'uuid':       uuid if use_v2ray else None,
+                'app_link':   app_link,
                 'server_msg': server_msg,
             }
         )
 
-    return render_template('shared/create_user.html', servers=servers, is_test=False)
+    user_servers   = db.get_servers_for_user(current_user)
+    all_cats       = db.get_server_categories()
+    avail_cat_ids  = set(s['category_id'] for s in user_servers if s['category_id'])
+    if current_user['role'] != 'admin':
+        avail_cat_ids.update(db.get_reseller_categories(current_user['id']))
+        user_categories = [c for c in all_cats if c['id'] in avail_cat_ids]
+    else:
+        user_categories = all_cats
+    return render_template('shared/create_user.html', categories=user_categories, is_test=False)
 
 
 @app.route('/users/test', methods=['POST'])
 @login_required
 def create_test():
     current_user = get_current_user()
-    servers = db.get_servers_for_user(current_user)
 
-    username  = request.form.get('username', '').strip().lower()
-    password  = request.form.get('password', '').strip()
-    hours     = max(1, int(request.form.get('hours', request.form.get('days', 2))))
-    limit     = int(request.form.get('limit', 1))
-    server_id = request.form.get('server_id', type=int)
-    use_v2ray = request.form.get('use_v2ray') == '1'
-    uuid      = db.random_uuid() if use_v2ray else None
+    username    = request.form.get('username', '').strip().lower()
+    password    = request.form.get('password', '').strip()
+    hours       = max(1, int(request.form.get('hours', request.form.get('days', 2))))
+    limit       = int(request.form.get('limit', 1))
+    category_id = request.form.get('category_id', type=int)
+    use_v2ray   = request.form.get('use_v2ray') == '1'
+    uuid        = db.random_uuid() if use_v2ray else None
+
+    if not category_id:
+        return jsonify(success=False, message='Selecione uma categoria para o teste')
 
     if current_user['role'] != 'admin':
         if current_user['account_limit'] != -1:
@@ -409,42 +442,57 @@ def create_test():
     if not username:
         return jsonify(success=False, message='Username inválido')
 
-    # Store exact expiry in hours so job_cleanup_tests is accurate
+    target_servers = db.get_servers_by_category(category_id)
+    if not target_servers:
+        return jsonify(success=False, message='Nenhum servidor ativo nesta categoria')
+
+    primary_server_id = target_servers[0]['id']
     expires_at = (now_br() + timedelta(hours=hours)).strftime('%Y-%m-%d %H:%M:%S')
 
     ok, msg, new_id = db.create_ssh_user(
-        username, password, current_user['id'], server_id,
+        username, password, current_user['id'], primary_server_id,
         expires_at, limit, uuid if use_v2ray else None, 1
     )
     if not ok:
         return jsonify(success=False, message=msg)
 
-    # Create on server using exact minutes to match panel expiry
+    # Cria em TODOS os servidores da categoria em paralelo
+    def _create_test_on(srv):
+        return sc.create_test_user_on_server(
+            srv['ip'], srv['module_port'], srv['auth_token'],
+            username, password, hours, limit,
+            uuid if use_v2ray else None
+        )
+
     server_msg = ''
-    if server_id:
-        srv = db.get_server(server_id)
-        if srv:
-            s_ok, s_msg = sc.create_test_user_on_server(
-                srv['ip'], srv['module_port'], srv['auth_token'],
-                username, password, hours, limit,
-                uuid if use_v2ray else None
-            )
-            server_msg = s_msg
+    ok_count   = 0
+    with ThreadPoolExecutor(max_workers=len(target_servers)) as pool:
+        futures = {pool.submit(_create_test_on, srv): srv for srv in target_servers}
+        try:
+            for fut in as_completed(futures, timeout=30):
+                s_ok, s_msg = fut.result()
+                if s_ok:
+                    ok_count += 1
+                if not server_msg:
+                    server_msg = s_msg
+        except FuturesTimeout:
+            server_msg = 'Alguns servidores demoraram e foram ignorados'
 
     app_link = db.get_setting('app_link', '')
     return jsonify(
         success=True,
-        message='Teste criado',
+        message=f'Teste criado em {ok_count}/{len(target_servers)} servidor(es)',
         user={
-            'username': username,
-            'password': password,
+            'username':   username,
+            'password':   password,
             'expires_at': expires_at,
-            'uuid': uuid if use_v2ray else None,
-            'app_link': app_link,
-            'hours': hours,
+            'uuid':       uuid if use_v2ray else None,
+            'app_link':   app_link,
+            'hours':      hours,
             'server_msg': server_msg,
         }
     )
+
 
 
 @app.route('/users/delete/<int:user_id>', methods=['POST'])
@@ -486,12 +534,20 @@ def renew_user(user_id):
     days = int(request.form.get('days', 30))
     if days < 1:
         return jsonify(success=False, message='Informe quantos dias renovar')
+
+    was_suspended = u['status'] == 'suspended'
     db.renew_ssh_user(user_id, days)
 
-    # Reload user to get the updated expires_at (which already has days stacked on top)
+    # Auto-reativa se estava suspenso — sem precisar clicar no botão de suspender
+    if was_suspended:
+        db.update_ssh_user(user_id, status='active')
+        unlock_cmd = (
+            f"passwd -u {u['username']} 2>/dev/null; "
+            f"/root/pmaster_agent unblockuser {u['username']} 2>/dev/null || true"
+        )
+        sc.broadcast_command(u, unlock_cmd, db)
+
     updated = db.get_ssh_user(user_id)
-    # Calculate TOTAL remaining days from today so the server sets the correct expiry
-    # (pmaster_agent timedata sets expiry = N days from now, it does NOT add)
     try:
         from datetime import date as _date
         exp_date = _date.fromisoformat(updated['expires_at'][:10])
@@ -499,12 +555,15 @@ def renew_user(user_id):
     except Exception:
         days_for_server = days
 
-    # Renew on ALL servers (primary + extras)
     srv_results = sc.broadcast_renew(u, days_for_server, db)
-    server_msg = '; '.join(f"{n}:{'OK' if ok else msg}" for n, ok, msg in srv_results) if srv_results else ''
+    server_msg  = '; '.join(f"{n}:{'OK' if ok else msg}" for n, ok, msg in srv_results) if srv_results else ''
 
-    new_exp = updated['expires_at'][:10] if updated else ''
-    return jsonify(success=True, message=f'Renovado +{days} dias. Novo vencimento: {new_exp}', server_msg=server_msg, new_expiry=new_exp)
+    new_exp    = updated['expires_at'][:10] if updated else ''
+    reativado  = ' e reativado' if was_suspended else ''
+    return jsonify(success=True,
+                   message=f'Renovado{reativado} +{days} dias. Novo vencimento: {new_exp}',
+                   server_msg=server_msg, new_expiry=new_exp,
+                   was_suspended=was_suspended)
 
 
 @app.route('/users/update/<int:user_id>', methods=['POST'])
@@ -566,14 +625,107 @@ def suspend_user(user_id):
     new_status = 'suspended' if u['status'] == 'active' else 'active'
     db.update_ssh_user(user_id, status=new_status)
 
-    # Kill sessions if suspending
-    if new_status == 'suspended' and u['server_id']:
-        srv = db.get_server(u['server_id'])
-        if srv:
-            sc.send_command(srv['ip'], srv['module_port'], srv['auth_token'],
-                            f"pkill -u {u['username']}")
+    if new_status == 'suspended':
+        # Lock account + kill sessions on ALL servers
+        cmd = (
+            f"passwd -l {u['username']} 2>/dev/null; "
+            f"/root/pmaster_agent blockuser {u['username']} 2>/dev/null || true; "
+            f"pkill -u {u['username']} 2>/dev/null || true"
+        )
+    else:
+        # Unlock account on ALL servers
+        cmd = (
+            f"passwd -u {u['username']} 2>/dev/null; "
+            f"/root/pmaster_agent unblockuser {u['username']} 2>/dev/null || true"
+        )
+
+    sc.broadcast_command(u, cmd, db)
 
     return jsonify(success=True, message=f'Status: {new_status}', new_status=new_status)
+
+
+# ---------------------------------------------------------------------------
+# Recreate user on server(s)
+# ---------------------------------------------------------------------------
+
+@app.route('/users/recreate_on_server/<int:user_id>', methods=['POST'])
+@login_required
+def recreate_user_on_server(user_id):
+    """Create user on ALL their servers if they don't exist yet. Safe to call multiple times."""
+    current_user = get_current_user()
+    u = db.get_ssh_user(user_id)
+    if not u:
+        return jsonify(success=False, message='Usuário não encontrado')
+    u = dict(u)  # sqlite3.Row → dict (necessário para usar .get())
+    if current_user['role'] != 'admin':
+        tree_ids = [current_user['id']] + [s['id'] for s in db.get_all_resellers_under(current_user['id'])]
+        if u['owner_id'] not in tree_ids:
+            return jsonify(success=False, message='Sem permissão')
+
+    server_ids = db.get_user_all_server_ids(user_id)
+    if not server_ids:
+        return jsonify(success=False, message='Nenhum servidor associado a este usuário')
+
+    try:
+        exp_days = max(1, (
+            __import__('datetime').date.fromisoformat(u['expires_at'][:10]) -
+            now_br().date()
+        ).days)
+    except Exception:
+        exp_days = 30
+
+    results = []
+    for sid in server_ids:
+        srv = db.get_server(sid)
+        if not srv:
+            continue
+
+        # ── Verifica existência de forma adequada ao tipo de usuário ──────
+        already_exists = False
+
+        if u.get('v2ray_uuid'):
+            # Usuário Xray: verifica se o UUID já está no config.json.
+            # Checar só o usuário Linux (id username) não é suficiente —
+            # o uuid pode estar ausente do config.json mesmo que o user exista.
+            uuid_check_cmd = (
+                "python3 -c \""
+                "import json,sys\n"
+                "try:\n"
+                "    cfg=json.load(open('/usr/local/etc/xray/config.json'))\n"
+                "    ids=[c.get('id','') for i in cfg.get('inbounds',[])"
+                " for c in i.get('settings',{}).get('clients',[])]\n"
+                f"    print('UUID_EXISTS' if '{u['v2ray_uuid']}' in ids else 'UUID_MISSING')\n"
+                "except Exception as e:\n"
+                "    print('UUID_MISSING')\n"
+                "\" 2>/dev/null || echo UUID_MISSING"
+            )
+            ck_ok, ck_out = sc.send_command(
+                srv['ip'], srv['module_port'], srv['auth_token'], uuid_check_cmd
+            )
+            already_exists = ck_ok and 'UUID_EXISTS' in (ck_out or '')
+        else:
+            # Usuário SSH puro: basta verificar se o usuário Linux existe
+            ck_ok, ck_out = sc.send_command(
+                srv['ip'], srv['module_port'], srv['auth_token'],
+                f"id {u['username']} 2>/dev/null && echo EXISTS || echo MISSING"
+            )
+            already_exists = ck_ok and 'EXISTS' in (ck_out or '')
+
+        if already_exists:
+            results.append({'server': srv['name'], 'action': 'já existe', 'ok': True})
+            continue
+
+        # ── Cria o usuário (ou adiciona UUID ao Xray se estiver faltando) ──
+        c_ok, c_msg = sc.create_ssh_user_on_server(
+            srv['ip'], srv['module_port'], srv['auth_token'],
+            u['username'], u['password'], exp_days, u['connection_limit'],
+            uuid=u['v2ray_uuid']
+        )
+        results.append({'server': srv['name'], 'action': 'criado' if c_ok else f'erro: {c_msg}', 'ok': c_ok})
+
+    any_ok = any(r['ok'] for r in results)
+    summary = '; '.join(f"{r['server']}: {r['action']}" for r in results)
+    return jsonify(success=any_ok, message=summary, results=results)
 
 
 # ---------------------------------------------------------------------------
@@ -752,7 +904,9 @@ def resellers_list():
     return render_template('shared/resellers.html',
                            resellers=resellers, parent_map=parent_map,
                            all_servers=all_servers,
+                           all_categories=db.get_server_categories(),
                            server_assign_map=server_assign_map,
+                           category_assign_map={r['id']: db.get_reseller_categories(r['id']) for r in resellers},
                            usage_map=usage_map,
                            filter_resellers=filter_resellers,
                            f_type=f_type, f_parent=f_parent)
@@ -835,6 +989,18 @@ def set_reseller_servers_route(reseller_id):
     sids = [int(x) for x in server_ids_raw.split(',') if x.strip().isdigit()]
     db.set_reseller_servers(reseller_id, sids)
     return jsonify(success=True, message=f'{len(sids)} servidor(es) atribuído(s)')
+
+
+@app.route('/resellers/set_categories/<int:reseller_id>', methods=['POST'])
+@login_required
+def set_reseller_categories_route(reseller_id):
+    current_user = get_current_user()
+    if current_user['role'] != 'admin':
+        return jsonify(success=False, message='Apenas admin pode atribuir categorias')
+    cat_ids_raw = request.form.get('category_ids', '')
+    cids = [int(x) for x in cat_ids_raw.split(',') if x.strip().isdigit()]
+    db.set_reseller_categories(reseller_id, cids)
+    return jsonify(success=True, message=f'{len(cids)} categoria(s) atribuída(s)')
 
 
 @app.route('/resellers/delete/<int:reseller_id>', methods=['POST'])
@@ -1114,46 +1280,14 @@ def sync_server(server_id):
     if not srv:
         return jsonify(success=False, message='Servidor não encontrado')
 
+    # Get all users assigned to this server
     conn = db.get_db()
-
-    # Inclui ativos E suspensos — essencial ao restaurar backup em servidor novo
-    primary_rows = conn.execute(
-        "SELECT * FROM ssh_users WHERE server_id=? AND status IN ('active','suspended')",
-        (server_id,)
-    ).fetchall()
-
-    # Inclui usuários com este servidor como extra (tabela ssh_user_servers)
-    extra_rows = conn.execute(
-        """SELECT u.* FROM ssh_users u
-           JOIN ssh_user_servers s ON s.ssh_user_id = u.id
-           WHERE s.server_id = ? AND u.status IN ('active','suspended')""",
-        (server_id,)
-    ).fetchall()
-
+    users = conn.execute("SELECT * FROM ssh_users WHERE server_id=? AND status='active'", (server_id,)).fetchall()
     conn.close()
 
-    # Deduplica por id
-    seen = set()
-    all_users = []
-    for row in list(primary_rows) + list(extra_rows):
-        uid = row['id']
-        if uid not in seen:
-            seen.add(uid)
-            all_users.append(dict(row))
-
-    ok, msg = sc.sync_users_to_server(srv['ip'], srv['module_port'], srv['auth_token'], all_users)
-
-    if ok:
-        # Reaplicar bloqueio nos usuários que estavam suspensos
-        suspended = [u for u in all_users if u.get('status') == 'suspended']
-        for u in suspended:
-            lock_cmd = (
-                f"passwd -l {u['username']} 2>/dev/null; "
-                f"usermod -s /bin/false {u['username']} 2>/dev/null || true"
-            )
-            sc.send_command(srv['ip'], srv['module_port'], srv['auth_token'], lock_cmd)
-
-    return jsonify(success=ok, message=msg, users_count=len(all_users))
+    users_list = [dict(u) for u in users]
+    ok, msg = sc.sync_users_to_server(srv['ip'], srv['module_port'], srv['auth_token'], users_list)
+    return jsonify(success=ok, message=msg, users_count=len(users_list))
 
 
 @app.route('/servers/command/<int:server_id>', methods=['POST'])
