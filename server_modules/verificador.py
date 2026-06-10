@@ -8,7 +8,7 @@ import requests
 import socket
 
 # Configuração
-MODULE_PORT = 7072
+MODULE_PORT = 7270
 MODULE_PATH = '/root/modulo.py'
 LOG_PATH = '/root/verificador.log'
 
