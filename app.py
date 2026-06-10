@@ -1818,6 +1818,28 @@ def _clean_username(username: str) -> str:
     return username.strip()
 
 
+def _get_user_connections(username: str) -> int:
+    """Get current active connections for a user from all servers."""
+    total_connections = 0
+    servers = db.get_all_servers()
+    
+    for server in servers:
+        try:
+            # Tenta obter conexões ativas do servidor
+            ok, output = send_command(
+                server['ip'], 
+                server['module_port'], 
+                server['auth_token'],
+                f"who | grep -c '^{username} ' || echo 0"
+            )
+            if ok:
+                total_connections += int(output.strip() or 0)
+        except Exception:
+            continue
+    
+    return total_connections
+
+
 def _checkuser_response(username: str):
     """CheckUser response matching standard format used by VPN apps.
     For V2ray/Xray clients the 'username' field is actually the UUID —
@@ -1840,24 +1862,68 @@ def _checkuser_response(username: str):
             "limit_connections": 0,
             "expiration_date": "",
             "expiration_days": "0",
+            # Campos para o frontend moderno
+            "exists": False,
+            "status": "not_found",
+            "connections": 0,
+            "limit": 0,
         }
         return jsonify(resp)
 
+    # Calcula dias restantes
     d = days_until(u['expires_at'])
+    days_left = max(0, d)
+    
+    # Define status baseado na expiração e conexões
+    if days_left <= 0:
+        status = "expired"
+        online_status = "expirado"
+    else:
+        status = "active"
+        online_status = "online"
+    
+    # Busca conexões ativas (você precisa implementar esta função)
+    connections = _get_user_connections(u['username'])
+    
+    # Verifica se excedeu o limite
+    limit = u['connection_limit']
+    if limit > 0 and connections >= limit:
+        online_status = "limite_excedido"
+        status = "limit_exceeded"
+    
     try:
         from datetime import datetime as _dt
         exp_dt = _dt.fromisoformat(u['expires_at'])
         expiration_date = exp_dt.strftime('%d/%m/%Y')
+        expires_at_formatted = exp_dt.strftime('%Y-%m-%d')
     except Exception:
         expiration_date = u['expires_at'][:10] if u['expires_at'] else ''
+        expires_at_formatted = u['expires_at'][:10] if u['expires_at'] else ''
 
+    # Resposta COMPLETA para compatibilidade
     resp = {
+        # Formato original (para apps VPN)
         "id": "01",
-        "username": u['username'],          # always real username, never UUID
-        "count_connections": 0,
-        "limit_connections": u['connection_limit'],
+        "username": u['username'],
+        "count_connections": connections,
+        "limit_connections": limit,
         "expiration_date": expiration_date,
-        "expiration_days": str(max(0, d)),  # VPN apps don't handle negatives — 0 means expired
+        "expiration_days": str(days_left),
+        
+        # Formato moderno (para o frontend do painel)
+        "exists": True,
+        "status": online_status,
+        "online": connections > 0,
+        "expired": days_left <= 0,
+        "blocked": False,
+        "server": u.get('server_name', 'N/A'),
+        "connections": connections,
+        "limit": limit,
+        "days_left": days_left,
+        "expires_at": expires_at_formatted,
+        "created_at": u.get('created_at', '')[:10] if u.get('created_at') else '',
+        "last_login": u.get('last_login', ''),
+        "v2ray_uuid": u.get('v2ray_uuid', ''),
     }
     return jsonify(resp)
 
@@ -1877,8 +1943,11 @@ def checkuser_index():
     username = (request.args.get('user') or request.args.get('username')
                 or request.form.get('user') or request.form.get('username') or '').strip()
     if not username:
-        return jsonify({"id": "01", "username": "", "count_connections": 0,
-                        "limit_connections": 0, "expiration_date": "", "expiration_days": "0"})
+        return jsonify({
+            "id": "01", "username": "", "count_connections": 0,
+            "limit_connections": 0, "expiration_date": "", "expiration_days": "0",
+            "exists": False, "connections": 0, "limit": 0
+        })
     return _checkuser_response(username)
 
 
