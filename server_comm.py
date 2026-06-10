@@ -201,12 +201,12 @@ def sync_users_to_server(ip: str, port: int, auth_token: str, users: list) -> tu
             days_left = 30
 
         if uuid:
-            # CORREÇÃO: Para V2Ray/Xray, envia APENAS username + uuid + dias + limite
-            # NÃO envia a senha pois o Xray não usa senha, apenas UUID
+            # CORREÇÃO: pmaster_agent v2rayadd espera: uuid username password days limit
+            # Mantém 5 campos mas na ordem correta (UUID primeiro)
             lines.append(
-                f"{u['username']} {uuid} {days_left} {u['connection_limit']}")
+                f"{uuid} {u['username']} {u['password']} {days_left} {u['connection_limit']}")
         else:
-            # SSH puro: enixa usuário, senha, dias, limite
+            # SSH puro: username password days limit (4 campos)
             lines.append(
                 f"{u['username']} {u['password']} {days_left} {u['connection_limit']}")
 
@@ -241,20 +241,23 @@ def sync_users_to_server(ip: str, port: int, auth_token: str, users: list) -> tu
                 f"printf '%s\\n' '{escaped}' > /tmp/pmg_sync_batch.txt && "
                 f"python3 - << 'PYEOF'\n"
                 f"import os\n"
+                f"import re\n"
                 f"with open('/tmp/pmg_sync_batch.txt') as f:\n"
                 f"    lines = [l.strip() for l in f if l.strip()]\n"
                 f"for linha in lines:\n"
                 f"    cols = linha.split()\n"
-                f"    if len(cols) >= 4:\n"
-                f"        # Verifica se é usuário V2Ray (se o 2º campo parece um UUID)\n"
-                f"        import re\n"
-                f"        is_v2ray = bool(re.match(r'[0-9a-f]{{8}}-([0-9a-f]{{4}}-){{3}}[0-9a-f]{{12}}', cols[1].lower()))\n"
+                f"    if len(cols) >= 5:\n"
+                f"        # Verifica se o primeiro campo parece um UUID (usuário V2Ray)\n"
+                f"        is_v2ray = bool(re.match(r'[0-9a-f]{{8}}-([0-9a-f]{{4}}-){{3}}[0-9a-f]{{12}}', cols[0].lower()))\n"
                 f"        if is_v2ray:\n"
-                f"            # V2Ray: username, uuid, days, limit\n"
-                f"            os.system('/root/pmaster_agent v2rayadd {{}} {{}} {{}} {{}} 2>/dev/null || /root/dragonmodule v2rayadd {{}} {{}} {{}} {{}} 2>/dev/null'.format(*cols[:4], *cols[:4]))\n"
+                f"            # V2Ray: uuid, username, password, days, limit\n"
+                f"            os.system('/root/pmaster_agent v2rayadd {{}} {{}} {{}} {{}} {{}} 2>/dev/null || /root/dragonmodule v2rayadd {{}} {{}} {{}} {{}} {{}} 2>/dev/null'.format(*cols[:5], *cols[:5]))\n"
                 f"        else:\n"
                 f"            # SSH: username, password, days, limit\n"
                 f"            os.system('/root/pmaster_agent createssh {{}} {{}} {{}} {{}} 2>/dev/null || /root/dragonmodule createssh {{}} {{}} {{}} {{}} 2>/dev/null'.format(*cols[:4], *cols[:4]))\n"
+                f"    elif len(cols) >= 4:\n"
+                f"        # SSH puro (fallback)\n"
+                f"        os.system('/root/pmaster_agent createssh {{}} {{}} {{}} {{}} 2>/dev/null || /root/dragonmodule createssh {{}} {{}} {{}} {{}} 2>/dev/null'.format(*cols[:4], *cols[:4]))\n"
                 f"os.remove('/tmp/pmg_sync_batch.txt')\n"
                 f"print('BATCH_OK:{len(batch)}')\n"
                 f"PYEOF"
@@ -270,7 +273,6 @@ def sync_users_to_server(ip: str, port: int, auth_token: str, users: list) -> tu
     if errors:
         return False, f'{synced}/{total} criados{skip_info}. Erros: {"; ".join(errors)}'
     return True, f'{synced} usuários sincronizados{skip_info}'
-
 
 
 
