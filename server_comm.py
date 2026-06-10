@@ -11,19 +11,23 @@ import os
 
 
 TIMEOUT = 15
+SYNC_TIMEOUT = 125  # tempo maior para sincronização com muitos usuários
+SYNC_BATCH_SIZE = 50  # usuários por lote na sincronização
 
 
-def send_command(ip: str, port: int, auth_token: str, command: str) -> tuple:
+def send_command(ip: str, port: int, auth_token: str, command: str,
+                 timeout: int = None) -> tuple:
     """Send a shell command to modulo.py on the SSH server.
     Returns (success: bool, output: str).
     """
     url = f"http://{ip}:{port}"
+    _timeout = timeout if timeout is not None else TIMEOUT
     try:
         resp = requests.post(
             url,
             headers={'Senha': auth_token},
             data={'comando': command},
-            timeout=TIMEOUT
+            timeout=_timeout
         )
         if resp.status_code == 200:
             return True, resp.text.strip()
@@ -119,73 +123,148 @@ def create_test_user_on_server(ip: str, port: int, auth_token: str,
     return send_command(ip, port, auth_token, cmd)
 
 
-def sync_users_to_server(ip: str, port: int, auth_token: str, users: list) -> tuple:
-    """Sync users to server.
-    Usa base64 para enviar o arquivo de sync, evitando problemas de escaping
-    com senhas que contenham caracteres especiais ($, !, ', espaço, etc.).
-    Se o script bulk falhar, cria cada usuário individualmente como fallback.
+def get_server_existing_state(ip: str, port: int, auth_token: str) -> dict:
+    """Retorna o estado atual do servidor:
+    - 'xray_uuids': set de UUIDs já presentes no config.json do Xray
+    - 'ssh_users':  set de usernames já criados no sistema Linux
+    Usado para evitar duplicidade na sincronização.
     """
-    import base64 as _b64
+    # Um único comando: extrai UUIDs do config.json + usuários do sistema
+    cmd = (
+        # UUIDs do Xray (config.json)
+        "python3 -c \""
+        "import json,sys\n"
+        "try:\n"
+        "    cfg=json.load(open('/usr/local/etc/xray/config.json'))\n"
+        "    ids=[c.get('id','') for i in cfg.get('inbounds',[]) "
+        "for c in i.get('settings',{}).get('clients',[])]\n"
+        "    [print('UUID:'+x) for x in ids if x]\n"
+        "except:pass\n"
+        "\" 2>/dev/null ; "
+        # Usuários do sistema (exclui contas de sistema, uid >= 1000)
+        "awk -F: '($3>=1000){print \"USER:\"$1}' /etc/passwd 2>/dev/null"
+    )
+    ok, out = send_command(ip, port, auth_token, cmd, timeout=SYNC_TIMEOUT)
+    xray_uuids = set()
+    ssh_users = set()
+    if ok and out.strip():
+        for line in out.strip().splitlines():
+            line = line.strip()
+            if line.startswith('UUID:'):
+                uid = line[5:].strip()
+                if uid:
+                    xray_uuids.add(uid.lower())
+            elif line.startswith('USER:'):
+                usr = line[5:].strip()
+                if usr:
+                    ssh_users.add(usr.lower())
+    return {'xray_uuids': xray_uuids, 'ssh_users': ssh_users}
+
+
+def sync_users_to_server(ip: str, port: int, auth_token: str, users: list) -> tuple:
+    """Sync active users to server in batches, skipping users already present.
+
+    Antes de enviar qualquer dado, consulta o servidor:
+      - UUIDs já no /usr/local/etc/xray/config.json → pula usuário Xray duplicado
+      - Usuários Linux já em /etc/passwd             → pula usuário SSH duplicado
+    Só envia quem realmente precisa ser criado.
+    """
     from datetime import datetime as _dt2
 
-    if not users:
-        return True, '0 usuários para sincronizar'
+    # ── 1. Busca estado atual do servidor ────────────────────────────────────
+    existing   = get_server_existing_state(ip, port, auth_token)
+    xray_uuids = existing['xray_uuids']   # set lowercase
+    ssh_users  = existing['ssh_users']    # set lowercase
 
-    lines = []
+    # ── 2. Monta lista filtrando duplicatas ──────────────────────────────────
+    lines   = []
+    skipped = 0
     for u in users:
+        uuid        = (u.get('v2ray_uuid') or '').strip()
+        username_lc = u['username'].lower()
+
+        if uuid:
+            # Xray: pula se UUID já está no config.json
+            if uuid.lower() in xray_uuids:
+                skipped += 1
+                continue
+        else:
+            # SSH puro: pula se usuário Linux já existe
+            if username_lc in ssh_users:
+                skipped += 1
+                continue
+
         try:
-            exp = _dt2.fromisoformat(u['expires_at'])
+            exp       = _dt2.fromisoformat(u['expires_at'])
             days_left = max(1, (exp - _dt2.now()).days)
         except Exception:
             days_left = 30
-        if u.get('v2ray_uuid'):
+
+        if uuid:
             lines.append(
-                f"{u['username']} {u['password']} {days_left} {u['connection_limit']} {u['v2ray_uuid']}")
+                f"{u['username']} {u['password']} {days_left} {u['connection_limit']} {uuid}")
         else:
             lines.append(
                 f"{u['username']} {u['password']} {days_left} {u['connection_limit']}")
 
-    content = '\n'.join(lines)
+    skip_info = f' ({skipped} já existiam no servidor, pulados)' if skipped else ''
 
-    # Codifica em base64 — evita qualquer problema de escaping no shell
-    # (senhas com $, !, ', aspas, espaços não quebram mais o comando)
-    content_b64 = _b64.b64encode(content.encode()).decode()
-    cmd = (
-        f"echo '{content_b64}' | base64 -d > /tmp/pmg_sync.txt && "
-        f"(python3 /root/pmaster_sync.py /tmp/pmg_sync.txt 2>/dev/null || "
-        f"python3 /root/sincronizar.py /tmp/pmg_sync.txt 2>/dev/null) && "
-        f"echo 'PMG_OK:{len(lines)}'"
-    )
-    ok, out = send_command(ip, port, auth_token, cmd)
-    if ok and 'PMG_OK' in out:
-        return True, f'{len(lines)} usuários sincronizados'
+    if not lines:
+        return True, f'Nenhum usuário novo para sincronizar{skip_info}'
 
-    # ── Fallback: cria cada usuário individualmente ────────────────────────
-    # Ativado quando pmaster_sync.py não existe no servidor ou falha
-    created, fail_list = 0, []
-    for u in users:
-        try:
-            exp = _dt2.fromisoformat(u['expires_at'])
-            days_left = max(1, (exp - _dt2.now()).days)
-        except Exception:
-            days_left = 30
-        ok2, _ = create_ssh_user_on_server(
-            ip, port, auth_token,
-            u['username'], u['password'], days_left,
-            u['connection_limit'], u.get('v2ray_uuid')
-        )
-        if ok2:
-            created += 1
+    # ── 3. Envia em lotes ────────────────────────────────────────────────────
+    batches = [lines[i:i + SYNC_BATCH_SIZE]
+               for i in range(0, len(lines), SYNC_BATCH_SIZE)]
+    total  = len(lines)
+    synced = 0
+    errors = []
+
+    for idx, batch in enumerate(batches):
+        is_last = (idx == len(batches) - 1)
+        content = '\n'.join(batch)
+        escaped = content.replace('\\', '\\\\').replace("'", "'\\''")
+
+        if is_last:
+            # Último lote: executa o script completo (inclui restart dos serviços)
+            cmd = (
+                f"printf '%s\\n' '{escaped}' > /tmp/pmg_sync.txt && "
+                f"(python3 /root/pmaster_sync.py /tmp/pmg_sync.txt 2>/dev/null || "
+                f"python3 /root/sincronizar.py /tmp/pmg_sync.txt 2>/dev/null) && "
+                f"echo 'PMG_OK:{len(batch)}'"
+            )
         else:
-            fail_list.append(u['username'])
+            # Lotes intermediários: cria usuários sem reiniciar os serviços
+            cmd = (
+                f"printf '%s\\n' '{escaped}' > /tmp/pmg_sync_batch.txt && "
+                f"python3 - << 'PYEOF'\n"
+                f"import os\n"
+                f"with open('/tmp/pmg_sync_batch.txt') as f:\n"
+                f"    lines = [l.strip() for l in f if l.strip()]\n"
+                f"for linha in lines:\n"
+                f"    cols = linha.split()\n"
+                f"    if len(cols) >= 5:\n"
+                f"        os.system('/root/pmaster_agent v2rayadd {{}} {{}} {{}} {{}} {{}} 2>/dev/null"
+                f" || /root/dragonmodule v2rayadd {{}} {{}} {{}} {{}} {{}} 2>/dev/null'.format(*cols[:5], *cols[:5]))\n"
+                f"    elif len(cols) >= 4:\n"
+                f"        os.system('/root/pmaster_agent createssh {{}} {{}} {{}} {{}} 2>/dev/null"
+                f" || /root/dragonmodule createssh {{}} {{}} {{}} {{}} 2>/dev/null'.format(*cols[:4], *cols[:4]))\n"
+                f"os.remove('/tmp/pmg_sync_batch.txt')\n"
+                f"print('BATCH_OK:{len(batch)}')\n"
+                f"PYEOF"
+            )
 
-    if created > 0:
-        msg = f"{created}/{len(users)} usuários criados"
-        if fail_list:
-            msg += f" ({len(fail_list)} falha(s): {', '.join(fail_list[:5])})"
-        return True, msg
+        ok, out = send_command(ip, port, auth_token, cmd, timeout=SYNC_TIMEOUT)
 
-    return False, out or 'Falha: módulo não encontrado no servidor. Instale os módulos primeiro.'
+        if ok and ('PMG_OK' in out or 'BATCH_OK' in out):
+            synced += len(batch)
+        else:
+            errors.append(f"lote {idx + 1}/{len(batches)}: {out or 'sem resposta'}")
+
+    if errors:
+        return False, f'{synced}/{total} criados{skip_info}. Erros: {"; ".join(errors)}'
+    return True, f'{synced} usuários sincronizados{skip_info}'
+
+
 
 
 def install_modules_ssh(ip: str, root_user: str, root_password: str, auth_token: str) -> tuple:
@@ -228,6 +307,32 @@ def install_modules_ssh(ip: str, root_user: str, root_password: str, auth_token:
             "chmod +x /opt/pmg-monitor",
             "mkdir -p /etc/SSHPlus/senha /etc/DragonPanel",
             "touch /root/usuarios.db",
+            # ── Segurança: bloqueia acesso ao terminal para usuários VPN ──────
+            # Cria grupo que identifica usuários do painel
+            "groupadd pmg_vpn 2>/dev/null || true",
+            # Corrige usuários migrados de outros painéis (GestorSSH, DragonCore etc.)
+            # que possam ter /bin/bash: força /bin/false e adiciona ao grupo
+            (
+                "awk -F: '($3>=1000 && $1!=\"nobody\" && $1!=\"nfsnobody\"){"
+                "print $1}' /etc/passwd | "
+                "xargs -I{} bash -c '"
+                "usermod -s /bin/false {} 2>/dev/null; "
+                "usermod -aG pmg_vpn {} 2>/dev/null' 2>/dev/null || true"
+            ),
+            # Adiciona bloco no sshd_config (somente uma vez, marcado com PMG_VPN_BLOCK)
+            (
+                "grep -q 'PMG_VPN_BLOCK' /etc/ssh/sshd_config || "
+                "printf '\\n# PMG_VPN_BLOCK - Gerado pelo Painel Master\\n"
+                "Match Group pmg_vpn\\n"
+                "    PermitTTY no\\n"
+                "    X11Forwarding no\\n"
+                "    AllowAgentForwarding no\\n"
+                "    ForceCommand /bin/false\\n' "
+                ">> /etc/ssh/sshd_config"
+            ),
+            # Reinicia sshd para aplicar as restrições
+            "systemctl restart sshd 2>/dev/null || service ssh restart 2>/dev/null || true",
+            # ─────────────────────────────────────────────────────────────────
             "pkill -f pmaster_module.py || true",
             "nohup python3 /root/pmaster_module.py > /root/pmaster_module.log 2>&1 &",
             "(crontab -l 2>/dev/null | grep -v pmaster_watchdog; echo '* * * * * python3 /root/pmaster_watchdog.py') | crontab -",
@@ -293,33 +398,37 @@ def get_online_users_robust(ip: str, port: int, auth_token: str) -> list:
     import json as _json
 
     # ── Method 1: pmg-monitor or plugin-sync binary (fastest, JSON output) ─
+    # Nota: pmg-monitor pode retornar {} vazio para usuários migrados de
+    # GestorSSH/DragonCore que não estão no seu banco local. Nesse caso
+    # NÃO retornamos — caímos no Method 2 para pegar todos os usuários via ps.
+    monitor_result = []
     for monitor_bin in ('/opt/pmg-monitor', '/opt/sshplus/plugin-sync'):
         ok, out = send_command(ip, port, auth_token,
                                f"{monitor_bin} --monitor-users 2>/dev/null")
         if ok and out.strip().startswith('{'):
             try:
                 data = _json.loads(out.strip())
-                result = [
+                monitor_result = [
                     {'username': u, 'connections': int(c)}
                     for u, c in data.items()
                     if u and u not in ('root', 'sshd', '')
                 ]
-                if result:
-                    return result
+                if monitor_result:
+                    break
             except Exception:
                 pass
 
-    # ── Method 2: ps -eo args (user's script, modified to output user:count) ─
-    # Based on: ps -eo args | grep "sshd:" | grep -v "grep" | grep -v "\["
-    #           | awk -F'[: ]+' '/sshd:/ {print $2}' | sort | uniq -c
+    # ── Method 2: ps -eo args ────────────────────────────────────────────────
+    # BUG CORRIGIDO: awk usava -F'[: ]+' que retornava "usuario@pts/0" como
+    # username. Agora usa -F'[: @]+' para separar o "@pts/X" do username.
     cmd = (
         "ps -eo args 2>/dev/null | grep 'sshd:' | grep -v grep | grep -v '\\[' | "
-        "awk -F'[: ]+' '/sshd:/ {print $2}' | "
+        "awk -F'[: @]+' '/sshd:/ {if($2 && $2!=\"root\" && $2!=\"sshd\") print $2}' | "
         "grep -v '^root$' | grep -v '^sshd$' | grep -v '^$' | "
         "sort | uniq -c | awk '{print $2 \":\" $1}'"
     )
     ok, out = send_command(ip, port, auth_token, cmd)
-    result = []
+    ps_result = []
     if ok and out.strip():
         for line in out.strip().splitlines():
             line = line.strip()
@@ -328,11 +437,25 @@ def get_online_users_robust(ip: str, port: int, auth_token: str) -> list:
                 uname = uname.strip()
                 if uname and uname not in ('root', 'sshd', ''):
                     try:
-                        result.append({'username': uname, 'connections': int(count.strip())})
+                        ps_result.append({'username': uname, 'connections': int(count.strip())})
                     except ValueError:
                         pass
-        if result:
-            return result
+
+    # Mescla: monitor_result tem prioridade (mais preciso), mas ps_result
+    # captura usuários migrados que o pmg-monitor não conhece
+    if ps_result:
+        if monitor_result:
+            # Une os dois, sem duplicatas — ps_result sobrescreve contagem
+            monitor_names = {r['username'].lower() for r in monitor_result}
+            merged = list(monitor_result)
+            for item in ps_result:
+                if item['username'].lower() not in monitor_names:
+                    merged.append(item)
+            return merged
+        return ps_result
+
+    if monitor_result:
+        return monitor_result
 
     # ── Method 3: who fallback ─────────────────────────────────────────────
     cmd_who = (
@@ -340,6 +463,7 @@ def get_online_users_robust(ip: str, port: int, auth_token: str) -> list:
         "sort | uniq -c | awk '{print $2 \":\" $1}'"
     )
     ok3, out3 = send_command(ip, port, auth_token, cmd_who)
+    result = []
     if ok3 and out3.strip():
         for line in out3.strip().splitlines():
             line = line.strip()
