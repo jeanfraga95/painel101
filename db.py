@@ -536,6 +536,14 @@ def get_servers():
     return rows
 
 
+def get_all_servers():
+    """Retorna lista de todos os servidores cadastrados."""
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM servers ORDER BY name").fetchall()
+    conn.close()
+    return rows
+
+
 def get_server(server_id: int):
     conn = get_db()
     row = conn.execute("SELECT * FROM servers WHERE id=?", (server_id,)).fetchone()
