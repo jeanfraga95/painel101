@@ -12,7 +12,7 @@ SERVICE_NAME="painel-master"
 # Default port 2083; protect against empty-string override
 PANEL_PORT="${PANEL_PORT:-2083}"
 [ -z "$PANEL_PORT" ] && PANEL_PORT="2083"
-REPO_URL="https://github.com/jeanfraga33/painel-master"
+REPO_URL="https://github.com/jeanfraga95/painel101"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DB_BACKUP=""
 
