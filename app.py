@@ -1841,10 +1841,7 @@ def _get_user_connections(username: str) -> int:
 
 
 def _checkuser_response(username: str):
-    """CheckUser response matching standard format used by VPN apps.
-    For V2ray/Xray clients the 'username' field is actually the UUID —
-    we fall back to v2ray_uuid lookup so expiry days are correct.
-    """
+    """CheckUser response matching standard format used by VPN apps."""
     username = _clean_username(username)
 
     # 1) Try by username (SSH users)
@@ -1862,13 +1859,38 @@ def _checkuser_response(username: str):
             "limit_connections": 0,
             "expiration_date": "",
             "expiration_days": "0",
-            # Campos para o frontend moderno
-            "exists": False,
-            "status": "not_found",
-            "connections": 0,
-            "limit": 0,
         }
         return jsonify(resp)
+
+    # Converte sqlite3.Row para dict para facilitar (opcional)
+    if hasattr(u, 'keys'):
+        u_dict = {k: u[k] for k in u.keys()}
+    else:
+        u_dict = dict(u)
+    
+    # Calcula dias restantes
+    d = days_until(u_dict['expires_at'])
+    days_left = max(0, d)
+    
+    # Busca conexões ativas
+    connections = _get_user_connections(u_dict['username'])
+    
+    try:
+        from datetime import datetime as _dt
+        exp_dt = _dt.fromisoformat(u_dict['expires_at'])
+        expiration_date = exp_dt.strftime('%d/%m/%Y')
+    except Exception:
+        expiration_date = u_dict['expires_at'][:10] if u_dict['expires_at'] else ''
+
+    resp = {
+        "id": "01",
+        "username": u_dict['username'],
+        "count_connections": connections,
+        "limit_connections": u_dict['connection_limit'],
+        "expiration_date": expiration_date,
+        "expiration_days": str(days_left),
+    }
+    return jsonify(resp)
 
     # Calcula dias restantes
     d = days_until(u['expires_at'])
@@ -1916,7 +1938,7 @@ def _checkuser_response(username: str):
         "online": connections > 0,
         "expired": days_left <= 0,
         "blocked": False,
-        "server": u.get('server_name', 'N/A'),
+        "server": u['server_name'] if 'server_name' in u else 'N/A',
         "connections": connections,
         "limit": limit,
         "days_left": days_left,
