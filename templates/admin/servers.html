@@ -89,6 +89,9 @@
             <button class="btn btn-sm btn-outline-success" onclick="syncServer({{ srv.id }})">
               <i class="fas fa-sync me-1"></i>Sincronizar
             </button>
+            <button class="btn btn-sm btn-success" onclick="syncServer({{ srv.id }}, true)" title="Envia TODOS os usuários ativos sem verificar duplicatas — ideal para servidor novo">
+              <i class="fas fa-sync me-1"></i>Sync Total
+            </button>
             <button class="btn btn-sm btn-outline-warning text-warning" data-bs-toggle="modal" data-bs-target="#cmdModal_{{ srv.id }}">
               <i class="fas fa-terminal me-1"></i>Comando
             </button>
@@ -373,10 +376,11 @@ function installModules(id) {
   });
 }
 
-function syncServer(id) {
-  if (!confirm('Sincronizar todos os usuários ativos com este servidor?')) return;
-  showToast('Sincronizando...', 'info');
-  apiPost(`/servers/sync/${id}`, {}, d => {
+function syncServer(id, force) {
+  const label = force ? 'Sync Total (envia TODOS os usuários, ignora duplicatas)' : 'Sincronizar usuários ativos';
+  if (!confirm(label + '\n\nConfirmar para o servidor #' + id + '?')) return;
+  showToast(force ? 'Sincronização forçada iniciada...' : 'Sincronizando...', 'info');
+  apiPost(`/servers/sync/${id}`, {force: force ? 'true' : 'false'}, d => {
     showToast(`${d.message} (${d.users_count || 0} usuários)`, d.success ? 'success' : 'danger');
   });
 }
