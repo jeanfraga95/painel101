@@ -161,20 +161,30 @@ def get_server_existing_state(ip: str, port: int, auth_token: str) -> dict:
     return {'xray_uuids': xray_uuids, 'ssh_users': ssh_users}
 
 
-def sync_users_to_server(ip: str, port: int, auth_token: str, users: list) -> tuple:
+def sync_users_to_server(ip: str, port: int, auth_token: str, users: list, force: bool = False) -> tuple:
     """Sync active users to server in batches, skipping users already present.
 
-    Antes de enviar qualquer dado, consulta o servidor:
+    force=True: ignora a verificacao de duplicatas — envia todos os usuarios sem
+    consultar o estado atual. Ideal para servidores novos/recem-adicionados.
+
+    Antes de enviar qualquer dado (quando force=False), consulta o servidor:
       - UUIDs já no /usr/local/etc/xray/config.json → pula usuário Xray duplicado
       - Usuários Linux já em /etc/passwd             → pula usuário SSH duplicado
     Só envia quem realmente precisa ser criado.
     """
     from datetime import datetime as _dt2
 
-    # ── 1. Busca estado atual do servidor ────────────────────────────────────
-    existing   = get_server_existing_state(ip, port, auth_token)
-    xray_uuids = existing['xray_uuids']   # set lowercase
-    ssh_users  = existing['ssh_users']    # set lowercase
+    if not users:
+        return True, 'Nenhum usuário ativo associado a este servidor'
+
+    # ── 1. Busca estado atual do servidor (pula se force=True) ───────────────
+    if force:
+        xray_uuids: set = set()
+        ssh_users:  set = set()
+    else:
+        existing   = get_server_existing_state(ip, port, auth_token)
+        xray_uuids = existing['xray_uuids']   # set lowercase
+        ssh_users  = existing['ssh_users']    # set lowercase
 
     # ── 2. Monta lista filtrando duplicatas ──────────────────────────────────
     lines   = []
@@ -183,16 +193,17 @@ def sync_users_to_server(ip: str, port: int, auth_token: str, users: list) -> tu
         uuid        = (u.get('v2ray_uuid') or '').strip()
         username_lc = u['username'].lower()
 
-        if uuid:
-            # Xray: pula se UUID já está no config.json
-            if uuid.lower() in xray_uuids:
-                skipped += 1
-                continue
-        else:
-            # SSH puro: pula se usuário Linux já existe
-            if username_lc in ssh_users:
-                skipped += 1
-                continue
+        if not force:
+            if uuid:
+                # Xray: pula se UUID já está no config.json
+                if uuid.lower() in xray_uuids:
+                    skipped += 1
+                    continue
+            else:
+                # SSH puro: pula se usuário Linux já existe
+                if username_lc in ssh_users:
+                    skipped += 1
+                    continue
 
         try:
             exp       = _dt2.fromisoformat(u['expires_at'])
@@ -201,8 +212,7 @@ def sync_users_to_server(ip: str, port: int, auth_token: str, users: list) -> tu
             days_left = 30
 
         if uuid:
-            # CORREÇÃO: pmaster_agent v2rayadd espera: uuid username password days limit
-            # Mantém 5 campos mas na ordem correta (UUID primeiro)
+            # pmaster_agent v2rayadd espera: uuid username password days limit
             lines.append(
                 f"{uuid} {u['username']} {u['password']} {days_left} {u['connection_limit']}")
         else:
@@ -211,6 +221,7 @@ def sync_users_to_server(ip: str, port: int, auth_token: str, users: list) -> tu
                 f"{u['username']} {u['password']} {days_left} {u['connection_limit']}")
 
     skip_info = f' ({skipped} já existiam no servidor, pulados)' if skipped else ''
+    force_info = ' [sincronização forçada]' if force else ''
 
     if not lines:
         return True, f'Nenhum usuário novo para sincronizar{skip_info}'
@@ -271,8 +282,8 @@ def sync_users_to_server(ip: str, port: int, auth_token: str, users: list) -> tu
             errors.append(f"lote {idx + 1}/{len(batches)}: {out or 'sem resposta'}")
 
     if errors:
-        return False, f'{synced}/{total} criados{skip_info}. Erros: {"; ".join(errors)}'
-    return True, f'{synced} usuários sincronizados{skip_info}'
+        return False, f'{synced}/{total} criados{skip_info}{force_info}. Erros: {"; ".join(errors)}'
+    return True, f'{synced} usuários sincronizados{skip_info}{force_info}'
 
 
 
