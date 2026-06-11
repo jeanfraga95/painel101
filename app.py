@@ -392,6 +392,12 @@ def create_user():
             except FuturesTimeout:
                 server_msg = 'Alguns servidores demoraram e foram ignorados'
 
+        # Registra todos os servidores extras da categoria em ssh_user_servers
+        # (o primário já está em ssh_users.server_id; apenas os demais vão aqui)
+        # Isso garante que delete/suspend/renew atuem em TODOS os servidores.
+        for srv in target_servers[1:]:
+            db.add_user_extra_server(new_id, srv['id'])
+
         app_link = db.get_setting('app_link', '')
         return jsonify(
             success=True,
@@ -477,6 +483,11 @@ def create_test():
                     server_msg = s_msg
         except FuturesTimeout:
             server_msg = 'Alguns servidores demoraram e foram ignorados'
+
+    # Registra servidores extras da categoria em ssh_user_servers
+    # para que delete/suspend/renew atuem em TODOS os servidores
+    for srv in target_servers[1:]:
+        db.add_user_extra_server(new_id, srv['id'])
 
     app_link = db.get_setting('app_link', '')
     return jsonify(
