@@ -1280,24 +1280,31 @@ def sync_server(server_id):
     if not srv:
         return jsonify(success=False, message='Servidor não encontrado')
 
-    # force=true pula a verificação de duplicatas no servidor (útil para servidor novo)
+    # force=true: envia TODOS os usuários ativos do painel (ignora vinculação ao servidor)
+    # Útil para servidor novo onde nenhum usuário está ainda vinculado.
+    # force=false: envia apenas usuários vinculados a este servidor (primário ou extra).
     force = request.form.get('force', 'false').lower() in ('1', 'true', 'yes')
 
-    # Busca todos os usuários ativos associados a este servidor:
-    # inclui tanto os que têm server_id=este servidor (primário)
-    # quanto os que têm este servidor como extra (tabela ssh_user_servers)
-    user_ids = db.get_users_on_server(server_id)
-    users_list = []
-    if user_ids:
-        conn = db.get_db()
-        placeholders = ','.join('?' * len(user_ids))
+    conn = db.get_db()
+    if force:
+        # Sync Total: todos os usuários ativos do painel, qualquer servidor
         rows = conn.execute(
-            f"SELECT * FROM ssh_users WHERE id IN ({placeholders}) AND status='active'",
-            user_ids
+            "SELECT * FROM ssh_users WHERE status='active' ORDER BY expires_at"
         ).fetchall()
-        conn.close()
-        users_list = [dict(u) for u in rows]
+    else:
+        # Sync normal: apenas os vinculados a este servidor
+        user_ids = db.get_users_on_server(server_id)
+        if user_ids:
+            placeholders = ','.join('?' * len(user_ids))
+            rows = conn.execute(
+                f"SELECT * FROM ssh_users WHERE id IN ({placeholders}) AND status='active'",
+                user_ids
+            ).fetchall()
+        else:
+            rows = []
+    conn.close()
 
+    users_list = [dict(u) for u in rows]
     ok, msg = sc.sync_users_to_server(srv['ip'], srv['module_port'], srv['auth_token'], users_list, force=force)
     return jsonify(success=ok, message=msg, users_count=len(users_list))
 
