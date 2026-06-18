@@ -1,63 +1,769 @@
 <!DOCTYPE html>
 <html lang="pt-BR" data-bs-theme="{{ panel_theme }}">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{{ panel_name }} — Login</title>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
-<style>
-body { min-height: 100vh; display: flex; align-items: center; justify-content: center;
-       background: {{ '#0f1117' if panel_theme == 'dark' else '#f0f2f5' }}; }
-.login-card { width: 100%; max-width: 400px; border-radius: 16px; border: none;
-              box-shadow: 0 20px 60px rgba(0,0,0,.3); }
-.login-header { border-radius: 16px 16px 0 0; background: {{ panel_color }}; padding: 2rem; text-align: center; }
-.btn-accent { background: {{ panel_color }}; border-color: {{ panel_color }}; color: #fff; }
-.btn-accent:hover { filter: brightness(1.15); color: #fff; }
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="referrer" content="no-referrer">
+    <title>{{ panel_name }} — Login</title>
+    
+    <!-- Bootstrap CSS com SRI -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" 
+          rel="stylesheet"
+          integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN"
+          crossorigin="anonymous">
+    
+    <!-- Font Awesome com SRI -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" 
+          rel="stylesheet"
+          integrity="sha512-1ycn6IcaQQ40/MKBW2W4Rhis/DbILU74C1vSrLJxCq57o941Ym01SwNsOMqvEBFlcgUa6xLiPY/NS5R+E6ztJQ=="
+          crossorigin="anonymous">
+    
+    <style>
+        /* Estilos existentes */
+        body { 
+            min-height: 100vh; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center;
+            background: {{ '#0f1117' if panel_theme == 'dark' else '#f0f2f5' }}; 
+            margin: 0;
+            padding: 20px;
+        }
+        
+        .login-card { 
+            width: 100%; 
+            max-width: 400px; 
+            border-radius: 16px; 
+            border: none;
+            box-shadow: 0 20px 60px rgba(0,0,0,.3); 
+            animation: fadeIn 0.5s ease;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .login-header { 
+            border-radius: 16px 16px 0 0; 
+            background: {{ panel_color }}; 
+            padding: 2rem; 
+            text-align: center; 
+        }
+        
+        .btn-accent { 
+            background: {{ panel_color }}; 
+            border-color: {{ panel_color }}; 
+            color: #fff; 
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .btn-accent:hover { 
+            filter: brightness(1.15); 
+            color: #fff;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(13, 110, 253, 0.3);
+        }
+        
+        .btn-accent:active {
+            transform: translateY(0px);
+        }
+        
+        .btn-accent:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        /* Indicador de força da senha */
+        .password-strength-meter {
+            height: 5px;
+            border-radius: 3px;
+            transition: width 0.3s ease;
+        }
+        
+        /* Alertas personalizados */
+        .alert-custom {
+            animation: slideDown 0.3s ease;
+        }
+        
+        @keyframes slideDown {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        /* Loading spinner no botão */
+        .btn-loading {
+            pointer-events: none;
+        }
+        
+        .btn-loading .spinner {
+            display: inline-block;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        /* Campos com erro */
+        .is-invalid {
+            border-color: #dc3545 !important;
+        }
+        
+        /* Responsivo */
+        @media (max-width: 480px) {
+            .login-card {
+                margin: 10px;
+            }
+            .login-header {
+                padding: 1.5rem;
+            }
+            .login-header h4 {
+                font-size: 1.2rem;
+            }
+        }
+        
+        /* Tooltip de segurança */
+        .security-badge {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0,0,0,0.7);
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            backdrop-filter: blur(10px);
+            z-index: 999;
+        }
+        
+        .security-badge i {
+            color: #28a745;
+            margin-right: 5px;
+        }
+    </style>
 </head>
 <body>
+
 <div class="login-card card">
-  <div class="login-header">
-    <i class="fas fa-shield-alt fa-3x mb-2 text-white opacity-90"></i>
-    <h4 class="text-white mb-0 fw-bold">{{ panel_name }}</h4>
-    <small class="text-white opacity-75">Gerenciador SSH</small>
-  </div>
-  <div class="card-body p-4">
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% for cat, msg in messages %}
-        <div class="alert alert-{{ cat }} py-2">{{ msg }}</div>
-      {% endfor %}
-    {% endwith %}
-
-    <form method="POST">
-      <div class="mb-3">
-        <label class="form-label fw-semibold">Usuário</label>
-        <div class="input-group">
-          <span class="input-group-text"><i class="fas fa-user"></i></span>
-          <input type="text" name="username" class="form-control form-control-lg" placeholder="admin" required autofocus>
-        </div>
-      </div>
-      <div class="mb-4">
-        <label class="form-label fw-semibold">Senha</label>
-        <div class="input-group">
-          <span class="input-group-text"><i class="fas fa-lock"></i></span>
-          <input type="password" name="password" class="form-control form-control-lg" placeholder="••••••••" required>
-        </div>
-      </div>
-      <button type="submit" class="btn btn-accent btn-lg w-100 fw-semibold">
-        <i class="fas fa-sign-in-alt me-2"></i>Entrar
-      </button>
-    </form>
-
-    <hr class="my-3">
-    <div class="text-center">
-      <a href="{{ url_for('user_login') }}" class="text-muted small">
-        <i class="fas fa-user-clock me-1"></i>Verificar validade / Renovar acesso
-      </a>
+    <!-- Header -->
+    <div class="login-header">
+        <i class="fas fa-shield-alt fa-3x mb-2 text-white opacity-90"></i>
+        <h4 class="text-white mb-0 fw-bold">{{ panel_name }}</h4>
+        <small class="text-white opacity-75">Gerenciador SSH</small>
     </div>
-  </div>
+    
+    <!-- Body -->
+    <div class="card-body p-4">
+        <!-- Flash Messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for cat, msg in messages %}
+                <div class="alert alert-{{ cat }} py-2 alert-dismissible fade show" role="alert">
+                    {{ msg }}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+            {% endfor %}
+        {% endwith %}
+        
+        <!-- Formulário de Login -->
+        <form method="POST" id="loginForm" novalidate>
+            <!-- CSRF Token (se disponível) -->
+            {% if csrf_token %}
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            {% endif %}
+            
+            <!-- Honeypot Anti-Bot -->
+            <div style="display: none !important;">
+                <input type="text" name="honeypot" id="honeypot" 
+                       tabindex="-1" autocomplete="off" 
+                       aria-hidden="true" style="display:none">
+            </div>
+            
+            <!-- Timestamp Anti-Bot -->
+            <input type="hidden" name="form_timestamp" id="formTimestamp" value="">
+            
+            <!-- Campo Usuário -->
+            <div class="mb-3">
+                <label class="form-label fw-semibold" for="username">
+                    <i class="fas fa-user me-1"></i>Usuário
+                </label>
+                <div class="input-group">
+                    <span class="input-group-text"><i class="fas fa-user"></i></span>
+                    <input type="text" 
+                           name="username" 
+                           id="username"
+                           class="form-control form-control-lg" 
+                           placeholder="admin" 
+                           required 
+                           autofocus 
+                           autocomplete="off" 
+                           minlength="3" 
+                           maxlength="30"
+                           pattern="^[a-zA-Z0-9_.-]+$"
+                           title="Apenas letras, números, underscore, ponto e hífen">
+                </div>
+                <div class="invalid-feedback" id="usernameFeedback">
+                    Usuário inválido. Use apenas letras, números, _, . ou -
+                </div>
+                <small class="text-muted">Mínimo 3 caracteres</small>
+            </div>
+            
+            <!-- Campo Senha -->
+            <div class="mb-3">
+                <label class="form-label fw-semibold" for="password">
+                    <i class="fas fa-lock me-1"></i>Senha
+                </label>
+                <div class="input-group">
+                    <span class="input-group-text"><i class="fas fa-lock"></i></span>
+                    <input type="password" 
+                           name="password" 
+                           id="password"
+                           class="form-control form-control-lg" 
+                           placeholder="••••••••" 
+                           required
+                           autocomplete="new-password" 
+                           minlength="8" 
+                           maxlength="100">
+                    <button class="btn btn-outline-secondary" type="button" id="togglePassword" 
+                            aria-label="Mostrar/ocultar senha">
+                        <i class="fas fa-eye"></i>
+                    </button>
+                </div>
+                <div class="invalid-feedback" id="passwordFeedback">
+                    Senha deve ter no mínimo 8 caracteres
+                </div>
+                
+                <!-- Indicador de força da senha -->
+                <div class="mt-2">
+                    <div class="progress" style="height: 5px; background: #e9ecef;">
+                        <div id="passwordStrength" 
+                             class="progress-bar password-strength-meter" 
+                             role="progressbar" 
+                             style="width: 0%;" 
+                             aria-valuenow="0" 
+                             aria-valuemin="0" 
+                             aria-valuemax="100">
+                        </div>
+                    </div>
+                    <small id="passwordStrengthText" class="text-muted">
+                        <i class="fas fa-info-circle me-1"></i>Força da senha
+                    </small>
+                </div>
+            </div>
+            
+            <!-- Botão Submit -->
+            <button type="submit" id="submitBtn" class="btn btn-accent btn-lg w-100 fw-semibold">
+                <i class="fas fa-sign-in-alt me-2"></i>Entrar
+            </button>
+        </form>
+        
+        <hr class="my-3">
+        
+        <!-- Links -->
+        <div class="text-center">
+            <a href="{{ url_for('user_login') }}" class="text-muted small">
+                <i class="fas fa-user-clock me-1"></i>Verificar validade / Renovar acesso
+            </a>
+        </div>
+        
+        <div class="text-center mt-2">
+            <small class="text-muted">
+                <i class="fas fa-shield-alt me-1"></i>Conexão segura
+            </small>
+        </div>
+    </div>
 </div>
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+<!-- Security Badge (opcional) -->
+<div class="security-badge" id="securityBadge">
+    <i class="fas fa-check-circle"></i>
+    <span>Proteção ativa</span>
+</div>
+
+<!-- Bootstrap JS com SRI -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-C6RzsynM9kWDrMNeT87bh95OGNyZPhcTNXj1NW7RuBCsyN/o0jlpcV8Qyq46cDfL"
+        crossorigin="anonymous">
+</script>
+
+<!-- ============================================ -->
+<!-- SCRIPT DE SEGURANÇA COMPLETO                   -->
+<!-- ============================================ -->
+<script>
+(function() {
+    'use strict';
+    
+    // ============================================
+    // CONFIGURAÇÕES DE SEGURANÇA
+    // ============================================
+    const CONFIG = {
+        MAX_ATTEMPTS: 5,              // Máximo de tentativas
+        BLOCK_TIME: 30000,            // Tempo de bloqueio (30 segundos)
+        MIN_PASSWORD_LENGTH: 8,       // Tamanho mínimo da senha
+        MIN_USERNAME_LENGTH: 3,       // Tamanho mínimo do usuário
+        MIN_FORM_TIME: 3,             // Tempo mínimo para preencher (segundos)
+        ALERT_DURATION: 5000,         // Duração dos alerts (5 segundos)
+        SUBMIT_TIMEOUT: 10000,        // Timeout do submit (10 segundos)
+    };
+    
+    // ============================================
+    // ELEMENTOS DO DOM
+    // ============================================
+    const form = document.getElementById('loginForm');
+    const submitBtn = document.getElementById('submitBtn');
+    const username = document.getElementById('username');
+    const password = document.getElementById('password');
+    const honeypot = document.getElementById('honeypot');
+    const timestampInput = document.getElementById('formTimestamp');
+    const togglePassword = document.getElementById('togglePassword');
+    const strengthBar = document.getElementById('passwordStrength');
+    const strengthText = document.getElementById('passwordStrengthText');
+    
+    // ============================================
+    // ESTADO DA APLICAÇÃO
+    // ============================================
+    let loginAttempts = 0;
+    let isBlocked = false;
+    let isSubmitting = false;
+    let blockTimeout = null;
+    let alertTimeouts = [];
+    
+    // ============================================
+    // INICIALIZAÇÃO
+    // ============================================
+    function init() {
+        // Definir timestamp
+        if (timestampInput) {
+            timestampInput.value = Date.now();
+        }
+        
+        // Sanitizar URL
+        sanitizeURL();
+        
+        // Adicionar event listeners
+        attachEventListeners();
+        
+        // Verificar se há mensagem de erro na URL
+        checkURLErrors();
+        
+        console.log('🔒 Sistema de segurança frontend ativado');
+        console.log(`📋 Configurações: ${CONFIG.MAX_ATTEMPTS} tentativas, ${CONFIG.BLOCK_TIME/1000}s bloqueio`);
+    }
+    
+    // ============================================
+    // EVENT LISTENERS
+    // ============================================
+    function attachEventListeners() {
+        // Submit do formulário
+        form.addEventListener('submit', handleSubmit);
+        
+        // Validação do usuário em tempo real
+        username.addEventListener('input', validateUsername);
+        username.addEventListener('blur', validateUsername);
+        
+        // Validação da senha em tempo real
+        password.addEventListener('input', function() {
+            validatePassword();
+            checkPasswordStrength(this.value);
+        });
+        password.addEventListener('blur', validatePassword);
+        
+        // Toggle mostrar senha
+        if (togglePassword) {
+            togglePassword.addEventListener('click', togglePasswordVisibility);
+        }
+        
+        // Prevenir paste em campos (opcional)
+        // password.addEventListener('paste', handlePaste);
+        
+        // Prevenir submit com Enter em campos específicos
+        document.querySelectorAll('input').forEach(input => {
+            input.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter' && this !== document.activeElement) {
+                    // Deixar o comportamento padrão
+                }
+            });
+        });
+    }
+    
+    // ============================================
+    // HANDLE SUBMIT
+    // ============================================
+    function handleSubmit(e) {
+        // Prevenir múltiplos envios
+        if (isSubmitting) {
+            e.preventDefault();
+            showAlert('Aguarde o processamento da sua requisição.', 'warning');
+            return false;
+        }
+        
+        // 1. Verificar honeypot
+        if (checkHoneypot()) {
+            e.preventDefault();
+            // Redirecionar silenciosamente (bot detectado)
+            window.location.href = '/login?error=bot';
+            return false;
+        }
+        
+        // 2. Verificar tempo de preenchimento
+        if (!checkFormTime()) {
+            e.preventDefault();
+            showAlert('Por favor, aguarde alguns segundos antes de enviar.', 'warning');
+            return false;
+        }
+        
+        // 3. Verificar bloqueio
+        if (!checkBlocked()) {
+            e.preventDefault();
+            return false;
+        }
+        
+        // 4. Validar campos
+        if (!validateAllFields()) {
+            e.preventDefault();
+            return false;
+        }
+        
+        // 5. Incrementar tentativas
+        loginAttempts++;
+        
+        // 6. Verificar limite de tentativas
+        if (loginAttempts >= CONFIG.MAX_ATTEMPTS) {
+            e.preventDefault();
+            activateBlock();
+            return false;
+        }
+        
+        // 7. Permitir submit
+        setSubmittingState(true);
+    }
+    
+    // ============================================
+    // VALIDAÇÕES
+    // ============================================
+    function validateUsername() {
+        const value = username.value.trim();
+        const isValid = value.length >= CONFIG.MIN_USERNAME_LENGTH && 
+                       /^[a-zA-Z0-9_.-]+$/.test(value);
+        
+        if (value.length > 0 && !isValid) {
+            username.classList.add('is-invalid');
+            document.getElementById('usernameFeedback').style.display = 'block';
+            return false;
+        } else {
+            username.classList.remove('is-invalid');
+            document.getElementById('usernameFeedback').style.display = 'none';
+            return true;
+        }
+    }
+    
+    function validatePassword() {
+        const value = password.value;
+        const isValid = value.length >= CONFIG.MIN_PASSWORD_LENGTH;
+        
+        if (value.length > 0 && !isValid) {
+            password.classList.add('is-invalid');
+            document.getElementById('passwordFeedback').style.display = 'block';
+            return false;
+        } else {
+            password.classList.remove('is-invalid');
+            document.getElementById('passwordFeedback').style.display = 'none';
+            return true;
+        }
+    }
+    
+    function validateAllFields() {
+        const isUsernameValid = validateUsername();
+        const isPasswordValid = validatePassword();
+        
+        if (!isUsernameValid) {
+            username.focus();
+            showAlert(`Usuário deve ter no mínimo ${CONFIG.MIN_USERNAME_LENGTH} caracteres válidos.`, 'danger');
+            return false;
+        }
+        
+        if (!isPasswordValid) {
+            password.focus();
+            showAlert(`Senha deve ter no mínimo ${CONFIG.MIN_PASSWORD_LENGTH} caracteres.`, 'danger');
+            return false;
+        }
+        
+        // Verificar caracteres perigosos
+        const dangerous = /[<>"'`;]/;
+        const usernameVal = username.value.trim();
+        const passwordVal = password.value;
+        
+        if (dangerous.test(usernameVal) || dangerous.test(passwordVal)) {
+            showAlert('Caracteres inválidos detectados. Tente novamente.', 'danger');
+            return false;
+        }
+        
+        return true;
+    }
+    
+    // ============================================
+    // CHECKS DE SEGURANÇA
+    // ============================================
+    function checkHoneypot() {
+        return honeypot && honeypot.value.length > 0;
+    }
+    
+    function checkFormTime() {
+        if (!timestampInput) return true;
+        const startTime = parseInt(timestampInput.value);
+        const elapsed = (Date.now() - startTime) / 1000;
+        return elapsed >= CONFIG.MIN_FORM_TIME;
+    }
+    
+    function checkBlocked() {
+        if (isBlocked) {
+            showAlert(`Muitas tentativas. Aguarde ${CONFIG.BLOCK_TIME/1000} segundos.`, 'danger');
+            return false;
+        }
+        return true;
+    }
+    
+    // ============================================
+    // BLOQUEIO
+    // ============================================
+    function activateBlock() {
+        isBlocked = true;
+        showAlert(`Bloqueado por ${CONFIG.BLOCK_TIME/1000} segundos.`, 'danger');
+        
+        // Desabilitar botão
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fas fa-clock me-2"></i>Aguarde...';
+        submitBtn.classList.add('btn-loading');
+        
+        // Limpar timeout anterior
+        if (blockTimeout) {
+            clearTimeout(blockTimeout);
+        }
+        
+        // Reabilitar após tempo
+        blockTimeout = setTimeout(() => {
+            isBlocked = false;
+            loginAttempts = 0;
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fas fa-sign-in-alt me-2"></i>Entrar';
+            submitBtn.classList.remove('btn-loading');
+            showAlert('Tentativas resetadas. Tente novamente.', 'info');
+            blockTimeout = null;
+        }, CONFIG.BLOCK_TIME);
+    }
+    
+    // ============================================
+    // ESTADO DO SUBMIT
+    // ============================================
+    function setSubmittingState(submitting) {
+        isSubmitting = submitting;
+        
+        if (submitting) {
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Verificando...';
+            submitBtn.classList.add('btn-loading');
+            
+            // Timeout de segurança
+            setTimeout(() => {
+                if (isSubmitting) {
+                    isSubmitting = false;
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = '<i class="fas fa-sign-in-alt me-2"></i>Entrar';
+                    submitBtn.classList.remove('btn-loading');
+                    showAlert('Tempo excedido. Tente novamente.', 'warning');
+                }
+            }, CONFIG.SUBMIT_TIMEOUT);
+        } else {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fas fa-sign-in-alt me-2"></i>Entrar';
+            submitBtn.classList.remove('btn-loading');
+        }
+    }
+    
+    // ============================================
+    // FORÇA DA SENHA
+    // ============================================
+    function checkPasswordStrength(pwd) {
+        let score = 0;
+        let label = 'Muito fraca';
+        let className = 'bg-danger';
+        
+        if (pwd.length >= 8) score += 25;
+        if (pwd.length >= 12) score += 25;
+        if (/[a-z]/.test(pwd) && /[A-Z]/.test(pwd)) score += 25;
+        if (/\d/.test(pwd)) score += 12.5;
+        if (/[^a-zA-Z0-9]/.test(pwd)) score += 12.5;
+        
+        if (score >= 75) { label = 'Forte'; className = 'bg-success'; }
+        else if (score >= 50) { label = 'Média'; className = 'bg-warning'; }
+        else if (score >= 25) { label = 'Fraca'; className = 'bg-danger'; }
+        
+        updateStrengthMeter(score, label, className);
+    }
+    
+    function updateStrengthMeter(score, label, className) {
+        if (strengthBar && strengthText) {
+            strengthBar.style.width = score + '%';
+            strengthBar.className = 'progress-bar password-strength-meter ' + className;
+            strengthText.innerHTML = `<i class="fas fa-info-circle me-1"></i>Força: ${label}`;
+            
+            // Mudar cor do texto
+            const colors = {
+                'bg-success': '#28a745',
+                'bg-warning': '#ffc107',
+                'bg-danger': '#dc3545'
+            };
+            strengthText.style.color = colors[className] || '#6c757d';
+        }
+    }
+    
+    // ============================================
+    // TOGGLE SENHA
+    // ============================================
+    function togglePasswordVisibility() {
+        const type = password.getAttribute('type') === 'password' ? 'text' : 'password';
+        password.setAttribute('type', type);
+        const icon = togglePassword.querySelector('i');
+        icon.className = type === 'password' ? 'fas fa-eye' : 'fas fa-eye-slash';
+    }
+    
+    // ============================================
+    // ALERTS
+    // ============================================
+    function showAlert(msg, type = 'danger') {
+        // Remover alerts antigos
+        document.querySelectorAll('.alert-custom').forEach(el => el.remove());
+        
+        // Criar novo alert
+        const alertDiv = document.createElement('div');
+        alertDiv.className = `alert alert-${type} py-2 alert-custom alert-dismissible fade show`;
+        alertDiv.role = 'alert';
+        alertDiv.innerHTML = `
+            ${msg}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        `;
+        
+        // Inserir no topo do card-body
+        const cardBody = document.querySelector('.card-body');
+        const formElement = cardBody.querySelector('form');
+        cardBody.insertBefore(alertDiv, formElement);
+        
+        // Auto-remover
+        const timeout = setTimeout(() => {
+            if (alertDiv.parentNode) {
+                alertDiv.remove();
+            }
+        }, CONFIG.ALERT_DURATION);
+        
+        alertTimeouts.push(timeout);
+        
+        // Usar Bootstrap para fechar
+        const closeBtn = alertDiv.querySelector('.btn-close');
+        if (closeBtn) {
+            closeBtn.addEventListener('click', function() {
+                clearTimeout(timeout);
+                alertDiv.remove();
+            });
+        }
+    }
+    
+    // ============================================
+    // SANITIZAR URL (Anti-XSS)
+    // ============================================
+    function sanitizeURL() {
+        try {
+            const params = new URLSearchParams(window.location.search);
+            let hasXSS = false;
+            const dangerousPattern = /<|>|script|onerror|onload|javascript:|data:/i;
+            
+            for (let [key, value] of params) {
+                if (dangerousPattern.test(value)) {
+                    params.delete(key);
+                    hasXSS = true;
+                }
+            }
+            
+            if (hasXSS) {
+                const newURL = window.location.pathname + '?' + params.toString();
+                window.history.replaceState({}, document.title, newURL);
+                showAlert('Parâmetros suspeitos removidos.', 'warning');
+            }
+        } catch (e) {
+            // Ignorar erros de URL
+        }
+    }
+    
+    // ============================================
+    // CHECK URL ERRORS
+    // ============================================
+    function checkURLErrors() {
+        const params = new URLSearchParams(window.location.search);
+        const error = params.get('error');
+        
+        if (error === 'bot') {
+            showAlert('Bot detectado. Por favor, preencha o formulário manualmente.', 'warning');
+        }
+    }
+    
+    // ============================================
+    // HANDLE PASTE (opcional)
+    // ============================================
+    function handlePaste(e) {
+        // Descomentar para bloquear colagem em senha
+        // e.preventDefault();
+        // showAlert('Colar senha não é permitido por segurança.', 'warning');
+    }
+    
+    // ============================================
+    // CLEANUP
+    // ============================================
+    function cleanup() {
+        alertTimeouts.forEach(timeout => clearTimeout(timeout));
+        if (blockTimeout) clearTimeout(blockTimeout);
+    }
+    
+    // ============================================
+    // INICIAR
+    // ============================================
+    // Aguardar DOM carregar
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+    
+    // Cleanup ao descarregar
+    window.addEventListener('beforeunload', cleanup);
+    
+    // ============================================
+    // EXPORTAR PARA DEBUG (opcional)
+    // ============================================
+    window.__security = {
+        config: CONFIG,
+        state: {
+            attempts: () => loginAttempts,
+            blocked: () => isBlocked,
+            submitting: () => isSubmitting
+        },
+        reset: function() {
+            loginAttempts = 0;
+            isBlocked = false;
+            isSubmitting = false;
+            if (blockTimeout) clearTimeout(blockTimeout);
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fas fa-sign-in-alt me-2"></i>Entrar';
+            submitBtn.classList.remove('btn-loading');
+            showAlert('Estado resetado.', 'info');
+        }
+    };
+    
+})();
+</script>
+
 </body>
 </html>
