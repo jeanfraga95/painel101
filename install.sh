@@ -99,7 +99,7 @@ kill_port() {
 free_ports() {
     banner "Liberando portas..."
     kill_port "$PANEL_PORT"
-    for p in 5000 5001 5050 5052 8000 8080 8888; do
+    for p in 2083 5001 5050 5052 8000 8080 8888; do
         [ "$p" -ne "$PANEL_PORT" ] && kill_port "$p"
     done
     pkill -9 -f "python.*app\.py" 2>/dev/null || true
