@@ -1768,14 +1768,20 @@ def mp_webhook():
                         u = db.get_ssh_user(payment['ssh_user_id'])
                         if u:
                             # Renova/cria em TODOS os servidores da categoria (não só nos já vinculados)
-                            _sync_renew_to_category(u)
+                            srv_results = _sync_renew_to_category(u)
+                            for name, ok, msg in srv_results:
+                                if not ok:
+                                    app.logger.warning(
+                                        f"[MP webhook] Falha ao renovar '{u['username']}' "
+                                        f"no servidor '{name}': {msg}"
+                                    )
                             unlock_cmd = (
                                 f"passwd -u {u['username']} 2>/dev/null; "
                                 f"/root/pmaster_agent unblockuser {u['username']} 2>/dev/null || true"
                             )
                             sc.broadcast_command(u, unlock_cmd, db)
-                except Exception:
-                    pass
+                except Exception as e:
+                    app.logger.error(f"[MP webhook] Erro ao processar payment_id={payment_id}: {e}")
 
     return jsonify(status='ok')
 
