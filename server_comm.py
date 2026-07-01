@@ -104,7 +104,13 @@ def delete_user_on_server(ip: str, port: int, auth_token: str,
 def renew_user_on_server(ip: str, port: int, auth_token: str,
                           username: str, days: int) -> tuple:
     cmd = f"/root/pmaster_agent timedata {username} {days}"
-    return send_command(ip, port, auth_token, cmd)
+    ok, out = send_command(ip, port, auth_token, cmd)
+    # HTTP 200 só significa que o painel conseguiu falar com a VPS.
+    # É preciso conferir o texto de retorno para saber se o comando
+    # realmente funcionou (chage pode falhar mesmo com HTTP 200).
+    if ok and 'RENOVADOCOMSUCESSO' not in (out or ''):
+        ok = False
+    return ok, out
 
 
 def create_test_user_on_server(ip: str, port: int, auth_token: str,
