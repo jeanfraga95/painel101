@@ -5,7 +5,7 @@ Sistema web completo para gerenciamento de usuários SSH/V2Ray com suporte a rev
 ## 🚀 Instalação rápida
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/jeanfraga33/painel-master/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/jeanfraga95/painel101/main/install.sh | bash
 ```
 
 Ou manualmente:
