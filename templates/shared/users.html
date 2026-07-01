@@ -281,6 +281,14 @@ function submitRenew() {
       const [y, m, dd] = dateStr.slice(0, 10).split('-');
       dateStr = `${dd}/${m}/${y}`;
     }
+    // Avisa se o painel renovou mas a VPS falhou (server_msg vem do backend)
+    if (d.server_msg) {
+      const falhouAlgum = d.server_msg.split(';').some(s => s.trim() && !s.includes(':OK'));
+      if (falhouAlgum) {
+        showToast('Dias atualizados no painel, mas houve falha na VPS: ' + d.server_msg, 'warning');
+      }
+    }
+
     document.getElementById('renewResultUser').textContent = _renewUsername;
     document.getElementById('renewResultDate').textContent = dateStr;
     document.getElementById('renewStep1').classList.add('d-none');
