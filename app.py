@@ -638,10 +638,8 @@ def renew_user(user_id):
         )
         sc.broadcast_command(u, unlock_cmd, db)
 
-   updated = db.get_ssh_user(user_id)
+    updated = db.get_ssh_user(user_id)
     srv_results = _sync_renew_to_category(updated)
-
-    srv_results = sc.broadcast_renew(u, days_for_server, db)
     server_msg  = '; '.join(f"{n}:{'OK' if ok else msg}" for n, ok, msg in srv_results) if srv_results else ''
 
     new_exp    = updated['expires_at'][:10] if updated else ''
@@ -1771,11 +1769,6 @@ def mp_webhook():
                         if u:
                             # Renova/cria em TODOS os servidores da categoria (não só nos já vinculados)
                             _sync_renew_to_category(u)
-                            unlock_cmd = (
-                                f"passwd -u {u['username']} 2>/dev/null; "
-                                f"/root/pmaster_agent unblockuser {u['username']} 2>/dev/null || true"
-                            )
-                            sc.broadcast_command(u, unlock_cmd, db)
                             unlock_cmd = (
                                 f"passwd -u {u['username']} 2>/dev/null; "
                                 f"/root/pmaster_agent unblockuser {u['username']} 2>/dev/null || true"
