@@ -99,9 +99,17 @@ removessh(){
 
 timedata(){
     usuario=$1; dias=$2
+    if ! id "$usuario" >/dev/null 2>&1; then
+        echo "ERRO: usuario $usuario nao existe neste servidor"
+        exit 1
+    fi
     finaldate=$(date "+%Y-%m-%d" -d "+$dias days")
-    chage -E "$finaldate" "$usuario"
-    echo "RENOVADOCOMSUCESSO"
+    if chage -E "$finaldate" "$usuario" 2>&1; then
+        echo "RENOVADOCOMSUCESSO"
+    else
+        echo "ERRO: falha ao executar chage para $usuario"
+        exit 1
+    fi
 }
 
 # ── V2Ray/Xray functions using correct client format ────────────────────────
