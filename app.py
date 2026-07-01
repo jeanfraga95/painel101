@@ -529,6 +529,86 @@ def delete_user(user_id):
     return jsonify(success=True, message='Usuário deletado', server_msg=server_msg)
 
 
+def _sync_renew_to_category(u):
+    """
+    Renova (ou cria, se ainda não existir) o usuário SSH em TODOS os servidores
+    da categoria do seu servidor primário — não só nos já vinculados em
+    ssh_user_servers. Isso resolve o caso de servidores adicionados à
+    categoria depois que o usuário já existia no painel.
+    Vincula automaticamente qualquer servidor novo da categoria (evita ter
+    que ir em 'editar usuário' e adicionar manualmente).
+    Retorna lista de (server_name, ok, msg).
+    """
+    results = []
+    if not u['server_id']:
+        return results
+
+    primary_srv = db.get_server(u['server_id'])
+    if not primary_srv or not primary_srv['category_id']:
+        # Sem categoria: mantém comportamento antigo (só primário + extras)
+        return sc.broadcast_renew(u, _days_left(u), db)
+
+    cat_servers = db.get_servers_by_category(primary_srv['category_id'])
+    if not cat_servers:
+        return sc.broadcast_renew(u, _days_left(u), db)
+
+    known_ids = set(db.get_user_all_server_ids(u['id']))
+    exp_days = _days_left(u)
+
+    for srv in cat_servers:
+        # Vincula o servidor ao usuário se ainda não estiver registrado
+        if srv['id'] != u['server_id'] and srv['id'] not in known_ids:
+            db.add_user_extra_server(u['id'], srv['id'])
+
+        # Verifica se o usuário já existe nesse servidor específico
+        if u['v2ray_uuid']:
+            uuid_check_cmd = (
+                "python3 -c \""
+                "import json\n"
+                "try:\n"
+                "    cfg=json.load(open('/usr/local/etc/xray/config.json'))\n"
+                "    ids=[c.get('id','') for i in cfg.get('inbounds',[])"
+                " for c in i.get('settings',{}).get('clients',[])]\n"
+                f"    print('UUID_EXISTS' if '{u['v2ray_uuid']}' in ids else 'UUID_MISSING')\n"
+                "except Exception:\n"
+                "    print('UUID_MISSING')\n"
+                "\" 2>/dev/null || echo UUID_MISSING"
+            )
+            ck_ok, ck_out = sc.send_command(srv['ip'], srv['module_port'], srv['auth_token'], uuid_check_cmd)
+            exists = ck_ok and 'UUID_EXISTS' in (ck_out or '')
+        else:
+            ck_ok, ck_out = sc.send_command(
+                srv['ip'], srv['module_port'], srv['auth_token'],
+                f"id {u['username']} 2>/dev/null && echo EXISTS || echo MISSING"
+            )
+            exists = ck_ok and 'EXISTS' in (ck_out or '')
+
+        if exists:
+            ok, msg = sc.renew_user_on_server(
+                srv['ip'], srv['module_port'], srv['auth_token'], u['username'], exp_days
+            )
+        else:
+            ok, msg = sc.create_ssh_user_on_server(
+                srv['ip'], srv['module_port'], srv['auth_token'],
+                u['username'], u['password'], exp_days, u['connection_limit'],
+                uuid=u['v2ray_uuid']
+            )
+
+        results.append((srv['name'], ok, msg))
+
+    return results
+
+
+def _days_left(u) -> int:
+    """Dias restantes a partir de hoje até expires_at (mínimo 1)."""
+    try:
+        from datetime import date as _date
+        exp_date = _date.fromisoformat(u['expires_at'][:10])
+        return max(1, (exp_date - now_br().date()).days)
+    except Exception:
+        return 30
+
+
 @app.route('/users/renew/<int:user_id>', methods=['POST'])
 @login_required
 def renew_user(user_id):
@@ -558,13 +638,8 @@ def renew_user(user_id):
         )
         sc.broadcast_command(u, unlock_cmd, db)
 
-    updated = db.get_ssh_user(user_id)
-    try:
-        from datetime import date as _date
-        exp_date = _date.fromisoformat(updated['expires_at'][:10])
-        days_for_server = max(1, (exp_date - now_br().date()).days)
-    except Exception:
-        days_for_server = days
+   updated = db.get_ssh_user(user_id)
+    srv_results = _sync_renew_to_category(updated)
 
     srv_results = sc.broadcast_renew(u, days_for_server, db)
     server_msg  = '; '.join(f"{n}:{'OK' if ok else msg}" for n, ok, msg in srv_results) if srv_results else ''
@@ -619,17 +694,14 @@ def update_user(user_id):
 
     # Sincroniza a nova data de expiração com TODOS os servidores (primário + extras)
     # quando expires_at foi editado manualmente neste modal (antes só ia pro banco local)
+    # Sincroniza a nova data de expiração com TODOS os servidores da categoria
+    # Sincroniza a nova data de expiração com TODOS os servidores da categoria
     if 'expires_at' in updates:
-        try:
-            from datetime import date as _date
-            new_exp_date = _date.fromisoformat(updates['expires_at'][:10])
-            days_for_server = max(1, (new_exp_date - now_br().date()).days)
-            srv_results = sc.broadcast_renew(u, days_for_server, db)
-            if srv_results:
-                exp_msg = '; '.join(f"{n}:{'OK' if ok else msg}" for n, ok, msg in srv_results)
-                server_msg = (server_msg + '; ' if server_msg else '') + exp_msg
-        except Exception:
-            pass
+        updated_u = db.get_ssh_user(user_id)
+        srv_results = _sync_renew_to_category(updated_u)
+        if srv_results:
+            exp_msg = '; '.join(f"{n}:{'OK' if ok else msg}" for n, ok, msg in srv_results)
+            server_msg = (server_msg + '; ' if server_msg else '') + exp_msg
 
     return jsonify(success=True, message='Atualizado', server_msg=server_msg)
 
@@ -1697,15 +1769,13 @@ def mp_webhook():
                         db.update_ssh_user(payment['ssh_user_id'], status='active')
                         u = db.get_ssh_user(payment['ssh_user_id'])
                         if u:
-                            # Calculate TOTAL remaining days from today
-                            try:
-                                from datetime import date as _date
-                                exp_date = _date.fromisoformat(u['expires_at'][:10])
-                                days_for_server = max(1, (exp_date - now_br().date()).days)
-                            except Exception:
-                                days_for_server = 30
-                            # Renew + unlock on ALL servers (primary + extras)
-                            sc.broadcast_renew(u, days_for_server, db)
+                            # Renova/cria em TODOS os servidores da categoria (não só nos já vinculados)
+                            _sync_renew_to_category(u)
+                            unlock_cmd = (
+                                f"passwd -u {u['username']} 2>/dev/null; "
+                                f"/root/pmaster_agent unblockuser {u['username']} 2>/dev/null || true"
+                            )
+                            sc.broadcast_command(u, unlock_cmd, db)
                             unlock_cmd = (
                                 f"passwd -u {u['username']} 2>/dev/null; "
                                 f"/root/pmaster_agent unblockuser {u['username']} 2>/dev/null || true"
