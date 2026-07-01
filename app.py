@@ -617,6 +617,20 @@ def update_user(user_id):
                     f"echo '{u['username']}:{new_password}' | chpasswd"
                 )
 
+    # Sincroniza a nova data de expiração com TODOS os servidores (primário + extras)
+    # quando expires_at foi editado manualmente neste modal (antes só ia pro banco local)
+    if 'expires_at' in updates:
+        try:
+            from datetime import date as _date
+            new_exp_date = _date.fromisoformat(updates['expires_at'][:10])
+            days_for_server = max(1, (new_exp_date - now_br().date()).days)
+            srv_results = sc.broadcast_renew(u, days_for_server, db)
+            if srv_results:
+                exp_msg = '; '.join(f"{n}:{'OK' if ok else msg}" for n, ok, msg in srv_results)
+                server_msg = (server_msg + '; ' if server_msg else '') + exp_msg
+        except Exception:
+            pass
+
     return jsonify(success=True, message='Atualizado', server_msg=server_msg)
 
 
