@@ -89,7 +89,10 @@ def create_ssh_user_on_server(ip: str, port: int, auth_token: str,
         cmd = f"/root/pmaster_agent v2rayadd {uuid} {username} {password} {days} {limit}"
     else:
         cmd = f"/root/pmaster_agent createssh {username} {password} {days} {limit}"
-    return send_command(ip, port, auth_token, cmd)
+    ok, out = send_command(ip, port, auth_token, cmd)
+    if ok and 'CRIADOCOMSUCESSO' not in (out or ''):
+        ok = False
+    return ok, out
 
 
 def delete_user_on_server(ip: str, port: int, auth_token: str,
@@ -521,17 +524,24 @@ def count_user_connections_on_server(ip: str, port: int, auth_token: str, userna
 def broadcast_renew(user, days_for_server: int, db_module) -> list:
     """
     Renew `user` on ALL servers it belongs to (primary + extras).
+    Estratégia: exclui e recria o usuário do zero em cada servidor com os
+    dados atuais do painel, em vez de tentar atualizar via chage. Isso
+    garante que a VPS fique idêntica ao painel mesmo que o usuário não
+    existisse mais lá, tivesse senha diferente, ou o chage estivesse
+    falhando silenciosamente.
     Returns list of (server_name, ok, msg) tuples.
     """
     server_ids = db_module.get_user_all_server_ids(user['id'])
+    uuid = user['v2ray_uuid'] if 'v2ray_uuid' in user.keys() else None
     results = []
     for sid in server_ids:
         srv = db_module.get_server(sid)
         if not srv:
             continue
-        ok, msg = renew_user_on_server(
+        ok, msg = create_ssh_user_on_server(
             srv['ip'], srv['module_port'], srv['auth_token'],
-            user['username'], days_for_server
+            user['username'], user['password'], days_for_server,
+            user['connection_limit'], uuid=uuid
         )
         results.append((srv['name'], ok, msg))
     return results
