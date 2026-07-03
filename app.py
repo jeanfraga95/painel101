@@ -531,12 +531,21 @@ def delete_user(user_id):
 
 def _sync_renew_to_category(u):
     """
-    Renova (ou cria, se ainda não existir) o usuário SSH em TODOS os servidores
-    da categoria do seu servidor primário — não só nos já vinculados em
-    ssh_user_servers. Isso resolve o caso de servidores adicionados à
-    categoria depois que o usuário já existia no painel.
+    Renova o usuário SSH em TODOS os servidores da categoria do seu servidor
+    primário — não só nos já vinculados em ssh_user_servers. Isso resolve o
+    caso de servidores adicionados à categoria depois que o usuário já
+    existia no painel.
     Vincula automaticamente qualquer servidor novo da categoria (evita ter
     que ir em 'editar usuário' e adicionar manualmente).
+
+    Estratégia: EXCLUI e RECRIA o usuário do zero em cada servidor, com os
+    dados atuais do painel (senha, dias, limite, uuid), em vez de tentar só
+    atualizar a validade (chage) do usuário existente. Isso garante que a
+    VPS fique sempre idêntica ao painel — mesmo que o usuário já não
+    existisse mais lá, estivesse com senha diferente, ou o chage estivesse
+    falhando silenciosamente. O próprio pmaster_agent já faz "removessh"
+    antes de criar, então não precisamos checar existência antes.
+
     Retorna lista de (server_name, ok, msg).
     """
     results = []
@@ -560,39 +569,13 @@ def _sync_renew_to_category(u):
         if srv['id'] != u['server_id'] and srv['id'] not in known_ids:
             db.add_user_extra_server(u['id'], srv['id'])
 
-        # Verifica se o usuário já existe nesse servidor específico
-        if u['v2ray_uuid']:
-            uuid_check_cmd = (
-                "python3 -c \""
-                "import json\n"
-                "try:\n"
-                "    cfg=json.load(open('/usr/local/etc/xray/config.json'))\n"
-                "    ids=[c.get('id','') for i in cfg.get('inbounds',[])"
-                " for c in i.get('settings',{}).get('clients',[])]\n"
-                f"    print('UUID_EXISTS' if '{u['v2ray_uuid']}' in ids else 'UUID_MISSING')\n"
-                "except Exception:\n"
-                "    print('UUID_MISSING')\n"
-                "\" 2>/dev/null || echo UUID_MISSING"
-            )
-            ck_ok, ck_out = sc.send_command(srv['ip'], srv['module_port'], srv['auth_token'], uuid_check_cmd)
-            exists = ck_ok and 'UUID_EXISTS' in (ck_out or '')
-        else:
-            ck_ok, ck_out = sc.send_command(
-                srv['ip'], srv['module_port'], srv['auth_token'],
-                f"id {u['username']} 2>/dev/null && echo EXISTS || echo MISSING"
-            )
-            exists = ck_ok and 'EXISTS' in (ck_out or '')
-
-        if exists:
-            ok, msg = sc.renew_user_on_server(
-                srv['ip'], srv['module_port'], srv['auth_token'], u['username'], exp_days
-            )
-        else:
-            ok, msg = sc.create_ssh_user_on_server(
-                srv['ip'], srv['module_port'], srv['auth_token'],
-                u['username'], u['password'], exp_days, u['connection_limit'],
-                uuid=u['v2ray_uuid']
-            )
+        # Exclui e recria com os dados atuais do painel — garante que a VPS
+        # fique idêntica ao painel independentemente do estado anterior.
+        ok, msg = sc.create_ssh_user_on_server(
+            srv['ip'], srv['module_port'], srv['auth_token'],
+            u['username'], u['password'], exp_days, u['connection_limit'],
+            uuid=u['v2ray_uuid']
+        )
 
         results.append((srv['name'], ok, msg))
 
