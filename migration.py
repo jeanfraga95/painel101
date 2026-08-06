@@ -19,6 +19,7 @@ GestorSSH tables parsed:
 
 import re
 import db
+import server_comm as sc
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -511,6 +512,10 @@ def migrate_gestor_ssh(sql_content: str) -> dict:
     # ── 7. Import ssh_accounts ──────────────────────────────────────────────
     ssh_raw = _extract_gestor_values(sql_content, 'ssh_accounts')
 
+    # usuarios importados por categoria do painel — usados depois para
+    # cadastra-los nos servidores (existentes + novos da mesma categoria)
+    cat_imported = {}
+
     for row in ssh_raw:
         if len(row) < 9:
             continue
@@ -550,8 +555,55 @@ def migrate_gestor_ssh(sql_content: str) -> dict:
             if is_suspended:
                 db.update_ssh_user(new_id, status='suspended')
             result['ssh_users'] += 1
+
+            # Vincula o usuario a TODOS os servidores da categoria (primario
+            # incluso). Se o mapeamento de servidor nao veio na origem, usa o
+            # primeiro servidor da categoria como primario (evita server_id NULL).
+            panel_cat_id = cat_to_panel_cat.get(cat_id)
+            if panel_cat_id:
+                cat_servers = db.get_servers_by_category(panel_cat_id)
+                if cat_servers:
+                    if not server_id:
+                        db.update_ssh_user(new_id, server_id=cat_servers[0]['id'])
+                    for srv in cat_servers:
+                        db.add_user_extra_server(new_id, srv['id'])
+                    cat_imported.setdefault(panel_cat_id, []).append({
+                        'id': new_id, 'username': login, 'password': senha or '123456',
+                        'expires_at': expires_at, 'connection_limit': limite,
+                        'v2ray_uuid': uuid,
+                        'status': 'suspended' if is_suspended else 'active',
+                    })
+                else:
+                    result['errors'].append(f"[{login}] categoria sem servidor ativo")
         else:
             result['skipped'] += 1
+
+    # ── 8. Cadastra os usuarios migrados nos servidores das categorias ────
+    # Para cada servidor do painel (ja existente OU importado agora nesta
+    # migracao), envia os usuarios migrados da categoria dele. O sync pula
+    # quem ja existe na VPS e cria apenas quem falta — assim usuários novos
+    # numa categoria também são incluídos automaticamente em servidores novos.
+    server_sync = {}
+    for srv in db.get_all_servers():
+        if not srv['category_id']:
+            continue
+        users = cat_imported.get(srv['category_id'], [])
+        if not users:
+            continue
+        try:
+            ok, msg = sc.sync_users_to_server(
+                srv['ip'], srv['module_port'], srv['auth_token'],
+                users, force=False
+            )
+            server_sync[srv['name']] = 'OK' if ok else 'FALHA'
+            if not ok:
+                result['errors'].append(
+                    f"[{srv['name']}] cadastro de usuarios: {str(msg)[:120]}")
+        except Exception as e:
+            server_sync[srv['name']] = 'FALHA'
+            result['errors'].append(
+                f"[{srv['name']}] cadastro de usuarios: {str(e)[:120]}")
+    result['server_sync'] = server_sync
 
     # Recalculate all account limits from real data
     db.recalculate_accounts_used()
