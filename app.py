@@ -550,7 +550,10 @@ def _sync_renew_to_category(u):
     """
     results = []
     if not u['server_id']:
-        return results
+        # Servidor primário ausente (usuário criado antes do campo server_id
+        # existir, ou o servidor primário foi removido → ON DELETE SET NULL).
+        # Renova pelos vínculos em ssh_user_servers, onde o usuário existe.
+        return sc.broadcast_renew(u, _days_left(u), db)
 
     primary_srv = db.get_server(u['server_id'])
     if not primary_srv or not primary_srv['category_id']:
@@ -1278,6 +1281,35 @@ def servers_list():
     return render_template('admin/servers.html', servers=servers, categories=categories, cat_map=cat_map)
 
 
+def _auto_attach_category_users(server_id: int) -> tuple:
+    """
+    Vincula e cadastra na VPS todos os usuários ativos da categoria do servidor.
+    Quando um servidor é adicionado (ou muda de categoria), os usuários da
+    mesma categoria passam a incluir o servidor automaticamente:
+      - cria os vínculos em ssh_user_servers (renovar/excluir passa a atuar nele)
+      - cria na VPS quem ainda não existe (sync pula duplicatas)
+    Returns (users_count, message).
+    """
+    srv = db.get_server(server_id)
+    if not srv or not srv['category_id']:
+        return 0, 'Servidor sem categoria'
+    users = db.get_active_users_by_category(srv['category_id'])
+    if not users:
+        return 0, 'Nenhum usuário ativo na categoria'
+
+    for u in users:
+        db.add_user_extra_server(u['id'], server_id)
+
+    try:
+        ok, msg = sc.sync_users_to_server(
+            srv['ip'], srv['module_port'], srv['auth_token'],
+            [dict(u) for u in users], force=False
+        )
+    except Exception as e:
+        return len(users), f'Vínculo ok, mas envio falhou: {e}'
+    return len(users), 'OK' if ok else f'Vínculo ok, mas envio falhou: {msg}'
+
+
 @app.route('/servers/add', methods=['POST'])
 @admin_required
 def add_server():
@@ -1293,10 +1325,14 @@ def add_server():
 
     new_id = db.add_server(name, ip, module_port, root_user, root_password, auth_token)
     # Assign category if provided
+    sync_note = ''
     cat_id = request.form.get('category_id', '').strip()
     if cat_id and cat_id.isdigit():
         db.update_server(new_id, category_id=int(cat_id))
-    return jsonify(success=True, message='Servidor adicionado', server_id=new_id)
+        n, m = _auto_attach_category_users(new_id)
+        if n:
+            sync_note = f' | {n} usuário(s) da categoria vinculados ({m})'
+    return jsonify(success=True, message='Servidor adicionado' + sync_note, server_id=new_id)
 
 
 @app.route('/servers/delete/<int:server_id>', methods=['POST'])
@@ -1318,7 +1354,13 @@ def edit_server(server_id):
         if val != '':
             updates[field] = int(val) if field in ('module_port', 'category_id') else val
     db.update_server(server_id, **updates)
-    return jsonify(success=True, message='Servidor atualizado')
+    # Se a categoria mudou, inclui automaticamente os usuários da nova categoria
+    sync_note = ''
+    if 'category_id' in updates:
+        n, m = _auto_attach_category_users(server_id)
+        if n:
+            sync_note = f' | {n} usuário(s) da categoria vinculados ({m})'
+    return jsonify(success=True, message='Servidor atualizado' + sync_note)
 
 
 @app.route('/categories/add', methods=['POST'])
