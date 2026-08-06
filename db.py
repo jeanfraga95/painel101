@@ -806,6 +806,25 @@ def get_servers_by_category(cat_id: int) -> list:
     conn.close()
     return rows
 
+def get_active_users_by_category(cat_id: int) -> list:
+    """Active users linked (primary OR extra server) to an active server of the category."""
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT DISTINCT u.* FROM ssh_users u
+           JOIN ssh_user_servers s ON s.ssh_user_id = u.id
+           JOIN servers sv ON sv.id = s.server_id
+           WHERE sv.category_id=? AND sv.status='active' AND u.status='active'
+           UNION
+           SELECT DISTINCT u2.* FROM ssh_users u2
+           JOIN servers sv2 ON sv2.id = u2.server_id
+           WHERE sv2.category_id=? AND sv2.status='active' AND u2.status='active'
+           ORDER BY expires_at""",
+        (cat_id, cat_id)
+    ).fetchall()
+    conn.close()
+    return rows
+
+
 def update_server(server_id: int, **kwargs):
     if not kwargs:
         return
