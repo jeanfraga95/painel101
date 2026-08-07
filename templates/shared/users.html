@@ -5,30 +5,52 @@
 {% block content %}
 <!-- Filters bar -->
 <div class="card mb-3">
-  <div class="card-body py-2">
+  <div class="card-body py-3">
+
+    <!-- Summary chips -->
+    <div class="d-flex flex-wrap gap-2 mb-3">
+      <a class="filter-chip {{ 'active' if filter_type=='all' }}"
+         href="{{ url_for('users_list', filter='all', search=search, sort=sort, owner_id=owner_filter) }}">
+        <i class="fas fa-list-ul"></i>Todos <span class="chip-n">{{ counts.all }}</span>
+      </a>
+      <a class="filter-chip {{ 'active' if filter_type=='expiring' }}"
+         href="{{ url_for('users_list', filter='expiring', search=search, sort=sort, owner_id=owner_filter) }}">
+        <i class="fas fa-clock text-warning"></i>Vencendo 7d <span class="chip-n">{{ counts.expiring }}</span>
+      </a>
+      <a class="filter-chip {{ 'active' if filter_type=='expiring3' }}"
+         href="{{ url_for('users_list', filter='expiring3', search=search, sort=sort, owner_id=owner_filter) }}">
+        <i class="fas fa-hourglass-half text-danger"></i>Vencendo 3d <span class="chip-n">{{ counts.expiring3 }}</span>
+      </a>
+      <a class="filter-chip {{ 'active' if filter_type=='expired' }}"
+         href="{{ url_for('users_list', filter='expired', search=search, sort=sort, owner_id=owner_filter) }}">
+        <i class="fas fa-ban text-danger"></i>Expirados <span class="chip-n">{{ counts.expired }}</span>
+      </a>
+      <a class="filter-chip {{ 'active' if filter_type=='test' }}"
+         href="{{ url_for('users_list', filter='test', search=search, sort=sort, owner_id=owner_filter) }}">
+        <i class="fas fa-flask"></i>Testes <span class="chip-n">{{ counts.test }}</span>
+      </a>
+    </div>
+
     <form class="row g-2 align-items-end" method="GET">
       <div class="col-md-4">
-        <input type="text" name="search" class="form-control form-control-sm" placeholder="🔍 Buscar usuário..." value="{{ search }}">
+        <label class="form-label small text-muted mb-1">Buscar</label>
+        <div class="input-group input-group-sm">
+          <span class="input-group-text"><i class="fas fa-search"></i></span>
+          <input type="text" name="search" class="form-control" placeholder="Buscar usuário..." value="{{ search }}">
+        </div>
       </div>
       <div class="col-md-3">
+        <label class="form-label small text-muted mb-1">Ordenar por</label>
         <select name="sort" class="form-select form-select-sm">
-          <option value="expires_at" {{ 'selected' if sort=='expires_at' }}>Ordenar por vencimento</option>
-          <option value="username" {{ 'selected' if sort=='username' }}>Por nome</option>
-          <option value="connection_limit" {{ 'selected' if sort=='connection_limit' }}>Por limite</option>
-          <option value="created_at" {{ 'selected' if sort=='created_at' }}>Por criação</option>
-        </select>
-      </div>
-      <div class="col-md-2">
-        <select name="filter" class="form-select form-select-sm">
-          <option value="all" {{ 'selected' if filter_type=='all' }}>Todos</option>
-          <option value="expiring" {{ 'selected' if filter_type=='expiring' }}>Vencendo (7d)</option>
-          <option value="expiring3" {{ 'selected' if filter_type=='expiring3' }}>Vencendo (3d)</option>
-          <option value="expired" {{ 'selected' if filter_type=='expired' }}>Já vencidos</option>
-          <option value="test" {{ 'selected' if filter_type=='test' }}>Testes</option>
+          <option value="expires_at" {{ 'selected' if sort=='expires_at' }}>Vencimento</option>
+          <option value="username" {{ 'selected' if sort=='username' }}>Nome</option>
+          <option value="connection_limit" {{ 'selected' if sort=='connection_limit' }}>Limite</option>
+          <option value="created_at" {{ 'selected' if sort=='created_at' }}>Criação</option>
         </select>
       </div>
       {% if all_resellers %}
       <div class="col-md-3">
+        <label class="form-label small text-muted mb-1">Dono</label>
         <select name="owner_id" class="form-select form-select-sm">
           <option value="">Todos os donos</option>
           {% for r in all_resellers %}
@@ -41,18 +63,21 @@
       {% endif %}
       <div class="col-auto">
         <button class="btn btn-sm btn-primary"><i class="fas fa-filter me-1"></i>Filtrar</button>
+        {% if search or filter_type != 'all' or owner_filter %}
+        <a href="{{ url_for('users_list') }}" class="btn btn-sm btn-outline-secondary"><i class="fas fa-times me-1"></i>Limpar</a>
+        {% endif %}
       </div>
     </form>
   </div>
 </div>
 
 <!-- Action buttons -->
-<div class="d-flex gap-2 mb-3 flex-wrap align-items-center">
-  <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createUserModal">
+<div class="action-bar">
+  <button class="btn btn-grad" data-bs-toggle="modal" data-bs-target="#createUserModal">
     <i class="fas fa-user-plus me-2"></i>Novo Usuário
   </button>
   <button class="btn btn-warning text-dark" data-bs-toggle="modal" data-bs-target="#createTestModal">
-    <i class="fas fa-clock me-2"></i>Novo Teste
+    <i class="fas fa-flask me-2"></i>Novo Teste
   </button>
   <button class="btn btn-outline-danger btn-sm d-none" id="bulkDeleteBtn" onclick="bulkDelete()">
     <i class="fas fa-trash me-1"></i>Excluir Selecionados (<span id="selCount">0</span>)
@@ -60,7 +85,7 @@
   <button class="btn btn-outline-secondary btn-sm d-none" id="selectExpiredBtn" onclick="selectExpired()">
     <i class="fas fa-calendar-times me-1"></i>Selecionar Vencidos
   </button>
-  <span class="badge bg-secondary ms-auto">{{ total }} usuário(s) — pág. {{ page }}/{{ total_pages }}</span>
+  <span class="badge bg-secondary ms-auto fs-6 px-3 py-2">{{ total }} usuário(s) — pág. {{ page }}/{{ total_pages }}</span>
 </div>
 
 <div class="card">
@@ -118,7 +143,8 @@
             {% endif %}
             <td>
               <span class="badge {{ 'bg-success' if u.status == 'active' else 'bg-danger' }}" id="status_{{ u.id }}">
-                {{ u.status }}
+                <i class="fas fa-circle me-1" style="font-size:.5rem;vertical-align:middle;"></i>
+                {{ 'ativo' if u.status == 'active' else 'suspenso' }}
               </span>
             </td>
             <td class="text-end">
