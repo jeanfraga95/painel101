@@ -9,110 +9,304 @@
 <style>
 :root {
   --accent: {{ panel_color }};
+  --accent-dark: color-mix(in srgb, {{ panel_color }} 55%, #000);
 }
-body { font-size: .9rem; }
+
+/* ── Base ─────────────────────────────────────────────────────────── */
+body {
+  font-size: .9rem;
+  background: {{ '#16181f' if panel_theme == 'dark' else '#f1f3f7' }};
+  color: {{ '#e9ecef' if panel_theme == 'dark' else '#212529' }};
+}
+* { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--accent) 55%, transparent) transparent; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 8px; }
+
+/* ── Sidebar ──────────────────────────────────────────────────────── */
 .sidebar {
   width: 240px; min-height: 100vh;
-  background: {{ 'rgba(255,255,255,.05)' if panel_theme == 'dark' else '#f8f9fa' }};
-  border-right: 1px solid {{ 'rgba(255,255,255,.1)' if panel_theme == 'dark' else '#dee2e6' }};
-  position: fixed; top: 0; left: 0; overflow-y: auto; z-index: 100;
+  background: {{ '#1b1e27' if panel_theme == 'dark' else '#f8f9fa' }};
+  border-right: 1px solid {{ 'rgba(255,255,255,.08)' if panel_theme == 'dark' else '#dee2e6' }};
+  position: fixed; top: 0; left: 0; overflow-y: auto; z-index: 1050;
 }
 .sidebar .brand {
-  padding: 1rem 1.25rem;
-  border-bottom: 1px solid rgba(255,255,255,.1);
-  font-weight: 700; font-size: 1.1rem;
-  color: var(--accent);
+  padding: 1.15rem 1.25rem;
+  background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+  font-weight: 700; font-size: 1.05rem;
+  color: #fff;
+  display: flex; align-items: center; gap: .6rem;
+  box-shadow: 0 4px 18px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 .sidebar .nav-link {
-  color: {{ '#ccc' if panel_theme == 'dark' else '#555' }};
-  padding: .5rem 1.25rem;
-  border-radius: 6px; margin: 2px 8px;
-  transition: all .2s;
+  color: {{ '#b7bdc9' if panel_theme == 'dark' else '#555' }};
+  padding: .55rem 1rem;
+  border-radius: 8px; margin: 2px 10px;
+  display: flex; align-items: center; gap: .6rem;
+  font-weight: 500;
+  transition: all .2s ease;
+  border: none;
 }
-.sidebar .nav-link:hover, .sidebar .nav-link.active {
-  background: var(--accent);
+.sidebar .nav-link i { width: 1.3em; text-align: center; }
+.sidebar .nav-link:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: #fff;
+  transform: translateX(3px);
+  text-decoration: none;
+}
+.sidebar .nav-link.active {
+  background: linear-gradient(135deg, var(--accent), var(--accent-dark));
   color: #fff !important;
+  box-shadow: 0 5px 16px color-mix(in srgb, var(--accent) 40%, transparent);
 }
 .sidebar .nav-section {
-  font-size: .7rem; font-weight: 600; text-transform: uppercase;
-  color: #888; padding: .75rem 1.25rem .25rem;
-  letter-spacing: .05em;
+  font-size: .66rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .08em;
+  color: {{ '#8a93a6' if panel_theme == 'dark' else '#8a8f98' }};
+  padding: .9rem 1.25rem .3rem;
+  display: flex; align-items: center; gap: .5rem;
 }
-.main-content { margin-left: 240px; padding: 1.5rem; }
+.sidebar .nav-section::after {
+  content: ""; flex: 1; height: 1px;
+  background: {{ 'rgba(255,255,255,.12)' if panel_theme == 'dark' else 'rgba(0,0,0,.08)' }};
+}
+.sidebar .sidebar-user {
+  margin: .5rem .75rem .75rem;
+  padding: .75rem;
+  border-radius: 12px;
+  background: {{ 'rgba(255,255,255,.04)' if panel_theme == 'dark' else '#eef1f6' }};
+}
+.avatar-sm {
+  width: 38px; height: 38px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+  color: #fff; font-weight: 700; font-size: .95rem;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+
+/* ── Main content ─────────────────────────────────────────────────── */
+.main-content {
+  margin-left: 240px; padding: 1.5rem;
+  /* NENHUMA animação aqui: o .main-content é ancestral direto dos modais
+     do Bootstrap. Animar qualquer propriedade que crie stacking context
+     (transform, opacity, filter, etc.) — mesmo com fill-mode both e estado
+     final 'neutro' — mantém o elemento como composited layer, prendendo o
+     z-index dos modais (1055) dentro de um contexto que vale 0 na raiz.
+     Com isso o .modal-backdrop e a .sidebar (z-index 1050 no root) pintam
+     POR CIMA dos modais, bloqueando cliques em todas as páginas. */
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
 .topbar {
-  background: {{ 'rgba(255,255,255,.05)' if panel_theme == 'dark' else '#fff' }};
-  border-bottom: 1px solid {{ 'rgba(255,255,255,.1)' if panel_theme == 'dark' else '#dee2e6' }};
-  padding: .75rem 1.5rem;
+  position: sticky; top: 0; z-index: 1020;
+  background: {{ 'rgba(22,24,31,.85)' if panel_theme == 'dark' else 'rgba(255,255,255,.85)' }};
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-bottom: 1px solid {{ 'rgba(255,255,255,.08)' if panel_theme == 'dark' else '#dee2e6' }};
+  padding: .8rem 1.5rem;
   margin: -1.5rem -1.5rem 1.5rem;
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
 }
-.stat-card { border-radius: 12px; border: none; }
-.stat-card .icon { font-size: 2rem; opacity: .7; }
-.badge-expiring { background: #dc3545; }
-.progress-sm { height: 6px; }
-@media (max-width: 768px) {
-  .sidebar { width: 100%; min-height: auto; position: relative; }
-  .main-content { margin-left: 0; }
+.sidebar-toggle {
+  display: none;
+  border: 1px solid {{ 'rgba(255,255,255,.15)' if panel_theme == 'dark' else '#dee2e6' }};
+  background: transparent;
+  color: {{ '#e9ecef' if panel_theme == 'dark' else '#212529' }};
+  width: 40px; height: 40px; border-radius: 10px;
+  align-items: center; justify-content: center;
+  transition: all .2s;
 }
+.sidebar-toggle:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.sidebar-backdrop { display: none; }
+
+/* ── Cards / stats ────────────────────────────────────────────────── */
+.card {
+  border-radius: 14px;
+  border: 1px solid {{ 'rgba(255,255,255,.07)' if panel_theme == 'dark' else 'rgba(0,0,0,.06)' }};
+  box-shadow: 0 2px 12px {{ 'rgba(0,0,0,.25)' if panel_theme == 'dark' else 'rgba(0,0,0,.05)' }};
+}
+.card-header {
+  background: {{ 'rgba(255,255,255,.03)' if panel_theme == 'dark' else '#f8f9fa' }};
+  border-bottom: 1px solid {{ 'rgba(255,255,255,.06)' if panel_theme == 'dark' else 'rgba(0,0,0,.06)' }};
+}
+.stat-card {
+  border-radius: 14px;
+  border: 1px solid {{ 'rgba(255,255,255,.07)' if panel_theme == 'dark' else 'rgba(0,0,0,.06)' }};
+  transition: transform .2s ease, box-shadow .25s ease;
+  animation: cardIn .5s ease both;
+}
+.stat-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 14px 30px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+@keyframes cardIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.stat-icon {
+  width: 52px; height: 52px; border-radius: 13px;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 1.25rem; flex-shrink: 0;
+  box-shadow: 0 6px 16px rgba(0,0,0,.18);
+}
+.bg-grad-accent  { background: linear-gradient(135deg, var(--accent), var(--accent-dark)); }
+.bg-grad-success { background: linear-gradient(135deg, #2dd4a0, #15825f); }
+.bg-grad-info    { background: linear-gradient(135deg, #3ec9e8, #0a7ea5); }
+.bg-grad-danger  { background: linear-gradient(135deg, #f87171, #b91c1c); }
+.bg-grad-warning { background: linear-gradient(135deg, #fbbf24, #d97706); }
+.bg-grad-purple  { background: linear-gradient(135deg, #a78bfa, #6d28d9); }
+
+/* ── Reusable components ────────────────────────────────────────────── */
+.btn-grad {
+  background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+  color: #fff; border: none;
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 35%, transparent);
+  transition: transform .15s ease, box-shadow .2s ease, filter .2s ease;
+}
+.btn-grad:hover, .btn-grad:focus {
+  color: #fff; filter: brightness(1.08);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 48%, transparent);
+}
+.btn-grad:active { transform: translateY(0); }
+
+.filter-chip {
+  display: inline-flex; align-items: center; gap: .5rem;
+  padding: .42rem .85rem; border-radius: 50rem; font-size: .8rem; font-weight: 600;
+  border: 1px solid {{ 'rgba(255,255,255,.14)' if panel_theme == 'dark' else '#dee2e6' }};
+  color: {{ '#c9ced8' if panel_theme == 'dark' else '#555' }};
+  background: {{ 'rgba(255,255,255,.04)' if panel_theme == 'dark' else '#fff' }};
+  text-decoration: none; transition: all .2s ease;
+}
+.filter-chip:hover {
+  text-decoration: none; transform: translateY(-1px);
+  border-color: var(--accent); color: {{ '#fff' if panel_theme == 'dark' else '#000' }};
+}
+.filter-chip.active {
+  background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+  border-color: transparent; color: #fff;
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.filter-chip .chip-n {
+  min-width: 22px; text-align: center;
+  background: {{ 'rgba(255,255,255,.15)' if panel_theme == 'dark' else 'rgba(0,0,0,.12)' }};
+  border-radius: 50rem; font-size: .7rem; padding: .05rem .35rem;
+}
+.filter-chip.active .chip-n { background: rgba(255,255,255,.25); }
+
+.action-bar {
+  display: flex; flex-wrap: wrap; gap: .6rem; align-items: center;
+  margin-bottom: 1rem;
+}
+
+/* ── Tables / buttons / misc ──────────────────────────────────────── */
+.table thead th {
+  font-size: .72rem; text-transform: uppercase; letter-spacing: .05em;
+}
+.table-hover tbody tr { transition: background .15s ease; }
+.table-hover tbody tr { animation: rowIn .28s ease both; }
+@keyframes rowIn {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.btn { border-radius: 8px; }
+.badge { font-weight: 600; }
+.table-responsive { border-radius: 0 0 14px 14px; }
+
 .toast-container { position: fixed; bottom: 1rem; right: 1rem; z-index: 9999; }
+.toast { border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.3); }
+
+/* ── Responsive ───────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .sidebar {
+    width: 260px;
+    transform: translateX(-100%);
+    transition: transform .3s ease;
+    box-shadow: 0 0 40px rgba(0,0,0,.5);
+  }
+  body.sidebar-open .sidebar { transform: translateX(0); }
+  .sidebar-backdrop {
+    display: block; position: fixed; inset: 0; z-index: 1040;
+    background: rgba(0,0,0,.55);
+    opacity: 0; visibility: hidden; transition: opacity .3s ease;
+  }
+  body.sidebar-open .sidebar-backdrop { opacity: 1; visibility: visible; }
+  .main-content { margin-left: 0; }
+  .sidebar-toggle { display: inline-flex; }
+  .topbar { padding: .75rem 1rem; margin: -1.5rem -1rem 1.25rem; }
+  .main-content { padding: 1.5rem 1rem; }
+  .stat-icon { width: 46px; height: 46px; font-size: 1.1rem; }
+}
+
+/* ── Reduced motion ───────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .stat-card { animation-duration: .01ms; }
+  .sidebar { transition: none; }
+}
 </style>
 {% block extra_css %}{% endblock %}
 </head>
 <body>
 
 {% if current_user %}
+<div class="sidebar-backdrop" onclick="document.body.classList.remove('sidebar-open')"></div>
 <div class="sidebar d-flex flex-column">
-  <div class="brand"><i class="fas fa-shield-alt me-2"></i>{{ panel_name }}</div>
+  <div class="brand"><i class="fas fa-shield-alt"></i>{{ panel_name }}</div>
   <nav class="flex-grow-1 pt-2">
     <span class="nav-section">Principal</span>
     <a href="{{ url_for('dashboard') }}" class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}">
-      <i class="fas fa-tachometer-alt me-2"></i>Dashboard
+      <i class="fas fa-tachometer-alt"></i>Dashboard
     </a>
     <a href="{{ url_for('users_list') }}" class="nav-link {% if 'user' in request.endpoint %}active{% endif %}">
-      <i class="fas fa-users me-2"></i>Usuários
+      <i class="fas fa-users"></i>Usuários
     </a>
     <a href="{{ url_for('resellers_list') }}" class="nav-link {% if 'reseller' in request.endpoint %}active{% endif %}">
-      <i class="fas fa-user-tie me-2"></i>Revendas
+      <i class="fas fa-user-tie"></i>Revendas
     </a>
     <a href="{{ url_for('online_users') }}" class="nav-link {% if request.endpoint == 'online_users' %}active{% endif %}">
-      <i class="fas fa-wifi me-2"></i>Online
+      <i class="fas fa-wifi"></i>Online
     </a>
     {% if current_user.role == 'admin' %}
     <a href="{{ url_for('checkuser_panel') }}" class="nav-link {% if request.endpoint == 'checkuser_panel' %}active{% endif %}">
-      <i class="fas fa-user-check me-2"></i>CheckUser
+      <i class="fas fa-user-check"></i>CheckUser
     </a>
     {% endif %}
 
     {% if current_user.role == 'admin' %}
     <span class="nav-section">Admin</span>
     <a href="{{ url_for('servers_list') }}" class="nav-link {% if 'server' in request.endpoint %}active{% endif %}">
-      <i class="fas fa-server me-2"></i>Servidores
+      <i class="fas fa-server"></i>Servidores
     </a>
     <a href="{{ url_for('settings') }}" class="nav-link {% if request.endpoint == 'settings' %}active{% endif %}">
-      <i class="fas fa-cog me-2"></i>Configurações
+      <i class="fas fa-cog"></i>Configurações
     </a>
     <a href="{{ url_for('backup_page') }}" class="nav-link {% if request.endpoint == 'backup_page' %}active{% endif %}">
-      <i class="fas fa-database me-2"></i>Backup
+      <i class="fas fa-database"></i>Backup
     </a>
     <a href="{{ url_for('migration_page') }}" class="nav-link {% if request.endpoint == 'migration_page' %}active{% endif %}">
-      <i class="fas fa-file-import me-2"></i>Migração
+      <i class="fas fa-file-import"></i>Migração
     </a>
     {% endif %}
 
     <span class="nav-section">Conta</span>
     <a href="{{ url_for('mercadopago_config') }}" class="nav-link {% if request.endpoint == 'mercadopago_config' %}active{% endif %}">
-      <i class="fas fa-credit-card me-2"></i>Mercado Pago
+      <i class="fas fa-credit-card"></i>Mercado Pago
     </a>
     <a href="{{ url_for('profile') }}" class="nav-link {% if request.endpoint == 'profile' %}active{% endif %}">
-      <i class="fas fa-user-circle me-2"></i>Perfil
+      <i class="fas fa-user-circle"></i>Perfil
     </a>
   </nav>
-  <div class="p-3 border-top border-secondary">
-    <small class="text-muted">
-      <i class="fas fa-user me-1"></i>{{ current_user.username }}
-      <span class="badge ms-1 {{ 'bg-danger' if current_user.role == 'admin' else 'bg-primary' }}">{{ current_user.role }}</span>
-    </small>
-    <a href="{{ url_for('logout') }}" class="btn btn-sm btn-outline-secondary w-100 mt-2">
+  <div class="sidebar-user">
+    <div class="d-flex align-items-center gap-2 mb-2">
+      <div class="avatar-sm">{{ current_user.username[:1]|upper }}</div>
+      <div class="text-truncate">
+        <div class="fw-semibold text-truncate" style="font-size:.85rem">{{ current_user.username }}</div>
+        <span class="badge {{ 'bg-danger' if current_user.role == 'admin' else 'bg-primary' }}">{{ current_user.role }}</span>
+      </div>
+    </div>
+    <a href="{{ url_for('logout') }}" class="btn btn-sm btn-outline-danger w-100">
       <i class="fas fa-sign-out-alt me-1"></i>Sair
     </a>
   </div>
@@ -122,7 +316,12 @@ body { font-size: .9rem; }
 <div class="{{ 'main-content' if current_user else 'container-fluid' }}">
   {% if current_user %}
   <div class="topbar">
-    <h6 class="mb-0 fw-semibold">{% block page_title %}{% endblock %}</h6>
+    <div class="d-flex align-items-center gap-2">
+      <button class="sidebar-toggle" onclick="document.body.classList.toggle('sidebar-open')" aria-label="Menu">
+        <i class="fas fa-bars"></i>
+      </button>
+      <h6 class="mb-0 fw-semibold">{% block page_title %}{% endblock %}</h6>
+    </div>
     <div class="d-flex align-items-center gap-2">
       {% if current_user.role != 'admin' and current_user.expires_at %}
         {% set d = days_until(current_user.expires_at) %}
@@ -130,7 +329,7 @@ body { font-size: .9rem; }
           <i class="fas fa-clock me-1"></i>Painel vence em {{ d }}d
         </span>
       {% endif %}
-      <span class="text-muted small">{{ now_br().strftime('%d/%m/%Y %H:%M') }}</span>
+      <span class="text-muted small d-none d-sm-inline">{{ now_br().strftime('%d/%m/%Y %H:%M') }}</span>
     </div>
   </div>
   {% endif %}
