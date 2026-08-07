@@ -134,7 +134,7 @@
 
 <!-- Result Modal -->
 <div class="modal fade" id="resultModal" tabindex="-1">
-  <div class="modal-dialog modal-sm">
+  <div class="modal-dialog modal-sm modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header bg-success text-white">
         <h6 class="modal-title"><i class="fas fa-check-circle me-2"></i>Criado com sucesso!</h6>
@@ -188,7 +188,7 @@ function showResult(data) {
   lastResultText = `👤 Usuário: ${data.username}\n🔐 Senha: ${data.password}\n${hoursLine}📅 Validade: ${data.expires_at}${uuidLine}${appLink}`;
 
   document.getElementById('resultBody').innerHTML = `
-    <div class="font-monospace small p-2 rounded" style="background:rgba(0,0,0,.2)">
+    <div class="font-monospace small p-2 rounded border bg-secondary bg-opacity-10">
       <div><b>Usuário:</b> ${data.username}</div>
       <div><b>Senha:</b> ${data.password}</div>
       ${data.hours ? `<div><b>Duração:</b> ${data.hours}h</div>` : ''}
@@ -197,9 +197,29 @@ function showResult(data) {
       ${data.app_link ? `<div><b>App:</b> <a href="${data.app_link}" target="_blank">${data.app_link}</a></div>` : ''}
     </div>`;
 
-  bootstrap.Modal.getInstance(document.getElementById('createUserModal'))?.hide();
-  bootstrap.Modal.getInstance(document.getElementById('createTestModal'))?.hide();
-  new bootstrap.Modal(document.getElementById('resultModal')).show();
+  // Fecha o modal de criação COMPLETAMENTE antes de abrir o de resultado.
+  // Abrir o novo modal durante a animação de fechamento deixava um backdrop
+  // "fantasma" (transparente) por cima do modal de criação.
+  const createEl = document.getElementById('createUserModal');
+  const testEl   = document.getElementById('createTestModal');
+  const create   = bootstrap.Modal.getInstance(createEl);
+  const test     = bootstrap.Modal.getInstance(testEl);
+  const res      = bootstrap.Modal.getOrCreateInstance(document.getElementById('resultModal'));
+
+  const openSrc = (create && create._isShown) ? createEl
+                : (test   && test._isShown)   ? testEl : null;
+
+  if (create) create.hide();
+  if (test)   test.hide();
+
+  if (openSrc) {
+    openSrc.addEventListener('hidden.bs.modal', function h() {
+      openSrc.removeEventListener('hidden.bs.modal', h);
+      res.show();
+    }, { once: true });
+  } else {
+    res.show();
+  }
 }
 
 function copyResult(btnEl) {
