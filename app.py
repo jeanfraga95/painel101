@@ -272,6 +272,14 @@ def users_list():
 
     users = _get_visible_users(user, sort=sort, search=search)
 
+    counts = {
+        'all':       len(users),
+        'expiring':  sum(1 for u in users if 0 <= days_until(u['expires_at']) <= 7),
+        'expiring3': sum(1 for u in users if 0 <= days_until(u['expires_at']) <= 3),
+        'expired':   sum(1 for u in users if days_until(u['expires_at']) < 0),
+        'test':      sum(1 for u in users if u['is_test']),
+    }
+
     if filter_type == 'expiring':
         users = [u for u in users if 0 <= days_until(u['expires_at']) <= 7]
     elif filter_type == 'expiring3':
@@ -319,6 +327,7 @@ def users_list():
                            all_resellers=all_resellers,
                            sort=sort, search=search, filter_type=filter_type,
                            owner_filter=owner_filter,
+                           counts=counts,
                            page=page, total_pages=total_pages, total=total,
                            per_page=per_page)
 
@@ -613,7 +622,12 @@ def renew_user(user_id):
         return jsonify(success=False, message='Informe quantos dias renovar')
 
     was_suspended = u['status'] == 'suspended'
+    was_test      = bool(u['is_test'])
     db.renew_ssh_user(user_id, days)
+
+    # Teste renovado vira usuário definitivo — não exibe mais o selo "teste"
+    if was_test:
+        db.update_ssh_user(user_id, is_test=0)
 
     # Auto-reativa se estava suspenso — sem precisar clicar no botão de suspender
     if was_suspended:
@@ -630,8 +644,9 @@ def renew_user(user_id):
 
     new_exp    = updated['expires_at'][:10] if updated else ''
     reativado  = ' e reativado' if was_suspended else ''
+    convertido = ' (convertido de teste)' if was_test else ''
     return jsonify(success=True,
-                   message=f'Renovado{reativado} +{days} dias. Novo vencimento: {new_exp}',
+                   message=f'Renovado{reativado}{convertido} +{days} dias. Novo vencimento: {new_exp}',
                    server_msg=server_msg, new_expiry=new_exp,
                    was_suspended=was_suspended)
 
@@ -947,6 +962,12 @@ def resellers_list():
     else:
         resellers = db.get_all_resellers_under(current_user['id'])
 
+    r_counts = {
+        'all':       len(resellers),
+        'mine':      sum(1 for r in resellers if r['parent_id'] == current_user['id']),
+        'expiring':  sum(1 for r in resellers if r['expires_at'] and 0 <= days_until(r['expires_at']) <= 7),
+    }
+
     # Apply filters
     if f_type == 'mine':
         resellers = [r for r in resellers if r['parent_id'] == current_user['id']]
@@ -990,7 +1011,8 @@ def resellers_list():
                            category_assign_map={r['id']: db.get_reseller_categories(r['id']) for r in resellers},
                            usage_map=usage_map,
                            filter_resellers=filter_resellers,
-                           f_type=f_type, f_parent=f_parent)
+                           f_type=f_type, f_parent=f_parent,
+                           r_counts=r_counts)
 
 
 @app.route('/resellers/create', methods=['POST'])
@@ -1788,6 +1810,8 @@ def mp_webhook():
                         db.update_payment_status(payment_id, 'approved')
                         # Renew expiry +30 days stacked on top of current expiry
                         db.renew_ssh_user(payment['ssh_user_id'], 30)
+                        # Teste pago vira usuário definitivo — não exibe mais o selo "teste"
+                        db.update_ssh_user(payment['ssh_user_id'], is_test=0)
                         # Reactivate user (may have been suspended due to expiry)
                         db.update_ssh_user(payment['ssh_user_id'], status='active')
                         u = db.get_ssh_user(payment['ssh_user_id'])
