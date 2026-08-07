@@ -6,54 +6,74 @@
 {% set is_admin = current_user.role == 'admin' %}
 
 {# ── Barra de resumo e controles ────────────────────────────────────────── #}
-<div class="row g-2 mb-3 align-items-center">
+<div class="card mb-3">
+  <div class="card-body py-2">
+    <div class="row g-2 align-items-center">
 
-  {# Totalizadores #}
-  <div class="col-auto">
-    <div class="d-flex gap-2">
-      <span class="badge bg-success fs-6 px-3 py-2" id="totalOnlineBadge">
-        <i class="fas fa-circle me-1" style="font-size:.6rem;vertical-align:middle;"></i>
-        <span id="totalOnlineCount">0</span> online
-      </span>
-      <span class="badge bg-secondary fs-6 px-3 py-2" id="totalConBadge">
-        <i class="fas fa-plug me-1" style="font-size:.75rem;"></i>
-        <span id="totalConCount">0</span> conexões
-      </span>
+      {# Totalizadores #}
+      <div class="col-auto">
+        <div class="d-flex gap-2 flex-wrap">
+          <div class="d-flex align-items-center gap-2 px-3 py-2 rounded"
+               style="background:color-mix(in srgb,#198754 12%,transparent);border:1px solid color-mix(in srgb,#198754 30%,transparent)">
+            <span class="stat-icon" style="width:40px;height:40px;border-radius:10px;background:linear-gradient(135deg,#2dd4a0,#15825f)">
+              <i class="fas fa-users"></i>
+            </span>
+            <div>
+              <div class="fw-bold lh-1 fs-4" id="totalOnlineCount">0</div>
+              <small class="text-muted">online</small>
+            </div>
+          </div>
+          <div class="d-flex align-items-center gap-2 px-3 py-2 rounded"
+               style="background:color-mix(in srgb,#0d6efd 10%,transparent);border:1px solid color-mix(in srgb,#0d6efd 30%,transparent)">
+            <span class="stat-icon" style="width:40px;height:40px;border-radius:10px;background:linear-gradient(135deg,#3ec9e8,#0a7ea5)">
+              <i class="fas fa-plug"></i>
+            </span>
+            <div>
+              <div class="fw-bold lh-1 fs-4" id="totalConCount">0</div>
+              <small class="text-muted">conexões</small>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {# Busca #}
+      <div class="col-md-3 col-sm-5 ms-auto">
+        <label class="form-label small text-muted mb-1 d-none d-md-block">Filtrar</label>
+        <div class="input-group input-group-sm">
+          <span class="input-group-text"><i class="fas fa-search"></i></span>
+          <input type="text" id="onlineSearch" class="form-control" placeholder="Filtrar usuário…"
+                 oninput="applyFilter()">
+          <button class="btn btn-outline-secondary" onclick="document.getElementById('onlineSearch').value='';applyFilter()">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+      </div>
+
+      {# Filtro de revenda — só admin #}
+      {% if is_admin and all_resellers %}
+      <div class="col-md-2 col-sm-4">
+        <label class="form-label small text-muted mb-1 d-none d-md-block">Dono</label>
+        <select id="resellerFilter" class="form-select form-select-sm" onchange="applyFilter()">
+          <option value="">Todos os donos</option>
+          {% for r in all_resellers %}
+          <option value="{{ r.username|lower }}">{{ r.username }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endif %}
+
+      {# Botão atualizar + indicador de auto-refresh #}
+      <div class="col-auto ms-md-auto">
+        <div class="d-flex align-items-center gap-2">
+          <small class="text-muted" id="refreshTimer" title="Próxima atualização automática"></small>
+          <button class="btn btn-sm btn-grad" onclick="refreshAll(true)">
+            <i class="fas fa-sync me-1" id="refreshIcon"></i>Atualizar
+          </button>
+        </div>
+      </div>
+
     </div>
   </div>
-
-  {# Busca #}
-  <div class="col-md-3 col-sm-5 ms-auto">
-    <div class="input-group input-group-sm">
-      <span class="input-group-text"><i class="fas fa-search"></i></span>
-      <input type="text" id="onlineSearch" class="form-control" placeholder="Filtrar usuário…"
-             oninput="applyFilter()">
-      <button class="btn btn-outline-secondary" onclick="document.getElementById('onlineSearch').value='';applyFilter()">✕</button>
-    </div>
-  </div>
-
-  {# Filtro de revenda — só admin #}
-  {% if is_admin and all_resellers %}
-  <div class="col-md-2 col-sm-4">
-    <select id="resellerFilter" class="form-select form-select-sm" onchange="applyFilter()">
-      <option value="">Todos os donos</option>
-      {% for r in all_resellers %}
-      <option value="{{ r.username|lower }}">{{ r.username }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  {% endif %}
-
-  {# Botão atualizar + indicador de auto-refresh #}
-  <div class="col-auto">
-    <div class="d-flex align-items-center gap-2">
-      <small class="text-muted" id="refreshTimer" title="Próxima atualização automática"></small>
-      <button class="btn btn-sm btn-outline-primary" onclick="refreshAll(true)">
-        <i class="fas fa-sync me-1" id="refreshIcon"></i>Atualizar
-      </button>
-    </div>
-  </div>
-
 </div>
 
 {# ── Grid de servidores ──────────────────────────────────────────────────── #}
@@ -66,9 +86,9 @@
       {# Cabeçalho do servidor #}
       <div class="card-header d-flex align-items-center justify-content-between py-2">
         <div class="d-flex align-items-center gap-2">
-          <span class="badge bg-primary-subtle text-primary-emphasis rounded-circle p-1"
-                style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;">
-            <i class="fas fa-server" style="font-size:.7rem;"></i>
+          <span class="bg-grad-accent rounded-circle p-1 text-white"
+                style="width:30px;height:30px;display:flex;align-items:center;justify-content:center;">
+            <i class="fas fa-server" style="font-size:.72rem;"></i>
           </span>
           <span class="fw-semibold">{{ srv.name }}</span>
           {% if cat_map and srv.category_id %}
