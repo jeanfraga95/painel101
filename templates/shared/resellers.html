@@ -5,39 +5,54 @@
 {% block content %}
 
 {# ── Filter bar ─────────────────────────────────────────────────────────── #}
-<form method="GET" action="{{ url_for('resellers_list') }}" class="card mb-3">
-  <div class="card-body py-2">
-    <div class="row g-2 align-items-end">
-      <div class="col-auto">
-        <button class="btn btn-primary btn-sm" type="button"
-                data-bs-toggle="modal" data-bs-target="#createResellerModal">
-          <i class="fas fa-user-plus me-1"></i>Nova Revenda
-        </button>
-      </div>
-      <div class="col-sm-3">
-        <select name="filter" class="form-select form-select-sm" onchange="this.form.submit()">
-          <option value="all"      {{ 'selected' if f_type=='all' }}>Todas as revendas</option>
-          <option value="mine"     {{ 'selected' if f_type=='mine' }}>Minhas revendas diretas</option>
-          <option value="sub"      {{ 'selected' if f_type=='sub' }}>Revendas de uma revenda</option>
-          <option value="expiring" {{ 'selected' if f_type=='expiring' }}>Vencendo em 7 dias</option>
-        </select>
-      </div>
-      {% if f_type == 'sub' %}
-      <div class="col-sm-3">
-        <select name="parent_id" class="form-select form-select-sm" onchange="this.form.submit()">
-          <option value="">— Selecione a revenda —</option>
-          {% for fr in filter_resellers %}
-          <option value="{{ fr.id }}" {{ 'selected' if f_parent == fr.id|string }}>{{ fr.username }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      {% endif %}
-      <div class="col-auto ms-auto">
-        <span class="badge bg-secondary">{{ resellers|length }} revenda(s)</span>
-      </div>
+<div class="card mb-3">
+  <div class="card-body py-3">
+
+    <div class="d-flex flex-wrap gap-2 mb-3">
+      <a class="filter-chip {{ 'active' if f_type=='all' }}" href="?filter=all">
+        <i class="fas fa-list-ul"></i>Todas <span class="chip-n">{{ r_counts.all }}</span>
+      </a>
+      <a class="filter-chip {{ 'active' if f_type=='mine' }}" href="?filter=mine">
+        <i class="fas fa-user-tie"></i>Diretas <span class="chip-n">{{ r_counts.mine }}</span>
+      </a>
+      <a class="filter-chip {{ 'active' if f_type=='sub' }}" href="?filter=sub">
+        <i class="fas fa-sitemap"></i>De revenda
+      </a>
+      <a class="filter-chip {{ 'active' if f_type=='expiring' }}" href="?filter=expiring">
+        <i class="fas fa-clock text-warning"></i>Vencendo 7d <span class="chip-n">{{ r_counts.expiring }}</span>
+      </a>
     </div>
+
+    <form method="GET" action="{{ url_for('resellers_list') }}">
+      <div class="row g-2 align-items-end">
+        <div class="col-auto">
+          <button class="btn btn-grad" type="button"
+                  data-bs-toggle="modal" data-bs-target="#createResellerModal">
+            <i class="fas fa-user-plus me-1"></i>Nova Revenda
+          </button>
+        </div>
+        {% if f_type == 'sub' %}
+        <div class="col-sm-4">
+          <label class="form-label small text-muted mb-1">Revenda (dona dos sub-accounts)</label>
+          <div class="input-group input-group-sm">
+            <input type="hidden" name="filter" value="sub">
+            <span class="input-group-text"><i class="fas fa-sitemap"></i></span>
+            <select name="parent_id" class="form-select form-select-sm" onchange="this.form.submit()">
+              <option value="">— Selecione a revenda —</option>
+              {% for fr in filter_resellers %}
+              <option value="{{ fr.id }}" {{ 'selected' if f_parent == fr.id|string }}>{{ fr.username }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        {% endif %}
+        <div class="col-auto ms-auto">
+          <span class="badge bg-secondary fs-6 px-3 py-2">{{ resellers|length }} revenda(s)</span>
+        </div>
+      </div>
+    </form>
   </div>
-</form>
+</div>
 
 <div class="card">
   <div class="card-body p-0">
@@ -99,7 +114,8 @@
             </td>
             <td>
               <span class="badge {{ 'bg-success' if r.status == 'active' else 'bg-danger' }}" id="rstatus_{{ r.id }}">
-                {{ r.status }}
+                <i class="fas fa-circle me-1" style="font-size:.5rem;vertical-align:middle;"></i>
+                {{ 'ativo' if r.status == 'active' else 'suspenso' }}
               </span>
             </td>
             <td class="text-end">
@@ -372,7 +388,7 @@ function submitCreateReseller() {
       const appLine = r.app_link ? `\n🔗 App: ${r.app_link}` : '';
       lastResellerText = `👤 Usuário: ${r.username}\n🔐 Senha: ${r.password}\n📅 Validade: ${r.expires_at}\n🌐 Painel: ${r.panel_url}${appLine}`;
       document.getElementById('resellerResultBody').innerHTML = `
-        <div class="font-monospace small p-2 rounded" style="background:rgba(0,0,0,.2)">
+        <div class="font-monospace small p-2 rounded border bg-secondary bg-opacity-10">
           <div><b>Usuário:</b> ${r.username}</div>
           <div><b>Senha:</b> ${r.password}</div>
           <div><b>Validade:</b> ${r.expires_at}</div>
@@ -459,7 +475,8 @@ function suspendReseller(id) {
     showToast(d.message || 'OK', d.success ? 'success' : 'danger');
     if (d.success) {
       const el = document.getElementById('rstatus_' + id);
-      el.textContent = d.new_status;
+      el.textContent = d.new_status === 'active' ? 'ativo' : 'suspenso';
+      el.innerHTML = `<i class="fas fa-circle me-1" style="font-size:.5rem;vertical-align:middle;"></i>${d.new_status === 'active' ? 'ativo' : 'suspenso'}`;
       el.className = 'badge ' + (d.new_status === 'active' ? 'bg-success' : 'bg-danger');
     }
   });
