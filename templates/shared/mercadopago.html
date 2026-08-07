@@ -3,6 +3,9 @@
 {% block page_title %}<i class="fas fa-credit-card me-2"></i>Mercado Pago{% endblock %}
 
 {% block content %}
+{% set n_approved = payments | selectattr('status','equalto','approved') | list | length %}
+{% set n_pending  = payments | selectattr('status','equalto','pending')  | list | length %}
+
 <div class="row g-4">
   <div class="col-md-5">
     <div class="card">
@@ -10,7 +13,7 @@
       <div class="card-body">
         <form method="POST">
           <div class="mb-3">
-            <label class="form-label fw-semibold">Access Token</label>
+            <label class="form-label fw-semibold"><i class="fas fa-key me-1 text-muted"></i>Access Token</label>
             <input type="text" name="mp_token" class="form-control font-monospace"
                    value="{{ current_user.mercadopago_token or '' }}"
                    placeholder="APP_USR-xxxxxxxxxxxx">
@@ -19,7 +22,7 @@
             </small>
           </div>
           <div class="mb-4">
-            <label class="form-label fw-semibold">Valor da renovação (R$)</label>
+            <label class="form-label fw-semibold"><i class="fas fa-tag me-1 text-muted"></i>Valor da renovação (R$)</label>
             <div class="input-group">
               <span class="input-group-text">R$</span>
               <input type="number" name="mp_price" class="form-control"
@@ -28,8 +31,8 @@
             </div>
             <small class="text-muted">Valor que seus clientes pagarão pela renovação de 30 dias</small>
           </div>
-          <button type="submit" class="btn btn-primary">
-            <i class="fas fa-save me-2"></i>Salvar
+          <button type="submit" class="btn btn-grad w-100">
+            <i class="fas fa-save me-2"></i>Salvar configuração
           </button>
         </form>
       </div>
@@ -38,11 +41,16 @@
     <div class="card mt-3">
       <div class="card-header fw-semibold"><i class="fas fa-link me-2"></i>Webhook</div>
       <div class="card-body">
-        <p class="text-muted small">Configure este URL no painel do Mercado Pago como webhook de pagamentos:</p>
+        <p class="text-muted small">
+          <i class="fas fa-info-circle me-1"></i>
+          Configure este URL no painel do Mercado Pago como webhook de pagamentos:
+        </p>
         <div class="input-group">
           <input type="text" class="form-control form-control-sm font-monospace"
-                 value="{{ request.host_url }}mercadopago/webhook" readonly id="webhookUrl">
-          <button class="btn btn-sm btn-outline-secondary" onclick="copyText(document.getElementById('webhookUrl').value)">
+                 value="{{ request.host_url }}mercadopago/webhook" readonly id="webhookUrl"
+                 onclick="this.select()">
+          <button class="btn btn-sm btn-outline-secondary" id="whCopyBtn"
+                  onclick="universalCopy(document.getElementById('webhookUrl').value, this)">
             <i class="fas fa-copy"></i>
           </button>
         </div>
@@ -52,42 +60,66 @@
 
   <div class="col-md-7">
     <div class="card">
-      <div class="card-header fw-semibold"><i class="fas fa-history me-2"></i>Histórico de Pagamentos</div>
+      <div class="card-header fw-semibold">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+          <span><i class="fas fa-history me-2"></i>Histórico de Pagamentos</span>
+          <div class="d-flex gap-2">
+            <span class="badge bg-success px-3 py-2">
+              <i class="fas fa-check-circle me-1"></i>{{ n_approved }} aprovado(s)
+            </span>
+            <span class="badge bg-warning text-dark px-3 py-2">
+              <i class="fas fa-hourglass-half me-1"></i>{{ n_pending }} pendente(s)
+            </span>
+          </div>
+        </div>
+      </div>
       <div class="card-body p-0">
-        <table class="table table-hover mb-0">
-          <thead class="table-secondary">
-            <tr>
-              <th>Usuário</th>
-              <th>Valor</th>
-              <th>Status</th>
-              <th>Data</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for p in payments %}
-            <tr id="pay_row_{{ p.id }}">
-              <td>{{ p.ssh_username or '—' }}</td>
-              <td>R$ {{ '%.2f'|format(p.amount) }}</td>
-              <td>
-                <span class="badge {{ 'bg-success' if p.status=='approved' else ('bg-warning text-dark' if p.status=='pending' else 'bg-secondary') }}">
-                  {{ p.status }}
-                </span>
-              </td>
-              <td><small>{{ p.created_at[:16] }}</small></td>
-              <td>
-                {% if p.status == 'pending' %}
-                <button class="btn btn-sm btn-outline-danger" onclick="deletePayment({{ p.id }})" title="Excluir">
-                  <i class="fas fa-trash"></i>
-                </button>
-                {% endif %}
-              </td>
-            </tr>
-            {% else %}
-            <tr><td colspan="5" class="text-center text-muted py-4">Nenhum pagamento registrado.</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
+        <div class="table-responsive">
+          <table class="table table-hover align-middle mb-0">
+            <thead class="table-secondary">
+              <tr>
+                <th>Usuário</th>
+                <th>Valor</th>
+                <th>Status</th>
+                <th>Data</th>
+                <th class="text-end"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for p in payments %}
+              <tr id="pay_row_{{ p.id }}">
+                <td><i class="fas fa-user me-1 text-muted"></i>{{ p.ssh_username or '—' }}</td>
+                <td><span class="fw-semibold">R$ {{ '%.2f'|format(p.amount) }}</span></td>
+                <td>
+                  {% if p.status=='approved' %}
+                  <span class="badge bg-success"><i class="fas fa-check-circle me-1"></i>Aprovado</span>
+                  {% elif p.status=='pending' %}
+                  <span class="badge bg-warning text-dark"><i class="fas fa-hourglass-half me-1"></i>Pendente</span>
+                  {% else %}
+                  <span class="badge bg-secondary">{{ p.status }}</span>
+                  {% endif %}
+                </td>
+                <td><small class="text-muted">{{ p.created_at[:16] }}</small></td>
+                <td class="text-end">
+                  {% if p.status == 'pending' %}
+                  <button class="btn btn-sm btn-outline-danger" onclick="deletePayment({{ p.id }})" title="Excluir">
+                    <i class="fas fa-trash"></i>
+                  </button>
+                  {% endif %}
+                </td>
+              </tr>
+              {% else %}
+              <tr>
+                <td colspan="5" class="text-center text-muted py-5">
+                  <i class="fas fa-receipt fa-3x mb-3 opacity-25"></i>
+                  <p class="mb-0">Nenhum pagamento registrado.</p>
+                  <small>Quando seus clientes pagarem via PIX, o histórico aparece aqui.</small>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>
