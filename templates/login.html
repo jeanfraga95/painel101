@@ -2,24 +2,311 @@
 <html lang="pt-BR" data-bs-theme="{{ panel_theme }}">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>{{ panel_name }} — Login</title>
+<meta name="theme-color" content="{{ panel_color }}">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
 <style>
-body { min-height: 100vh; display: flex; align-items: center; justify-content: center;
-       background: {{ '#0f1117' if panel_theme == 'dark' else '#f0f2f5' }}; }
-.login-card { width: 100%; max-width: 400px; border-radius: 16px; border: none;
-              box-shadow: 0 20px 60px rgba(0,0,0,.3); }
-.login-header { border-radius: 16px 16px 0 0; background: {{ panel_color }}; padding: 2rem; text-align: center; }
-.btn-accent { background: {{ panel_color }}; border-color: {{ panel_color }}; color: #fff; }
-.btn-accent:hover { filter: brightness(1.15); color: #fff; }
+:root { --accent: {{ panel_color }}; }
+
+body {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+  background: {{ '#0b0d12' if panel_theme == 'dark' else '#eef1f6' }};
+}
+
+/* ── Animated gradient background ── */
+.bg-anim {
+  position: fixed;
+  inset: -50%;
+  z-index: 0;
+  background: {{ 'linear-gradient(135deg, #0b0d12 0%, #10131c 30%, #0f1c33 60%, #0b0d12 100%)' if panel_theme == 'dark' else 'linear-gradient(135deg, #eef1f6 0%, #dfe7f5 40%, #d3def2 100%)' }};
+  background-size: 300% 300%;
+  animation: bgShift 18s ease-in-out infinite;
+}
+@keyframes bgShift {
+  0%   { background-position: 0% 0%; }
+  50%  { background-position: 100% 100%; }
+  100% { background-position: 0% 0%; }
+}
+
+/* ── Glow orbs floating ── */
+.orb {
+  position: fixed;
+  z-index: 0;
+  border-radius: 50%;
+  filter: blur(70px);
+  opacity: {{ '0.55' if panel_theme == 'dark' else '0.45' }};
+  pointer-events: none;
+  animation: floatOrb {{ '16s' if panel_theme == 'dark' else '13s' }} ease-in-out infinite;
+}
+.orb-1 { width: 420px; height: 420px; top: -120px; left: -100px;
+          background: color-mix(in srgb, var(--accent) 55%, transparent); }
+.orb-2 { width: 360px; height: 360px; bottom: -110px; right: -80px;
+          background: color-mix(in srgb, var(--accent) 40%, transparent);
+          animation-delay: -6s; }
+.orb-3 { width: 240px; height: 240px; bottom: 15%; left: 12%;
+          background: {{ '#0ff' if panel_theme == 'dark' else 'color-mix(in srgb, var(--accent) 35%, white)' }};
+          opacity: {{ '0.18' if panel_theme == 'dark' else '0.25' }};
+          animation-delay: -11s; }
+@keyframes floatOrb {
+  0%   { transform: translate(0, 0) scale(1); }
+  33%  { transform: translate(40px, -50px) scale(1.08); }
+  66%  { transform: translate(-30px, 30px) scale(0.95); }
+  100% { transform: translate(0, 0) scale(1); }
+}
+
+/* ── Floating particles ── */
+.particle {
+  position: fixed;
+  bottom: -20px;
+  z-index: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: {{ 'color-mix(in srgb, var(--accent) 70%, white)' if panel_theme == 'dark' else 'color-mix(in srgb, var(--accent) 55%, white)' }};
+  opacity: 0;
+  animation: rise {{ '11s' if panel_theme == 'dark' else '9s' }} linear infinite;
+  pointer-events: none;
+}
+@keyframes rise {
+  0%   { transform: translateY(0) translateX(0); opacity: 0; }
+  12%  { opacity: {{ '0.7' if panel_theme == 'dark' else '0.5' }}; }
+  50%  { transform: translateY(-50vh) translateX(30px); }
+  88%  { opacity: 0.25; }
+  100% { transform: translateY(-105vh) translateX(-20px); opacity: 0; }
+}
+
+/* ── Login card entrance ── */
+.login-card {
+  width: 100%;
+  max-width: 400px;
+  border-radius: 20px;
+  border: 1px solid {{ 'rgba(255,255,255,.08)' if panel_theme == 'dark' else 'rgba(0,0,0,.06)' }};
+  box-shadow: 0 25px 80px rgba(0,0,0,.45);
+  position: relative;
+  z-index: 1;
+  overflow: hidden;
+  animation: cardIn .9s cubic-bezier(.16,1,.3,1) both;
+  backdrop-filter: blur(10px);
+  background: {{ 'rgba(20,23,32,.85)' if panel_theme == 'dark' else 'rgba(255,255,255,.92)' }};
+}
+@keyframes cardIn {
+  0%   { opacity: 0; transform: translateY(60px) scale(.92); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.login-header {
+  border-radius: 20px 20px 0 0;
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 45%, #000));
+  padding: 2.2rem;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+/* subtle sheen sweeping across the header */
+.login-header::after {
+  content: "";
+  position: absolute;
+  top: 0; left: -75%;
+  width: 50%;
+  height: 100%;
+  background: linear-gradient(100deg, transparent, rgba(255,255,255,.18), transparent);
+  transform: skewX(-20deg);
+  animation: sheen 5s ease-in-out infinite;
+}
+@keyframes sheen {
+  0%, 55% { left: -75%; }
+  85%, 100% { left: 130%; }
+}
+
+/* ── Pulsing shield icon ── */
+.shield-wrap { position: relative; display: inline-block; margin-bottom: .4rem; }
+.shield-wrap .ring {
+  position: absolute;
+  inset: -12px;
+  border-radius: 50%;
+  border: 2px solid {{ 'rgba(255,255,255,.55)' if panel_theme == 'dark' else 'rgba(255,255,255,.75)' }};
+  animation: ping 2.2s cubic-bezier(0,0,.2,1) infinite;
+}
+.shield-wrap .ring:nth-child(2) { animation-delay: 1.1s; }
+@keyframes ping {
+  0%   { transform: scale(.8); opacity: 1; }
+  80%, 100% { transform: scale(1.7); opacity: 0; }
+}
+.icon-float { animation: iconFloat 3s ease-in-out infinite; display: inline-block; }
+@keyframes iconFloat {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-6px); }
+}
+
+/* ── Inputs ── */
+.form-control {
+  border-radius: 10px;
+  transition: box-shadow .25s ease, border-color .25s ease, transform .2s ease;
+}
+.input-group-text {
+  border-radius: 10px 0 0 10px;
+  background: {{ 'rgba(255,255,255,.05)' if panel_theme == 'dark' else '#f8f9fa' }};
+  border-color: {{ 'rgba(255,255,255,.12)' if panel_theme == 'dark' else '#dee2e6' }};
+  color: {{ 'rgba(255,255,255,.55)' if panel_theme == 'dark' else '#6c757d' }};
+  transition: color .25s ease, background .25s ease;
+}
+.input-group:focus-within .input-group-text {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.form-control:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 .2rem color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.input-group:focus-within .form-control {
+  transform: translateY(-1px);
+}
+
+/* ── Submit button ── */
+.btn-accent {
+  --accent: {{ panel_color }};
+  position: relative;
+  overflow: hidden;
+  border: none;
+  border-radius: 10px;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #000));
+  background-size: 200% 200%;
+  box-shadow: 0 10px 25px color-mix(in srgb, var(--accent) 45%, transparent);
+  transition: transform .2s ease, box-shadow .25s ease, background-position .6s ease;
+}
+.btn-accent:hover {
+  color: #fff;
+  transform: translateY(-3px);
+  background-position: 100% 50%;
+  box-shadow: 0 16px 32px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.btn-accent:active { transform: translateY(0) scale(.98); }
+/* moving shine across the button */
+.btn-accent::after {
+  content: "";
+  position: absolute;
+  top: 0; left: -100%;
+  width: 60%;
+  height: 100%;
+  background: linear-gradient(100deg, transparent, rgba(255,255,255,.35), transparent);
+  transform: skewX(-20deg);
+  transition: left .6s ease;
+}
+.btn-accent:hover::after { left: 150%; }
+.btn-accent .fa-sign-in-alt { transition: transform .3s ease; }
+.btn-accent:hover .fa-sign-in-alt { transform: translateX(4px); }
+
+/* ── Flash messages ── */
+.alert { border-radius: 10px; animation: slideDown .5s ease both; }
+.alert-danger { animation: slideDown .5s ease both, shake .5s ease .1s both; }
+@keyframes slideDown {
+  0%   { opacity: 0; transform: translateY(-14px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-8px); }
+  40% { transform: translateX(8px); }
+  60% { transform: translateX(-5px); }
+  80% { transform: translateX(5px); }
+}
+
+/* ── Loading state on submit ── */
+.btn-accent.loading .fa-sign-in-alt { display: none; }
+
+/* ── Footer link ── */
+.footer-link a {
+  transition: color .2s ease;
+}
+.footer-link a:hover { color: var(--accent) !important; text-decoration: underline; }
+
+/* ── Mobile / responsive ── */
+
+/* avoid horizontal scroll caused by fixed decorations */
+html, body { max-width: 100vw; }
+
+/* Prevent iOS zoom when focusing inputs (font-size >= 16px) */
+@media (max-width: 575.98px) {
+  .form-control, .form-control-lg { font-size: 16px; }
+
+  .login-card {
+    max-width: calc(100vw - 28px);
+    border-radius: 16px;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .login-header { padding: 1.6rem 1.2rem; }
+  .login-header .fa-3x { font-size: 2.4rem; }
+  .card-body { padding: 1.25rem !important; }
+
+  /* smaller orbs + fewer visible particles on small screens */
+  .orb-1 { width: 240px; height: 240px; top: -80px; left: -70px; }
+  .orb-2 { width: 210px; height: 210px; bottom: -80px; right: -60px; }
+  .orb-3 { width: 150px; height: 150px; bottom: 12%; left: 8%; }
+  .particle:nth-child(n+7) { display: none; }
+  .particle { width: 4px; height: 4px; }
+
+  .input-group-text { min-width: 44px; justify-content: center; }
+  .btn-accent { min-height: 50px; }
+  .footer-link a { font-size: .8rem; }
+}
+
+/* Extra-small screens (<= 360px) */
+@media (max-width: 360px) {
+  .login-card { max-width: calc(100vw - 16px); }
+  .login-header { padding: 1.3rem 1rem; }
+  .login-header h4 { font-size: 1.15rem; }
+  .card-body { padding: 1rem !important; }
+  .particle:nth-child(n+5) { display: none; }
+}
+
+/* Short landscape screens (e.g. phones rotated) */
+@media (max-height: 500px) and (orientation: landscape) {
+  body { padding: 12px 0; align-items: flex-start; overflow-y: auto; }
+  .login-card { margin: 8px auto; }
+  .login-header { padding: 1rem; }
+  .shield-wrap, .login-header .fa-3x { display: none; }
+  .login-header h4 { margin-top: 0 !important; font-size: 1.2rem; }
+  .card-body { padding: 1rem !important; }
+  .orb, .particle { display: none; }
+}
+
+/* Slightly more breathing room on tablets */
+@media (min-width: 576px) and (max-width: 767.98px) {
+  .login-card { max-width: 420px; }
+}
+
+/* ── Respect reduced motion ── */
+@media (prefers-reduced-motion: reduce) {
+  .bg-anim, .orb, .particle, .login-header::after, .ring, .icon-float { animation: none !important; }
+  .login-card, .alert, .alert-danger { animation-duration: .01ms; }
+}
 </style>
 </head>
 <body>
+<div class="bg-anim"></div>
+<div class="orb orb-1"></div>
+<div class="orb orb-2"></div>
+<div class="orb orb-3"></div>
+
+{% for i in range(12) %}
+<div class="particle" style="left: {{ [8, 16, 25, 33, 42, 51, 60, 68, 76, 84, 91, 97][i] }}%; animation-delay: {{ -i * 0.9 }}s; animation-duration: {{ [9, 12, 10, 14, 11, 13, 10, 12, 9, 14, 11, 13][i] }}s;"></div>
+{% endfor %}
+
 <div class="login-card card">
   <div class="login-header">
-    <i class="fas fa-shield-alt fa-3x mb-2 text-white opacity-90"></i>
+    <div class="shield-wrap">
+      <span class="ring"></span>
+      <span class="ring"></span>
+      <i class="fas fa-shield-alt fa-3x mb-2 text-white opacity-90 icon-float"></i>
+    </div>
     <h4 class="text-white mb-0 fw-bold">{{ panel_name }}</h4>
     <small class="text-white opacity-75">Gerenciador SSH</small>
   </div>
@@ -30,7 +317,7 @@ body { min-height: 100vh; display: flex; align-items: center; justify-content: c
       {% endfor %}
     {% endwith %}
 
-    <form method="POST">
+    <form method="POST" id="loginForm">
       <div class="mb-3">
         <label class="form-label fw-semibold">Usuário</label>
         <div class="input-group">
@@ -45,19 +332,28 @@ body { min-height: 100vh; display: flex; align-items: center; justify-content: c
           <input type="password" name="password" class="form-control form-control-lg" placeholder="••••••••" required>
         </div>
       </div>
-      <button type="submit" class="btn btn-accent btn-lg w-100 fw-semibold">
+      <button type="submit" id="loginBtn" class="btn btn-accent btn-lg w-100 fw-semibold">
         <i class="fas fa-sign-in-alt me-2"></i>Entrar
       </button>
     </form>
 
     <hr class="my-3">
-    <div class="text-center">
+    <div class="text-center footer-link">
       <a href="{{ url_for('user_login') }}" class="text-muted small">
         <i class="fas fa-user-clock me-1"></i>Verificar validade / Renovar acesso
       </a>
     </div>
   </div>
 </div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+// Loading state on submit
+document.getElementById('loginForm').addEventListener('submit', function () {
+  const btn = document.getElementById('loginBtn');
+  btn.classList.add('loading', 'disabled');
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Entrando…';
+});
+</script>
 </body>
 </html>
