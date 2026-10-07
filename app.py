@@ -6,6 +6,7 @@ Painel Master — SSH User Management Panel
 
 import json
 import os
+import re
 import secrets
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
@@ -134,6 +135,67 @@ def csrf_protect():
 @app.context_processor
 def inject_csrf():
     return {'csrf_token': get_csrf_token}
+
+
+# ---------------------------------------------------------------------------
+# Bloqueio de bots de automação por User-Agent
+# ---------------------------------------------------------------------------
+# Só navegador real (User-Agent com "mozilla") passa. Ferramentas comuns de
+# automação (curl, wget, python-requests, httpx, axios, scrapy, bots de busca
+# etc.) recebem 403. Webhooks internos e a rota estática ficam isentos porque
+# são chamados por outros serviços, não por humanos no navegador.
+
+_UA_ALLOW = re.compile(r'mozilla', re.I)
+_UA_BLOCK = re.compile(
+    r'\b(?:curl|wget|python-?requests|urllib|httpx|aiohttp|node-?fetch|axios|'
+    r'go-http-client|okhttp|libwww-perl|scrapy|apache-httpclient|httpclient|'
+    r'postman|headless|phantomjs|selenium|playwright|puppeteer|crawler|spider|'
+    r'slurp|yahoo|yandex|baiduspider|sogou|exabot|facebot|petalbot)\b|'
+    r'(?:googlebot|bingbot|duckduckbot|ia_archiver)\b',
+    re.I,
+)
+
+_UA_BLOCK_HTML = (
+    '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">'
+    '<meta name="viewport" content="width=device-width, initial-scale=1">'
+    '<title>Acesso negado</title>'
+    '<style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;'
+    'background:#0f1222;color:#e8eaf6;display:flex;align-items:center;'
+    'justify-content:center;height:100vh;margin:0}.box{max-width:420px;'
+    'text-align:center;padding:24px}h1{color:#ff8a80;font-size:22px}'
+    'p{color:#b0b6d4;line-height:1.5}code{background:#1c2140;padding:2px 8px;'
+    'border-radius:6px;font-size:13px}</style></head>'
+    '<body><div class="box"><h1>Acesso negado</h1>'
+    '<p>Este painel só aceita acessos de navegadores reais. '
+    'Automações (%%TOOL%%) são bloqueadas.</p></div></body></html>'
+)
+
+
+def _ua_blocked_response():
+    tool = 'User-Agent ausente'
+    ua = (request.headers.get('User-Agent') or '').strip()
+    if ua:
+        tool = ua[:80] or 'não-reconhecido'
+    if request.method in ('POST', 'PUT', 'PATCH', 'DELETE'):
+        return jsonify(success=False,
+                       message='Acesso de bot/automação não permitido.'), 403
+    return Response(_UA_BLOCK_HTML.replace('%%TOOL%%', _escape_html(tool)), 403,
+                    mimetype='text/html')
+
+
+def _escape_html(s: str) -> str:
+    return (s.replace('&', '&amp;').replace('<', '&lt;')
+            .replace('>', '&gt;').replace('"', '&quot;'))
+
+
+@app.before_request
+def ua_protect():
+    if request.endpoint in CSRF_EXEMPT or request.endpoint == 'static':
+        return None
+    ua = (request.headers.get('User-Agent') or '').strip()
+    if not ua or _UA_BLOCK.search(ua) or not _UA_ALLOW.search(ua):
+        return _ua_blocked_response()
+    return None
 
 
 def login_required(f):
@@ -274,7 +336,7 @@ def dashboard():
         # Reseller
         my_users = db.get_ssh_users(owner_id=user['id'])
         sub_resellers = db.get_all_resellers_under(user['id'])
-        expiring = [u for u in my_users if days_until(u['expires_at']) <= 7]
+        expiring = [u for u in my_users if 0 <= days_until(u['expires_at']) <= 7]
         days_panel = days_until(user['expires_at']) if user['expires_at'] else 0
         stats = {
             'total_ssh': len(my_users),
@@ -282,6 +344,7 @@ def dashboard():
             'account_limit': user['account_limit'],
             'accounts_used': user['accounts_used'],
             'days_panel': days_panel,
+            'expiring_soon': len(expiring),
         }
         servers = db.get_servers_for_user(user)
         all_cats      = db.get_server_categories()
@@ -300,8 +363,9 @@ def dashboard_calendar():
     if user['role'] == 'admin':
         users = db.get_ssh_users(all_users=True)
     else:
-        sub_ids = [s['id'] for s in db.get_all_resellers_under(user['id'])]
-        users = db.get_ssh_users_for_tree([user['id']] + sub_ids)
+        # Cada usuário vê só os próprios usuários finais no calendário,
+        # não os criados por sub-revendas.
+        users = db.get_ssh_users(owner_id=user['id'])
     today = now_br().date()
     events = []
     for u in users:
@@ -1508,11 +1572,17 @@ def diagnose_server(server_id):
 
     checks = result['checks']
     failed = [c for c in checks if not c['ok']]
+    warned = [c for c in checks if c.get('warn')]
     healthy = len(failed) == 0
-    summary = ('Servidor OK.' if healthy else
-               '{} problema(s) encontrado(s).'.format(len(failed)))
+    if healthy and warned:
+        summary = ('Servidor operante com {} alerta(s).'.format(len(warned)))
+    elif healthy:
+        summary = 'Servidor OK.'
+    else:
+        summary = '{} problema(s) encontrado(s).'.format(len(failed))
     return jsonify(success=True, message=summary, checks=checks,
-                   healthy=healthy, ssh=result['ssh'], module=result['module'])
+                   healthy=healthy, warned=len(warned),
+                   ssh=result['ssh'], module=result['module'])
 
 
 def refresh_vnc_proxy() -> None:

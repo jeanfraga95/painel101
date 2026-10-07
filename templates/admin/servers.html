@@ -403,7 +403,8 @@ function renderDiag(id, d) {
   const el = document.getElementById('diagResults');
   const summary = document.getElementById('diagSummary');
   if (d.healthy) {
-    summary.innerHTML = '<div class="alert alert-success mb-0"><i class="fas fa-check-circle me-1"></i>' +
+    summary.innerHTML = '<div class="alert alert-' + (d.warned ? 'warning' : 'success') + ' mb-0"><i class="fas ' +
+      (d.warned ? 'fa-exclamation-triangle' : 'fa-check-circle') + ' me-1"></i>' +
       vncEsc(d.message) + ' — todas as verificações passaram.</div>';
   } else {
     summary.innerHTML = `<div class="alert alert-danger mb-0"><i class="fas fa-exclamation-triangle me-1"></i>` +
@@ -412,13 +413,16 @@ function renderDiag(id, d) {
 
   let rows = '';
   for (const c of d.checks) {
-    const icon = c.ok ? 'fa-check-circle text-success' : 'fa-times-circle text-danger';
+    const isWarn = !!c.warn;
+    const icon = isWarn ? 'fa-exclamation-triangle text-warning' : (c.ok ? 'fa-check-circle text-success' : 'fa-times-circle text-danger');
+    const badge = isWarn ? 'warning' : (c.ok ? 'success' : 'danger');
+    const label = isWarn ? 'Alerta' : (c.ok ? 'OK' : 'Falha');
     rows += `<div class="list-group-item d-flex justify-content-between align-items-start gap-2">
       <div>
         <div class="fw-semibold"><i class="fas ${icon} me-2"></i>${vncEsc(c.name)}</div>
         <div class="small text-muted mt-1">${vncEsc(c.detail)}</div>
       </div>
-      <span class="badge text-bg-${c.ok ? 'success' : 'danger'} mt-1">${c.ok ? 'OK' : 'Falha'}</span>
+      <span class="badge text-bg-${badge} mt-1">${label}</span>
     </div>`;
   }
   el.innerHTML = rows ? `<div class="list-group">${rows}</div>` : '<p class="text-muted">Sem verificações.</p>';

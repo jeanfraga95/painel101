@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 # pmaster_module.py — Painel Master HTTP command receiver
 # Port: 7270
+# Autentica por HEADER "Senha:" (padrao do painel) OU pela variavel de
+# formulario "token"/"senha" (padrao de clientes integrados). A VPS que so
+# lia header devolvia 401 e o usuario terminava criado apenas no painel.
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import cgi
 import subprocess
@@ -13,12 +16,17 @@ class PMasterHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
-            if 'Senha' in self.headers and self.headers['Senha'] == senha_autenticacao:
-                form = cgi.FieldStorage(
-                    fp=self.rfile,
-                    headers=self.headers,
-                    environ={'REQUEST_METHOD': 'POST'}
-                )
+            form = cgi.FieldStorage(
+                fp=self.rfile,
+                headers=self.headers,
+                environ={'REQUEST_METHOD': 'POST'}
+            )
+            autenticado = (
+                ('Senha' in self.headers and self.headers['Senha'] == senha_autenticacao)
+                or form.getvalue('token') == senha_autenticacao
+                or form.getvalue('senha') == senha_autenticacao
+            )
+            if autenticado:
                 comando = form.getvalue('comando') or ''
                 try:
                     resultado = subprocess.check_output(

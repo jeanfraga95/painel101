@@ -8,6 +8,7 @@ import requests
 import paramiko
 import io
 import os
+import time
 
 
 TIMEOUT = 15
@@ -303,31 +304,41 @@ def diagnose_server(ip: str, port: int, auth_token: str,
                     root_user: str, root_password: str) -> dict:
     """Roda uma checagem de ponta a ponta no servidor.
 
-    Cobre os dois problemas mais comuns relatados:
+    Cobre os problemas mais comuns relatados:
       - módulo não instalado / fora do ar / porta errada;
       - usuário criado no painel mas que não chega na VPS (token inválido,
-        agent ausente, serviço parado).
+        agent ausente, serviço parado);
+      - agent desatualizado (sem limpeza de órfãos) que faz o `useradd`
+        falhar com "group exists" enquanto o painel reporta sucesso falso;
+      - grupos órfãos / contas fantasma que bloqueiam recriações de usuário;
+      - disco cheio, watchdog ausente, múltiplos processos do módulo.
 
     Returns {'checks': [{'ok', 'name', 'detail'}], 'ssh': bool, 'module': bool}
     """
     checks = []
 
-    def add(name, ok, detail):
-        checks.append({'name': name, 'ok': bool(ok), 'detail': str(detail)[:400]})
+    def add(name, ok, detail, warn=False):
+        checks.append({'name': name, 'ok': bool(ok), 'detail': str(detail)[:420],
+                       'warn': bool(warn)})
 
-    # 1) Módulo HTTP na porta configurada
+    def _is_y(out):
+        lines = (out or '').strip().splitlines()
+        return bool(lines) and lines[-1] == 'Y'
+
+    # 1) Módulo HTTP na porta configurada (auth por header 'Senha')
     mod_ok, mod_out = send_command(ip, port, auth_token, 'echo PMG_DIAG_OK', timeout=15)
     if mod_out.startswith('HTTP 401') or '401' in mod_out:
         add('Módulo (HTTP {})'.format(port), False,
             'Módulo está respondendo mas rejeitou o token (401). '
-            'O token salvo no painel não corresponde ao do servidor.')
+            'O token salvo no painel não corresponde ao do servidor — '
+            'execute "Corrigir" para reinstalar o módulo com o token certo.')
     else:
         add('Módulo (HTTP {})'.format(port), mod_ok,
             mod_out if not mod_ok else 'Respondendo e autenticado.')
 
     # 2) SSH root
-    ssh = None
     ssh_ok = False
+    ssh = None
     try:
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -338,58 +349,158 @@ def diagnose_server(ip: str, port: int, auth_token: str,
         add('SSH ({}@{})'.format(root_user, ip), False,
             'Falha na conexão SSH: {}'.format(e))
 
-    if ssh_ok and ssh:
-        # 3) agent presente e com sintaxe válida
-        rc, out, err = _ssh_run(ssh, 'test -f /root/pmaster_agent && echo Y || echo N')
-        presence = out.strip().splitlines()[-1:] == ['Y'] if out.strip() else False
-        rc2, out2, _ = _ssh_run(ssh, 'bash -n /root/pmaster_agent 2>&1 && echo SYNTAX_OK || echo SYNTAX_ERR')
-        syntax_ok = 'SYNTAX_OK' in out2
-        if presence and syntax_ok:
-            add('Agent /root/pmaster_agent', True, 'Presente e com sintaxe válida.')
-        elif presence:
-            add('Agent /root/pmaster_agent', False,
-                'Presente mas com erro de sintaxe: {}'.format(out2.strip()[:200]))
+    if not (ssh_ok and ssh):
+        return {'checks': checks, 'ssh': False, 'module': mod_ok}
+
+    # 3) agent presente, sintaxe válida e com a limpeza de órfãos (V2)
+    _, out, _ = _ssh_run(ssh, 'test -f /root/pmaster_agent && echo Y || echo N')
+    agent_present = _is_y(out)
+    _, out2, _ = _ssh_run(ssh, 'bash -n /root/pmaster_agent 2>&1 && echo SYNTAX_OK || echo SYNTAX_ERR')
+    syntax_ok = 'SYNTAX_OK' in (out2 or '')
+    _, out3, _ = _ssh_run(ssh,
+        "grep -q 'PMG_AGENT_V2_ORPHANCLEAN' /root/pmaster_agent 2>/dev/null && echo Y || echo N")
+    agent_v2 = _is_y(out3)
+    if agent_present and syntax_ok and agent_v2:
+        add('Agent /root/pmaster_agent', True,
+            'Presente, sintaxe válida e com limpeza de órfãos (V2).')
+    elif agent_present and syntax_ok:
+        add('Agent /root/pmaster_agent', False,
+            'Presente e sem erro de sintaxe, MAS é a versão antiga (sem a '
+            'limpeza de órfãos que evita "useradd: group exists"). '
+            'Rodar "Corrigir" resolve.')
+    elif agent_present:
+        add('Agent /root/pmaster_agent', False,
+            'Presente mas com erro de sintaxe: {}'.format((out2 or '').strip()[:200]))
+    else:
+        add('Agent /root/pmaster_agent', False,
+            'Não encontrado em /root/pmaster_agent. É preciso instalar os módulos.')
+
+    # 4) módulo no disco + serviço ativo
+    _, out, _ = _ssh_run(ssh, 'test -f /root/pmaster_module.py && echo Y || echo N')
+    mod_present = _is_y(out)
+    _, out, _ = _ssh_run(ssh, 'systemctl is-active pmaster-agent 2>/dev/null || echo inactive')
+    svc_state = (out.strip() or 'inactive').splitlines()[-1].strip()
+    if mod_present and svc_state == 'active':
+        add('Serviço pmaster-agent', True, 'Ativo e módulo no disco.')
+    elif mod_present:
+        add('Serviço pmaster-agent', False,
+            'Módulo existe mas o serviço está "{}".'.format(svc_state))
+    else:
+        add('Serviço pmaster-agent', False,
+            'Módulo ausente e serviço "{}".'.format(svc_state))
+
+    # 5) módulo aceita autenticação por campo (token/senha), além do header
+    if mod_present and svc_state == 'active':
+        probe = (f"curl -s -m 6 -d 'comando=echo PMG_FIELD_OK&token={auth_token}' "
+                 f"http://127.0.0.1:{port}/ 2>&1 | head -c 80")
+        _, out, _ = _ssh_run(ssh, probe)
+        if 'PMG_FIELD_OK' in (out or ''):
+            add('Autenticação do módulo', True,
+                'Aceita header "Senha" e campo token/senha (V2).')
         else:
-            add('Agent /root/pmaster_agent', False,
-                'Não encontrado em /root/pmaster_agent. É preciso instalar os módulos.')
+            add('Autenticação do módulo', False,
+                'Aceita só o header "Senha" (versão antiga). Clientes que '
+                'enviam o token por campo recebem 401 e o usuário não nasce '
+                'na VPS. Rodar "Corrigir" resolve.')
 
-        # 4) módulo no disco + serviço ativo
-        rc, out, _ = _ssh_run(ssh, 'test -f /root/pmaster_module.py && echo Y || echo N')
-        mod_present = out.strip().splitlines()[-1:] == ['Y'] if out.strip() else False
-        _, out, _ = _ssh_run(ssh, 'systemctl is-active pmaster-agent 2>/dev/null || echo inactive')
-        svc_state = (out.strip() or 'inactive').splitlines()[-1].strip()
-        if mod_present and svc_state == 'active':
-            add('Serviço pmaster-agent', True, 'Ativo e módulo no disco.')
-        elif mod_present:
-            add('Serviço pmaster-agent', False,
-                'Módulo existe mas o serviço está "{}".'.format(svc_state))
-        else:
-            add('Serviço pmaster-agent', False,
-                'Módulo ausente e serviço "{}".'.format(svc_state))
+    # 6) porta do módulo escutando
+    _, out, _ = _ssh_run(ssh, f"ss -ltn 2>/dev/null | grep -E ':{port}\\b' || echo NONE")
+    listening = 'NONE' not in (out or '')
+    add('Porta :{} escutando'.format(port), listening,
+        (out or '').strip().replace('\n', ' | ') if listening else
+        'Nada escutando na porta {}.'.format(port))
+    if listening:
+        _, out, _ = _ssh_run(ssh, "ps aux | grep -c '[p]master_module.py'")
+        procs = 0
+        try:
+            procs = int(out.strip().splitlines()[-1])
+        except Exception:
+            procs = 0
+        if procs > 1:
+            add('Processos do módulo', False,
+                '{} processos pmaster_module.py em paralelo — a porta pode '
+                'ficar instável. Reiniciar o serviço resolve.'.format(procs))
 
-        # 5) porta do módulo escutando
-        _, out, _ = _ssh_run(ssh, f"ss -ltn 2>/dev/null | grep -E ':{port}\\b' || echo NONE")
-        listening = 'NONE' not in out
-        add('Porta :{} escutando'.format(port), listening,
-            out.strip().replace('\n', ' | ') if listening else
-            'Nada escutando na porta {}.'.format(port))
+    # 7) grupos órfãos — bloqueiam o useradd com "group exists"
+    orphan_cmd = (
+        "while IFS=: read -r gn gt gid adm mem; do"
+        "  [ \"$gid\" -ge 1000 ] || continue;"
+        "  [ \"$gn\" = \"pmg_vpn\" ] && continue;"
+        "  if grep -sq \"^[^:]*:[^:]*:$gid:\" /etc/passwd; then continue; fi;"
+        "  [ -n \"$mem\" ] && continue;"
+        "  echo \"$gn\";"
+        "done < /etc/gshadow"
+    )
+    _, out, _ = _ssh_run(ssh, orphan_cmd)
+    orphans = [l.strip() for l in (out or '').splitlines() if l.strip()]
+    if orphans:
+        add('Grupos órfãos', False,
+            '{} grupo(s) sem dono/membros que farão o `useradd` falhar com '
+            '"group exists": {}. O agent V2 limpa sozinho na criação; se o '
+            'agent está antigo, use "Corrigir" e recrie o usuário.'.format(
+                len(orphans), ', '.join(orphans[:8])))
+    else:
+        add('Grupos órfãos', True, 'Nenhum grupo órfão (gid>=1000) encontrado.')
 
-        # 6) sync/wd presentes e cron do watchdog
-        rc, out, _ = _ssh_run(ssh,
-            'test -f /root/pmaster_sync.py && test -f /root/pmaster_watchdog.py && echo Y || echo N')
-        sync_present = out.strip().splitlines()[-1:] == ['Y'] if out.strip() else False
-        _, out, _ = _ssh_run(ssh, 'crontab -l 2>/dev/null | grep -c pmaster_watchdog || echo 0')
-        cron_count = out.strip().splitlines()[-1].strip()
-        if sync_present and cron_count not in ('0', ''):
-            add('Sync / watchdog', True, 'Presentes; watchdog no cron ({}x).'.format(cron_count))
-        else:
-            add('Sync / watchdog', False,
-                '{} — sync: {}, watchdog no cron: {}.'.format(
-                    'OK' if sync_present else 'sync ausente',
-                    'presente' if sync_present else 'ausente',
-                    cron_count if cron_count not in ('', '0') else 'falta (reinstalar os módulos)'))
+    # 8) usuários em /etc/shadow sem entrada em /etc/passwd (fantasmas)
+    ghost_cmd = (
+        "comm -23 <(awk -F: '{print $1}' /etc/shadow | sort) "
+        "<(awk -F: '{print $1}' /etc/passwd | sort) | head -6"
+    )
+    _, out, _ = _ssh_run(ssh, ghost_cmd)
+    ghost = [l.strip() for l in (out or '').splitlines() if l.strip()]
+    if ghost:
+        add('Contas fantasma (shadow)', True,
+            '{} entrada(s) em /etc/shadow sem correspondência no passwd: {}. '
+            'Não bloqueiam o useradd, mas o agent V2 remove ao recriar.'.format(
+                len(ghost), ', '.join(ghost)),
+            warn=True)
+    else:
+        add('Contas fantasma (shadow)', True, 'Shadow e passwd consistentes.')
 
-    return {'checks': checks, 'ssh': ssh_ok, 'module': mod_ok}
+    # 9) disco — / cheio impede criar senha/home.
+    #    Em VPS com script de download (ex.: vídeos p/ Telegram) o uso alto é
+    #    esperado; só vira falha quando realmente não sobra espaço.
+    _, out, _ = _ssh_run(ssh, "df -P / | awk 'NR==2{print $5}' | tr -d '%'")
+    disk_pct = 0
+    try:
+        disk_pct = int((out or '').strip().splitlines()[-1] or 0)
+    except Exception:
+        pass
+    _, out_av, _ = _ssh_run(ssh, "df -P / | awk 'NR==2{print $4}'")
+    avail_mb = 0
+    try:
+        avail_mb = int((out_av or '').strip().splitlines()[-1] or 0)
+    except Exception:
+        pass
+    if disk_pct >= 99 or avail_mb < 300:
+        add('Espaço em disco', False,
+            'Partição raiz a {}% ({}) — crítico: pode impedir criar '
+            'usuários/home.'.format(disk_pct, disk_pct))
+    elif disk_pct >= 85:
+        add('Espaço em disco', True,
+            '{}% em uso — alerta. Pode ser atividade esperada da VPS '
+            '(ex.: gravação de vídeos), mas fique de olho se chegar a '
+            '99%.'.format(disk_pct),
+            warn=True)
+    else:
+        add('Espaço em disco', True, '{}% em uso.'.format(disk_pct))
+
+    # 10) sync/watchdog presentes e cron do watchdog ativo
+    _, out, _ = _ssh_run(ssh,
+        'test -f /root/pmaster_sync.py && test -f /root/pmaster_watchdog.py && echo Y || echo N')
+    sync_present = _is_y(out)
+    _, out, _ = _ssh_run(ssh, 'crontab -l 2>/dev/null | grep -c pmaster_watchdog || echo 0')
+    cron_count = (out or '').strip().splitlines()[-1].strip()
+    if sync_present and cron_count not in ('0', ''):
+        add('Sync / watchdog', True, 'Presentes; watchdog no cron ({}x).'.format(cron_count))
+    else:
+        add('Sync / watchdog', False,
+            'sync: {}, watchdog no cron: {}. Rodar "Corrigir" resolve.'.format(
+                'presente' if sync_present else 'ausente',
+                cron_count if cron_count not in ('', '0') else 'falta'))
+
+    return {'checks': checks, 'ssh': True, 'module': mod_ok}
 
 
 def install_modules_ssh(ip: str, root_user: str, root_password: str, auth_token: str) -> tuple:
@@ -508,8 +619,23 @@ def install_modules_ssh(ip: str, root_user: str, root_password: str, auth_token:
             "pkill -f pmaster_module.py 2>/dev/null || true",
             "(crontab -l 2>/dev/null | grep -v pmaster_watchdog; echo '* * * * * python3 /root/pmaster_watchdog.py') | crontab -",
         ]
-        for cmd in commands:
-            ssh.exec_command(cmd)
+        # Executa toda a configuração em UM único canal SSH, com retry.
+        # Em servidores com muitas sessões abertas (proxy com milhares de
+        # túneis), abrir um canal por comando estoura o limite de
+        # MaxSessions do sshd e o setup inteiro falha com
+        # "ChannelException(2, 'Connect failed')".
+        script = 'set +e\n' + '\n'.join(commands)
+        for attempt in range(3):
+            try:
+                _ssh_run(ssh, script)
+                break
+            except Exception as channel_err:
+                if attempt >= 2:
+                    sftp.close()
+                    ssh.close()
+                    return (False,
+                            'Falha ao executar o setup no servidor: {}'.format(channel_err))
+                time.sleep(2)
 
         sftp.close()
         ssh.close()

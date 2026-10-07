@@ -58,81 +58,112 @@
   </div>
 </div>
 
-{% if expiring %}
 <div class="card mb-4">
-  <div class="card-header d-flex justify-content-between align-items-center">
-    <span class="fw-semibold"><i class="fas fa-clock me-2 text-warning"></i>Vencendo em breve</span>
-    <a href="{{ url_for('users_list', filter='expiring') }}" class="btn btn-sm btn-outline-warning">Ver todos</a>
-  </div>
-  <div class="card-body p-0">
-    <div class="table-responsive">
-      <table class="table table-hover mb-0">
-        <thead class="table-secondary">
-          <tr><th>Usuário</th><th>Vencimento</th><th>Dias</th><th class="text-end">Ação</th></tr>
-        </thead>
-        <tbody>
-          {% for u in expiring[:10] %}
-          {% set d = days_until(u.expires_at) %}
-          <tr>
-            <td><i class="fas fa-user me-1 text-muted"></i>{{ u.username }}
-              {% if u.v2ray_uuid %}<span class="badge bg-info ms-1">v2ray</span>{% endif %}
-              {% if u.is_test %}<span class="badge bg-warning text-dark ms-1">teste</span>{% endif %}
-            </td>
-            <td>{{ u.expires_at }}</td>
-            <td><span class="badge {{ 'bg-danger' if d < 0 else ('bg-warning text-dark' if d <= 3 else 'bg-secondary') }}">{% if d < 0 %}expirado{% elif d == 0 %}hoje{% else %}{{ d }}d{% endif %}</span></td>
-            <td class="text-end">
-              <button class="btn btn-sm btn-outline-success" onclick="quickRenew({{ u.id }})">
-                <i class="fas fa-redo"></i> Renovar
-              </button>
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-</div>
-{% endif %}
-
-<div class="card mb-4">
-  <div class="card-header d-flex justify-content-between align-items-center">
+  <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
     <span class="fw-semibold"><i class="fas fa-calendar-alt me-2 text-info"></i>Calendário de vencimentos</span>
-    <div class="d-flex align-items-center gap-3 small">
-      <span class="d-inline-flex align-items-center gap-1"><span class="badge" style="background:#198754">&nbsp;</span>&gt;3d</span>
-      <span class="d-inline-flex align-items-center gap-1"><span class="badge" style="background:#ffc107">&nbsp;</span>1–3d</span>
-      <span class="d-inline-flex align-items-center gap-1"><span class="badge" style="background:#fd7e14">&nbsp;</span>hoje</span>
-      <span class="d-inline-flex align-items-center gap-1"><span class="badge" style="background:#dc3545">&nbsp;</span>expirado</span>
+    <div class="d-flex align-items-center gap-3 small flex-wrap">
+      <span class="d-inline-flex align-items-center gap-1" title="Vence em mais de 3 dias"><span class="badge" style="background:#198754">&nbsp;</span>&gt;3d</span>
+      <span class="d-inline-flex align-items-center gap-1" title="Vence em 1 a 3 dias"><span class="badge" style="background:#ffc107">&nbsp;</span>1–3d</span>
+      <span class="d-inline-flex align-items-center gap-1" title="Vence hoje"><span class="badge" style="background:#fd7e14">&nbsp;</span>hoje</span>
+      <span class="d-inline-flex align-items-center gap-1" title="Já expirado"><span class="badge" style="background:#dc3545">&nbsp;</span>expirado</span>
+      <a href="{{ url_for('users_list', filter='expiring') }}" class="btn btn-sm btn-outline-warning ms-1">
+        <i class="fas fa-clock me-1"></i>Vencendo em 7d ({{ stats.expiring_soon }})
+      </a>
     </div>
   </div>
   <div class="card-body">
     <div id="expCal"></div>
-    <div class="small text-muted mt-2">
-      Clique em um dia para ver quem vence nele; clique em um usuário para renovar. Limite de 120 dias à frente.
+    <div class="small text-muted mt-2 d-flex flex-wrap justify-content-between gap-2">
+      <span><i class="fas fa-mouse-pointer me-1"></i>Clique em um dia para listar quem vence nele; clique em um usuário para renovar (+30 dias).</span>
+      <span><i class="fas fa-filter me-1"></i>Eventos até 120 dias à frente.</span>
     </div>
   </div>
 </div>
+
+{% if panel_theme == 'dark' %}
+<style>
+  #expCal {
+    --fc-border-color: rgba(255,255,255,.10);
+    --fc-page-bg-color: transparent;
+    --fc-neutral-bg-color: rgba(255,255,255,.03);
+    --fc-today-bg-color: rgba(63,145,255,.12);
+    --fc-list-event-hover-bg-color: rgba(255,255,255,.05);
+    --fc-button-text-color: #e9ecef;
+    --fc-button-bg-color: #2c3150;
+    --fc-button-border-color: #3a4070;
+    --fc-button-hover-bg-color: #383e66;
+    --fc-button-hover-border-color: #4a5190;
+    --fc-button-active-bg-color: #454c80;
+    --fc-highlight-bg-color: rgba(255,255,255,.08);
+    --fc-now-indicator-color: #6ea8fe;
+  }
+</style>
+{% endif %}
+<style>
+  #expCal { max-width: 1100px; margin: 0 auto; }
+  #expCal .fc-event-main { overflow: hidden; }
+  #expCal .pmg-chip {
+    display: flex; align-items: center; gap: 6px;
+    padding: 2px 8px; min-width: 0; white-space: nowrap;
+    cursor: pointer;
+  }
+  #expCal .pmg-chip .pmg-nome { overflow: hidden; text-overflow: ellipsis; }
+  #expCal .pmg-chip .pmg-dias {
+    flex-shrink: 0; font-size: 10px; font-weight: 700; line-height: 1;
+    border-radius: 999px; padding: 3px 6px;
+  }
+  #expCal .fc-daygrid-event { border-radius: 6px; border: 0; margin: 1px 2px; }
+  #expCal .fc-daygrid-day-number, #expCal .fc-col-header-cell-cushion { font-weight: 600; }
+</style>
 
 <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
 <script>
 (function() {
   function fmt(d) { return d.toLocaleDateString('pt-BR'); }
 
+  function chipHTML(ev) {
+    const days = ev.extendedProps.days;
+    const dom = document.createElement('div');
+    dom.className += ' pmg-chip';
+    const nome = document.createElement('span');
+    nome.className = 'pmg-nome';
+    nome.textContent = ev.title;
+    dom.appendChild(nome);
+    if (days < 0 || days <= 3) {
+      const b = document.createElement('span');
+      b.className = 'pmg-dias';
+      b.style.background = 'rgba(0,0,0,.35)';
+      b.textContent = days < 0 ? `-${-days}d` : (days === 0 ? 'hoje' : `${days}d`);
+      dom.appendChild(b);
+    }
+    return dom;
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
     const cal = new FullCalendar.Calendar(document.getElementById('expCal'), {
       locale: 'pt-br',
       initialView: 'dayGridMonth',
       height: 'auto',
+      fixedWeekCount: false,
+      nowIndicator: true,
       headerToolbar: {
         left: 'prev,next today',
         center: 'title',
-        right: 'dayGridMonth,listWeek'
+        right: 'dayGridMonth,dayGridWeek,listWeek'
       },
       buttonText: { today: 'Hoje', month: 'Mês', week: 'Semana', list: 'Lista' },
+      dayMaxEvents: 4,
+      moreLinkText: (n) => `+${n} mais`,
+      noEventsText: 'Nenhum vencimento neste período',
       events: { url: '/api/dashboard/calendar', method: 'GET' },
-      dayMaxEvents: 3,
+      eventContent: (info) => chipHTML(info.event),
+      eventDidMount: (info) => {
+        const d = info.event.extendedProps.days;
+        info.el.title = `${info.event.title} — ${d < 0 ? `expirado há ${-d}d` : (d === 0 ? 'vence hoje' : `vence em ${d}d`)}. Clique para renovar.`;
+      },
       eventClick: (info) => {
         const days = info.event.extendedProps.days;
-        const dStr = days < 0 ? `expirado há ${-days}d` : (days === 0 ? 'vence hoje' : `vence em ${days}d`);
+        const dStr = days < 0 ? `expirado há ${-d}d` : (days === 0 ? 'vence hoje' : `vence em ${days}d`);
         if (!confirm(`Renovar "${info.event.title}" (${dStr})?\n\nAdicionar 30 dias?`)) return;
         apiPost(`/users/renew/${info.event.id}`, {days: 30}, d => {
           showToast(d.message, d.success ? 'success' : 'danger');
@@ -150,16 +181,5 @@
     cal.render();
   });
 })();
-</script>
-
-<script>
-function quickRenew(userId) {
-  const days = prompt('Adicionar quantos dias ao vencimento?', '30');
-  if (!days) return;
-  apiPost(`/users/renew/${userId}`, {days}, d => {
-    showToast(d.message, d.success ? 'success' : 'danger');
-    if (d.success) setTimeout(() => location.reload(), 1500);
-  });
-}
 </script>
 {% endblock %}

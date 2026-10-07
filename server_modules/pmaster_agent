@@ -1,6 +1,7 @@
 #!/bin/bash
 # pmaster_agent — Painel Master SSH/V2Ray user management
 # Renamed from dragonmodule to avoid conflict with Dragon Core
+# PMG_AGENT_V2_ORPHANCLEAN
 export PATH=$PATH:/usr/sbin
 
 get_config_file() {
@@ -18,14 +19,25 @@ get_config_file() {
 createssh(){
     username=$1; password=$2; dias=$3; sshlimiter=$4
     removessh "$username" 2>/dev/null
+    # Limpa residuos orfaos que travam o useradd (passwd/shadow/group/gshadow)
+    pkill -u "$username" 2>/dev/null
+    for f in /etc/passwd /etc/shadow /etc/group /etc/gshadow; do
+        sed -i "/^$username:/d" "$f" 2>/dev/null
+    done
     dias=$(($dias+1))
     final=$(date "+%Y-%m-%d" -d "+$dias days")
     pass=$(perl -e 'print crypt($ARGV[0], "password")' "$password")
     # Garante que o grupo de segurança existe
     groupadd pmg_vpn 2>/dev/null || true
     useradd -e "$final" -M -s /bin/false -G pmg_vpn -p "$pass" "$username"
+    if [ $? -ne 0 ]; then
+        echo "ERRO_FALHA_USERADD"
+        return 1
+    fi
     # Força shell restrito mesmo se o usuário já existia (ex: migração)
     usermod -s /bin/false -aG pmg_vpn "$username" 2>/dev/null || true
+    # Home dir padrão (evita "Could not chdir" no login)
+    mkdir -p "/home/$username" && chown "$username:$username" "/home/$username" && chmod 700 "/home/$username"
     mkdir -p /etc/SSHPlus/senha
     echo "$password" > "/etc/SSHPlus/senha/$username"
     grep -v "^$username " /root/pm_users.db > /tmp/pm_ph 2>/dev/null
