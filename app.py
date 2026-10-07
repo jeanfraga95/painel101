@@ -53,6 +53,7 @@ try:
     db.migrate_schema()
     db.migrate_schema_v2()
     db.migrate_schema_v3()
+    db.migrate_schema_tickets()
 except Exception as _startup_err:
     import traceback as _tb
     print(f"[PMG STARTUP ERROR] DB init failed: {_startup_err}", flush=True)
@@ -68,14 +69,29 @@ def now_br():
 
 
 def days_until(date_str: str) -> int:
+    """Dias restantes até o ÚLTIMO dia de uso.
+
+    `expires_at` é o último dia em que o usuário pode usar o serviço, então a
+    comparação é feita entre datas (não entre instantes): quem vence hoje
+    retorna 0 e ainda está ativo; só é considerado expirado quando
+    `expires_at < hoje`.
+
+    Isso alinha o painel com o servidor: `createssh` roda `useradd -e` com
+    `dias+1`, ou seja, a conta morre no dia SEGUINTE ao vencimento.
+    """
     try:
-        exp = datetime.fromisoformat(date_str)
-        if exp.tzinfo is None:
-            exp = TZ.localize(exp)
-        delta = exp - now_br()
-        return delta.days
+        exp = datetime.fromisoformat(str(date_str)[:19])
     except Exception:
         return 0
+    return (exp.date() - now_br().date()).days
+
+
+def is_expired(date_str: str) -> bool:
+    """True quando o último dia de uso já passou (venceu antes de hoje)."""
+    return days_until(date_str) < 0
+
+
+app.jinja_env.globals['is_expired'] = is_expired
 
 
 app.jinja_env.globals['days_until'] = days_until
@@ -595,11 +611,16 @@ def _sync_renew_to_category(u):
 
 
 def _days_left(u) -> int:
-    """Dias restantes a partir de hoje até expires_at (mínimo 1)."""
+    """Dias a enviar ao servidor para a conta morrer DEPOIS do último dia de uso.
+
+    `createssh` já soma +1 (`useradd -e` com dias+1), então passamos exatamente
+    a diferença em dias até expires_at. Clampar em 1 fazia quem vence hoje
+    nascer com 1 dia a mais na VPS do que o painel dizia.
+    """
     try:
         from datetime import date as _date
         exp_date = _date.fromisoformat(u['expires_at'][:10])
-        return max(1, (exp_date - now_br().date()).days)
+        return max(0, (exp_date - now_br().date()).days)
     except Exception:
         return 30
 
@@ -632,11 +653,7 @@ def renew_user(user_id):
     # Auto-reativa se estava suspenso — sem precisar clicar no botão de suspender
     if was_suspended:
         db.update_ssh_user(user_id, status='active')
-        unlock_cmd = (
-            f"passwd -u {u['username']} 2>/dev/null; "
-            f"/root/pmaster_agent unblockuser {u['username']} 2>/dev/null || true"
-        )
-        sc.broadcast_command(u, unlock_cmd, db)
+        sc.broadcast_command(u, sc.build_unblock_cmd(u), db)
 
     updated = db.get_ssh_user(user_id)
     srv_results = _sync_renew_to_category(updated)
@@ -722,20 +739,11 @@ def suspend_user(user_id):
     db.update_ssh_user(user_id, status=new_status)
 
     if new_status == 'suspended':
-        # Lock account + kill sessions on ALL servers
-        cmd = (
-            f"passwd -l {u['username']} 2>/dev/null; "
-            f"/root/pmaster_agent blockuser {u['username']} 2>/dev/null || true; "
-            f"pkill -u {u['username']} 2>/dev/null || true"
-        )
+        # Lock account, kill live sessions and drop the VLESS UUID — on ALL servers
+        sc.broadcast_command(u, sc.build_block_cmd(u), db)
     else:
         # Unlock account on ALL servers
-        cmd = (
-            f"passwd -u {u['username']} 2>/dev/null; "
-            f"/root/pmaster_agent unblockuser {u['username']} 2>/dev/null || true"
-        )
-
-    sc.broadcast_command(u, cmd, db)
+        sc.broadcast_command(u, sc.build_unblock_cmd(u), db)
 
     return jsonify(success=True, message=f'Status: {new_status}', new_status=new_status)
 
@@ -763,10 +771,7 @@ def recreate_user_on_server(user_id):
         return jsonify(success=False, message='Nenhum servidor associado a este usuário')
 
     try:
-        exp_days = max(1, (
-            __import__('datetime').date.fromisoformat(u['expires_at'][:10]) -
-            now_br().date()
-        ).days)
+        exp_days = _days_left(u)
     except Exception:
         exp_days = 30
 
@@ -886,10 +891,7 @@ def user_add_extra_server(user_id):
 
     # Create user on the new server
     try:
-        exp_days = max(1, (
-            __import__('datetime').date.fromisoformat(u['expires_at'][:10]) -
-            now_br().date()
-        ).days)
+        exp_days = _days_left(u)
     except Exception:
         exp_days = 30
 
@@ -1176,21 +1178,12 @@ def suspend_reseller(reseller_id):
         # Lock accounts + kill sessions on ALL servers for every user
         for u in affected_users:
             db.update_ssh_user(u['id'], status='suspended')
-            lock_cmd = (
-                f"passwd -l {u['username']} 2>/dev/null; "
-                f"/root/pmaster_agent blockuser {u['username']} 2>/dev/null || true; "
-                f"pkill -u {u['username']} 2>/dev/null || true"
-            )
-            sc.broadcast_command(u, lock_cmd, db)
+            sc.broadcast_command(u, sc.build_block_cmd(u), db)
     else:
         # Reactivate: unlock accounts on ALL servers
         for u in affected_users:
             db.update_ssh_user(u['id'], status='active')
-            unlock_cmd = (
-                f"passwd -u {u['username']} 2>/dev/null; "
-                f"/root/pmaster_agent unblockuser {u['username']} 2>/dev/null || true"
-            )
-            sc.broadcast_command(u, unlock_cmd, db)
+            sc.broadcast_command(u, sc.build_unblock_cmd(u), db)
 
     return jsonify(
         success=True,
@@ -1357,12 +1350,16 @@ def add_server():
     return jsonify(success=True, message='Servidor adicionado' + sync_note, server_id=new_id)
 
 
+    refresh_vnc_proxy()
+
 @app.route('/servers/delete/<int:server_id>', methods=['POST'])
 @admin_required
 def delete_server(server_id):
     db.delete_server(server_id)
     return jsonify(success=True, message='Servidor removido')
 
+
+    refresh_vnc_proxy()
 
 @app.route('/servers/edit/<int:server_id>', methods=['POST'])
 @admin_required
@@ -1384,6 +1381,8 @@ def edit_server(server_id):
             sync_note = f' | {n} usuário(s) da categoria vinculados ({m})'
     return jsonify(success=True, message='Servidor atualizado' + sync_note)
 
+
+    refresh_vnc_proxy()
 
 @app.route('/categories/add', methods=['POST'])
 @admin_required
@@ -1413,6 +1412,107 @@ def install_modules(server_id):
         return jsonify(success=False, message='Servidor não encontrado')
     ok, msg = sc.install_modules_ssh(srv['ip'], srv['root_user'], srv['root_password'], srv['auth_token'])
     return jsonify(success=ok, message=msg)
+
+
+def refresh_vnc_proxy() -> None:
+    """Regenera o mapa de upstreams do nginx a partir dos servidores cadastrados.
+
+    Chamado depois de adicionar, editar ou remover servidor, e no start do
+    painel. Sem isso o mapa ficaria desatualizado e o console de um servidor
+    novo cairia no default, abrindo em branco.
+    """
+    try:
+        conn = db.get_db()
+        rows = conn.execute("SELECT id, ip FROM servers WHERE ip IS NOT NULL AND ip != ''").fetchall()
+        sc.install_vnc_proxy([dict(r) for r in rows])
+    except Exception:
+        pass
+
+
+def panel_public_ip() -> str:
+    """IP publico do proprio painel, usado para restringir o VNC no servidor.
+
+    O servidor so aceita conexao do VNC vinda deste IP, que e o caminho normal
+    de acesso (pelo navegador, via este painel).
+    """
+    return (os.environ.get('PANEL_PUBLIC_IP') or '200.234.207.46').strip()
+
+
+@app.route('/servers/setup_vnc/<int:server_id>', methods=['POST'])
+@admin_required
+def setup_vnc(server_id):
+    """Instala/configura um servidor VNC (Xvfb + x11vnc) para recuperação da máquina
+    quando o SSH (porta 22) estiver corrompido ou indisponível."""
+    srv = db.get_server(server_id)
+    if not srv:
+        return jsonify(success=False, message='Servidor não encontrado')
+    # nova senha só quando pedida explicitamente; por padrão preserva a atual,
+    # senão cada clique invalidava a senha que o usuário já tinha anotado
+    new_pass = (request.form.get('new_password') or '').strip() or None
+    ok, info = sc.setup_vnc_ssh(srv['ip'], srv['root_user'], srv['root_password'],
+                                new_password=new_pass, panel_ip=panel_public_ip())
+    info['vnc_ip'] = srv['ip']
+    return jsonify(**info)
+
+
+@app.route('/servers/vnc_status/<int:server_id>', methods=['POST'])
+@admin_required
+def vnc_status(server_id):
+    srv = db.get_server(server_id)
+    if not srv:
+        return jsonify(success=False, message='Servidor não encontrado')
+    ok, info = sc.vnc_status_ssh(srv['ip'], srv['root_user'], srv['root_password'])
+    info['vnc_ip'] = srv['ip']
+    info['vnc_name'] = srv['name']
+    info.setdefault('success', False)
+    return jsonify(**info)
+
+
+@app.route('/servers/vnc_firewall/<int:server_id>', methods=['POST'])
+@admin_required
+def vnc_firewall(server_id):
+    """Liga/desliga o acesso externo ao console VNC.
+
+    restrict = só o painel acessa (padrão, e o caminho do navegador).
+    open = libera 5900/6080 para a internet, para cliente VNC externo.
+    """
+    srv = db.get_server(server_id)
+    if not srv:
+        return jsonify(success=False, message='Servidor não encontrado')
+    mode = (request.form.get('mode') or 'restrict').strip().lower()
+    if mode not in ('restrict', 'open'):
+        return jsonify(success=False, message="Modo inválido. Use 'restrict' ou 'open'.")
+    if mode == 'open' and not request.form.get('confirm'):
+        return jsonify(success=False, needs_confirm=True,
+                       message=('Liberar o VNC para a internet expõe o servidor a '
+                                'força bruta: o x11vnc usa VNC auth clássica (DES de 56 bits, '
+                                'senha de 8 caracteres) e o prêmio é o root da máquina. '
+                                'Confirme para continuar.'))
+    ok, info = sc.vnc_firewall_ssh(srv['ip'], srv['root_user'], srv['root_password'],
+                                   mode, panel_ip=panel_public_ip())
+    info['firewall_mode'] = mode if ok else info.get('firewall_mode')
+    return jsonify(**info)
+
+
+@app.route('/_vnc_authz')
+def _vnc_authz():
+    """Usado pelo auth_request do nginx para o proxy do VNC.
+
+    O nginx nao entende a sessao do Flask, entao pergunta aqui antes de
+    encaminhar o WebSocket. Devolve 200 (pode) ou 401/403 (nao pode), sem
+    corpo e sem redirecionar. Fica marcado como internal no nginx, ou seja,
+    nao da para chamar pela internet.
+    """
+    if 'user_id' not in session:
+        return '', 401
+    user = db.get_panel_user(session['user_id'])
+    if not user or user['status'] == 'suspended':
+        session.clear()
+        return '', 401
+    if session.get('role') != 'admin':
+        return '', 403
+    return '', 200
+
 
 
 @app.route('/servers/sync/<int:server_id>', methods=['POST'])
@@ -1505,7 +1605,10 @@ def online_users():
     categories   = db.get_server_categories()
     cat_map      = {c['id']: c['name'] for c in categories}
     if current_user['role'] == 'admin':
-        all_resellers = db.get_resellers()
+        # The admin's own accounts have owner_id = admin.id, but get_resellers()
+        # only returns role='reseller'. Without including the admin here the
+        # "Dono" dropdown has no way to select the admin's own online users.
+        all_resellers = [dict(current_user)] + [dict(r) for r in db.get_resellers()]
     else:
         all_resellers = db.get_all_resellers_under(current_user['id'])
     return render_template('shared/online.html', servers=servers,
@@ -1824,11 +1927,7 @@ def mp_webhook():
                                         f"[MP webhook] Falha ao renovar '{u['username']}' "
                                         f"no servidor '{name}': {msg}"
                                     )
-                            unlock_cmd = (
-                                f"passwd -u {u['username']} 2>/dev/null; "
-                                f"/root/pmaster_agent unblockuser {u['username']} 2>/dev/null || true"
-                            )
-                            sc.broadcast_command(u, unlock_cmd, db)
+                            sc.broadcast_command(u, sc.build_unblock_cmd(u), db)
                 except Exception as e:
                     app.logger.error(f"[MP webhook] Erro ao processar payment_id={payment_id}: {e}")
 
@@ -1981,24 +2080,22 @@ def _clean_username(username: str) -> str:
 
 
 def _get_user_connections(username: str) -> int:
-    """Get current active connections for a user from all servers."""
+    """Get current active connections for a user from all servers.
+
+    Usa a contagem por `ps` do server_comm: os usuários são túneis puros
+    (ForceCommand /bin/false) e não aparecem no `who`, então a contagem por
+    `who` retornava sempre 0 para os apps VPN.
+    """
     total_connections = 0
-    servers = db.get_all_servers()
-    
-    for server in servers:
+    for server in db.get_all_servers():
         try:
-            # Tenta obter conexões ativas do servidor
-            ok, output = send_command(
-                server['ip'], 
-                server['module_port'], 
-                server['auth_token'],
-                f"who | grep -c '^{username} ' || echo 0"
+            total_connections += sc.get_user_connections(
+                server['ip'], server['module_port'],
+                server['auth_token'], username
             )
-            if ok:
-                total_connections += int(output.strip() or 0)
         except Exception:
             continue
-    
+
     return total_connections
 
 
@@ -2029,85 +2126,53 @@ def _checkuser_response(username: str):
         u_dict = {k: u[k] for k in u.keys()}
     else:
         u_dict = dict(u)
-    
-    # Calcula dias restantes
+
+    # `expires_at` é o último dia de uso: venceu só quando a data já passou.
     d = days_until(u_dict['expires_at'])
     days_left = max(0, d)
-    
-    # Busca conexões ativas
+    expired   = d < 0
+
     connections = _get_user_connections(u_dict['username'])
-    
-    try:
-        from datetime import datetime as _dt
-        exp_dt = _dt.fromisoformat(u_dict['expires_at'])
-        expiration_date = exp_dt.strftime('%d/%m/%Y')
-    except Exception:
-        expiration_date = u_dict['expires_at'][:10] if u_dict['expires_at'] else ''
+    limit = u_dict['connection_limit']
 
-    resp = {
-        "id": "01",
-        "username": u_dict['username'],
-        "count_connections": connections,
-        "limit_connections": u_dict['connection_limit'],
-        "expiration_date": expiration_date,
-        "expiration_days": str(days_left),
-    }
-    return jsonify(resp)
-
-    # Calcula dias restantes
-    d = days_until(u['expires_at'])
-    days_left = max(0, d)
-    
-    # Define status baseado na expiração e conexões
-    if days_left <= 0:
-        status = "expired"
+    if expired:
         online_status = "expirado"
-    else:
-        status = "active"
-        online_status = "online"
-    
-    # Busca conexões ativas (você precisa implementar esta função)
-    connections = _get_user_connections(u['username'])
-    
-    # Verifica se excedeu o limite
-    limit = u['connection_limit']
-    if limit > 0 and connections >= limit:
+    elif connections > 0 and limit > 0 and connections >= limit:
         online_status = "limite_excedido"
-        status = "limit_exceeded"
-    
+    elif connections > 0:
+        online_status = "online"
+    else:
+        online_status = "offline"
+
     try:
         from datetime import datetime as _dt
-        exp_dt = _dt.fromisoformat(u['expires_at'])
+        exp_dt = _dt.fromisoformat(u_dict['expires_at'][:19])
         expiration_date = exp_dt.strftime('%d/%m/%Y')
         expires_at_formatted = exp_dt.strftime('%Y-%m-%d')
     except Exception:
-        expiration_date = u['expires_at'][:10] if u['expires_at'] else ''
-        expires_at_formatted = u['expires_at'][:10] if u['expires_at'] else ''
+        expiration_date = u_dict['expires_at'][:10] if u_dict['expires_at'] else ''
+        expires_at_formatted = expiration_date
 
-    # Resposta COMPLETA para compatibilidade
     resp = {
-        # Formato original (para apps VPN)
+        # Formato original (apps VPN / DTunnel)
         "id": "01",
-        "username": u['username'],
+        "username": u_dict['username'],
         "count_connections": connections,
         "limit_connections": limit,
         "expiration_date": expiration_date,
         "expiration_days": str(days_left),
-        
-        # Formato moderno (para o frontend do painel)
+
+        # Formato moderno (frontend do painel)
         "exists": True,
         "status": online_status,
         "online": connections > 0,
-        "expired": days_left <= 0,
-        "blocked": False,
-        "server": u['server_name'] if 'server_name' in u else 'N/A',
+        "expired": expired,
+        "blocked": u_dict['status'] == 'suspended',
         "connections": connections,
         "limit": limit,
         "days_left": days_left,
         "expires_at": expires_at_formatted,
-        "created_at": u.get('created_at', '')[:10] if u.get('created_at') else '',
-        "last_login": u.get('last_login', ''),
-        "v2ray_uuid": u.get('v2ray_uuid', ''),
+        "created_at": (u_dict.get('created_at') or '')[:10],
     }
     return jsonify(resp)
 
@@ -2286,27 +2351,59 @@ def job_expire_regular_users():
     """Block expired regular (non-test) users on SSH servers.
     Sends suspend command so they stop working until renewed.
     Users are NOT deleted — they stay in the panel so they can be renewed.
+
+    `expires_at` is the LAST usable day, so the user is only blocked once that
+    day is over: date(expires_at) < date(today). Comparing raw strings with
+    `<=` used to block everyone at 00:00 of their due date, one day early.
     """
     conn = db.get_db()
     expired = conn.execute(
-        "SELECT * FROM ssh_users WHERE is_test=0 AND status='active' AND expires_at <= ?",
-        (now_br().strftime('%Y-%m-%d %H:%M:%S'),)
+        "SELECT * FROM ssh_users WHERE is_test=0 AND status='active' "
+        "AND date(expires_at) < date(?)",
+        (now_br().strftime('%Y-%m-%d'),)
     ).fetchall()
     conn.close()
     for u in expired:
-        # Lock on ALL servers (primary + extras)
-        lock_cmd = (
-            f"passwd -l {u['username']} 2>/dev/null; "
-            f"/root/pmaster_agent blockuser {u['username']} 2>/dev/null || true"
-        )
-        sc.broadcast_command(u, lock_cmd, db)
+        # Block on ALL servers (primary + extras): lock password, kill live
+        # sessions and remove the VLESS UUID from Xray.
+        results = sc.broadcast_command(u, sc.build_block_cmd(u), db)
+        for name, ok, out in results:
+            if not ok:
+                app.logger.warning(
+                    f"[expire] Falha ao bloquear '{u['username']}' "
+                    f"no servidor '{name}': {out}"
+                )
         db.update_ssh_user(u['id'], status='suspended')
+
+
+def job_reconcile_suspended():
+    """Re-assert the block on every suspended user that has a VLESS UUID.
+
+    The expire job only looks at users still flagged 'active', so anyone
+    suspended before the blockuser fix (or whose Xray entry came back) stays
+    connectable through VLESS forever. This job is idempotent and self-healing:
+    it re-sends the block command for every suspended VLESS user.
+    """
+    conn = db.get_db()
+    rows = conn.execute(
+        "SELECT * FROM ssh_users WHERE status='suspended' "
+        "AND v2ray_uuid IS NOT NULL AND v2ray_uuid != ''"
+    ).fetchall()
+    conn.close()
+    for u in rows:
+        for name, ok, out in sc.broadcast_command(u, sc.build_block_cmd(u), db):
+            if not ok:
+                app.logger.warning(
+                    f"[reconcile] Falha ao re-bloquear '{u['username']}' "
+                    f"no servidor '{name}': {out}"
+                )
 
 
 scheduler = BackgroundScheduler(timezone=TZ)
 scheduler.add_job(job_backup, 'interval', hours=6, id='backup_job')
 scheduler.add_job(job_cleanup_tests, 'interval', minutes=5, id='cleanup_tests')
 scheduler.add_job(job_expire_regular_users, 'interval', minutes=10, id='expire_users')
+scheduler.add_job(job_reconcile_suspended, 'interval', minutes=30, id='reconcile_suspended')
 scheduler.start()
 
 # ---------------------------------------------------------------------------
@@ -2625,14 +2722,157 @@ def telegram_set_webhook():
 
 
 # ---------------------------------------------------------------------------
+# Suporte / tickets
+# ---------------------------------------------------------------------------
+#
+# Regra de visibilidade, valida sempre no servidor:
+#   admin    -> ve todos os tickets
+#   revenda  -> ve apenas os tickets que ela mesma abriu
+#
+# A checagem acontece em _ticket_acessivel() e nao no template, porque o id do
+# ticket aparece na URL: esconder o link na tela nao impede ninguem de digitar
+# /tickets/17 e ler o ticket de outro usuario.
+
+def _ticket_ids_visiveis(user):
+    """panel_users ids whose tickets this user may see."""
+    if user['role'] == 'admin':
+        return None                      # None = sem restricao
+    return [user['id']]
+
+
+def _ticket_acessivel(ticket_id, user):
+    """Return the ticket if this user may see it, else None."""
+    ticket = db.get_ticket(ticket_id)
+    if not ticket:
+        return None
+    visiveis = _ticket_ids_visiveis(user)
+    # O que decide e o DONO do ticket, nao quem esta perguntando: a revenda so
+    # enxerga os tickets cujo user_id e ela propria.
+    if visiveis is not None and ticket['user_id'] not in visiveis:
+        return None
+    return ticket
+
+
+@app.route('/tickets')
+@login_required
+def tickets_list():
+    user = get_current_user()
+    visiveis = _ticket_ids_visiveis(user)
+
+    f_status = request.args.get('status', '')
+    busca    = request.args.get('q', '').strip()
+
+    tickets = db.get_tickets(visible_user_ids=visiveis, status=f_status)
+    if busca:
+        alvo = busca.lower()
+        tickets = [t for t in tickets if alvo in (t['subject'] or '').lower()]
+
+    return render_template('shared/tickets.html',
+                           tickets=tickets,
+                           counts=db.ticket_counts(visiveis),
+                           f_status=f_status, busca=busca,
+                           categorias=db.TICKET_CATEGORIES,
+                           prioridades=db.TICKET_PRIORITIES,
+                           status_labels=db.TICKET_STATUSES)
+
+
+@app.route('/tickets/create', methods=['POST'])
+@login_required
+def tickets_create():
+    user = get_current_user()
+    ok, msg, tid = db.create_ticket(
+        user['id'],
+        request.form.get('subject', ''),
+        request.form.get('category', 'bug'),
+        request.form.get('priority', 'normal'),
+        request.form.get('body', ''),
+    )
+    if not ok:
+        return jsonify(success=False, message=msg)
+    return jsonify(success=True, message=msg, ticket_id=tid)
+
+
+@app.route('/tickets/<int:ticket_id>')
+@login_required
+def ticket_detail(ticket_id):
+    user = get_current_user()
+    ticket = _ticket_acessivel(ticket_id, user)
+    if not ticket:
+        flash('Ticket não encontrado.', 'danger')
+        return redirect(url_for('tickets_list'))
+
+    return render_template('shared/ticket_detail.html',
+                           ticket=ticket,
+                           messages=db.get_ticket_messages(ticket_id),
+                           status_labels=db.TICKET_STATUSES,
+                           categorias=db.TICKET_CATEGORIES,
+                           is_admin=user['role'] == 'admin')
+
+
+@app.route('/tickets/<int:ticket_id>/reply', methods=['POST'])
+@login_required
+def ticket_reply(ticket_id):
+    user = get_current_user()
+    if not _ticket_acessivel(ticket_id, user):
+        return jsonify(success=False, message='Ticket não encontrado.'), 404
+
+    ok, msg = db.add_ticket_message(
+        ticket_id, user['id'],
+        request.form.get('body', ''),
+        is_staff=(user['role'] == 'admin'),
+    )
+    return jsonify(success=ok, message=msg)
+
+
+@app.route('/tickets/<int:ticket_id>/status', methods=['POST'])
+@admin_required
+def ticket_set_status(ticket_id):
+    if not db.get_ticket(ticket_id):
+        return jsonify(success=False, message='Ticket não encontrado.'), 404
+    ok, msg = db.set_ticket_status(ticket_id, request.form.get('status', ''))
+    return jsonify(success=ok, message=msg)
+
+
+@app.route('/tickets/<int:ticket_id>/delete', methods=['POST'])
+@admin_required
+def ticket_delete(ticket_id):
+    if not db.get_ticket(ticket_id):
+        return jsonify(success=False, message='Ticket não encontrado.'), 404
+    db.delete_ticket(ticket_id)
+    return jsonify(success=True, message='Ticket removido.')
+
+
+# ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
 
 # Start Telegram bot polling thread AFTER all functions are defined
 start_tg_polling()
 
+def _bootstrap_vnc_proxy():
+    """Garante que o proxy do console VNC exista ao subir o painel.
+
+    Precisa rodar no start porque uma instalacao nova em outra VPS nao tem nem
+    o snippet do nginx nem o mapa de upstreams: sem isso o console simplesmente
+    nao teria por onde passar, e o erro apareceria so como 'nao abre'.
+    """
+    if os.environ.get('VNC_PROXY_BOOTSTRAP', '1').lower() == '0':
+        return
+    try:
+        conn = db.get_db()
+        rows = conn.execute("SELECT id, ip FROM servers WHERE ip IS NOT NULL AND ip != ''").fetchall()
+        ok, info = sc.install_vnc_proxy([dict(r) for r in rows])
+        if ok:
+            app.logger.info('proxy do console VNC pronto: %s', info.get('message'))
+        else:
+            app.logger.warning('proxy do console VNC nao instalado: %s', info.get('message'))
+    except Exception as e:
+        app.logger.warning('falha ao preparar o proxy do VNC: %s', e)
+
+
 if __name__ == '__main__':
     # Use `or` so that an empty-string PORT env-var also falls back to the default
     port = int(os.environ.get('PORT') or 2083)
     debug = os.environ.get('DEBUG', 'false').lower() == 'true'
+    _bootstrap_vnc_proxy()
     app.run(host='0.0.0.0', port=port, debug=debug)

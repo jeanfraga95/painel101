@@ -1,0 +1,17 @@
+[Unit]
+Description=Reaper de sessoes SSH zombie do painel PMG
+After=ssh.service sshd.service
+
+[Service]
+Type=oneshot
+# Ajustes: faixa de sobrevida, tolerancia de inatividade e limites.
+# Os defaults do reaper sao usados quando as vars nao sao definidas.
+Environment=REAP_MIN_AGE=600
+Environment=REAP_GRACE=600
+Environment=REAP_BASE_SOCKETS=4
+Environment=REAP_WEDGED_FDS=900
+Environment=REAP_STALE_AGE=21600
+Environment=REAP_STALE_CPU=100
+Environment=REAP_STATE=/var/lib/pmg-reap/state.json
+ExecStart=/usr/bin/python3 /root/reap_sessions.py
+Nice=10

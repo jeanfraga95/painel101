@@ -73,11 +73,14 @@ def get_online_users(ip: str, port: int, auth_token: str) -> list:
 
 
 def get_user_connections(ip: str, port: int, auth_token: str, username: str) -> int:
-    """Count active connections for a given SSH user."""
-    cmd = f"who | grep '^{username} ' | wc -l"
-    ok, out = send_command(ip, port, auth_token, cmd)
+    """Count active sessions for a given SSH user.
+
+    `who` não serve aqui: os usuários são túneis puros (ForceCommand
+    /bin/false) e não registram utmp, então sempre retornava 0.
+    """
+    ok, out = send_command(ip, port, auth_token, _sessions_cmd_for_user(username))
     try:
-        return int(out.strip())
+        return max(0, int(out.strip()))
     except Exception:
         return 0
 
@@ -306,7 +309,11 @@ def install_modules_ssh(ip: str, root_user: str, root_password: str, auth_token:
         ('sincronizar.py',     '/root/sincronizar.py'),      # legacy compat
         ('pmaster_delete.py',  '/root/pmaster_delete.py'),
         ('pmaster_watchdog.py','/root/pmaster_watchdog.py'),
-        ('pmg-monitor',        '/opt/pmg-monitor'),          # online users monitor
+        ('pmaster-agent.service', '/etc/systemd/system/pmaster-agent.service'),
+        ('reap_sessions.py',    '/root/reap_sessions.py'),
+        ('reap-sessions.service', '/etc/systemd/system/reap-sessions.service'),
+        ('reap-sessions.timer',   '/etc/systemd/system/reap-sessions.timer'),
+        ('sshd-limits.conf',      '/etc/systemd/system/sshd.service.d/limits.conf'),
     ]
 
     try:
@@ -333,8 +340,9 @@ def install_modules_ssh(ip: str, root_user: str, root_password: str, auth_token:
         commands = [
             "chmod +x /root/pmaster_agent",
             "chmod +x /root/pmaster_module.py",
-            "chmod +x /opt/pmg-monitor",
-            "mkdir -p /etc/SSHPlus/senha /etc/DragonPanel",
+            "chmod +x /root/reap_sessions.py 2>/dev/null || true",
+            "mkdir -p /etc/SSHPlus/senha /etc/DragonPanel /var/lib/pmg-reap",
+            "mkdir -p /etc/systemd/system/sshd.service.d",
             "touch /root/usuarios.db",
             # ── Segurança: bloqueia acesso ao terminal para usuários VPN ──────
             # Cria grupo que identifica usuários do painel
@@ -359,11 +367,52 @@ def install_modules_ssh(ip: str, root_user: str, root_password: str, auth_token:
                 "    ForceCommand /bin/false\\n' "
                 ">> /etc/ssh/sshd_config"
             ),
+            # ─────────────────────────────────────────────────────────────────
+            # Reaper de sessões zumbis.
+            #
+            # O tráfego chega ao sshd por um proxy local (VPNManager/bin/proxy
+            # --to 22) que mantém o socket do backend aberto mesmo depois do
+            # cliente sumir, então o sshd nunca descarta a sessão velha.
+            # ClientAliveInterval não resolve: quem responde ao keepalive é o
+            # proxy. Medido: 1670 sessões, 71% sem CPU, 1.192 com +24h.
+            #
+            # Backup antes de mexer e rollback se a config ficar inválida:
+            # sshd quebrado nesse servidor significa perder o acesso.
+            "cp -a /etc/ssh/sshd_config /etc/ssh/sshd_config.pre-reaper",
+            # ClientAlive* dentro de Match: o sshd recusa LoginGraceTime aí,
+            # então esse vai para a seção global, antes do primeiro Match.
+            (
+                "sed -i 's/^#\\s*LoginGraceTime.*/LoginGraceTime 30\\n# PMG_VPN_REAPER/' "
+                "/etc/ssh/sshd_config; "
+                "grep -q '^# PMG_VPN_REAPER' /etc/ssh/sshd_config || "
+                "sed -i '/^# PMG_VPN_REAPER/!{/^Match /i LoginGraceTime 30\\n# PMG_VPN_REAPER\\n}' "
+                "/etc/ssh/sshd_config"
+            ),
+            (
+                "grep -q 'PMG_VPN_REAPER_BLOCK' /etc/ssh/sshd_config || "
+                "printf '\\n# PMG_VPN_REAPER_BLOCK - Gerado pelo Painel Master\\n"
+                "Match Group pmg_vpn\\n"
+                "    ClientAliveInterval 60\\n"
+                "    ClientAliveCountMax 3\\n' "
+                ">> /etc/ssh/sshd_config"
+            ),
+            # Valida antes de recarregar; se ficar inválida, restaura o backup
+            (
+                "sshd -t 2>/dev/null || "
+                "{ cp -a /etc/ssh/sshd_config.pre-reaper /etc/ssh/sshd_config && "
+                "echo 'sshd_config invalido, backup restaurado'; }"
+            ),
+            "systemctl daemon-reload",
+            "systemctl enable --now reap-sessions.timer 2>/dev/null || true",
+            "systemctl restart reap-sessions.timer 2>/dev/null || true",
             # Reinicia sshd para aplicar as restrições
+            "systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || "
             "systemctl restart sshd 2>/dev/null || service ssh restart 2>/dev/null || true",
             # ─────────────────────────────────────────────────────────────────
-            "pkill -f pmaster_module.py || true",
-            "nohup python3 /root/pmaster_module.py > /root/pmaster_module.log 2>&1 &",
+            "systemctl daemon-reload",
+            "systemctl enable pmaster-agent 2>/dev/null || true",
+            "systemctl restart pmaster-agent 2>/dev/null || systemctl start pmaster-agent",
+            "pkill -f pmaster_module.py 2>/dev/null || true",
             "(crontab -l 2>/dev/null | grep -v pmaster_watchdog; echo '* * * * * python3 /root/pmaster_watchdog.py') | crontab -",
         ]
         for cmd in commands:
@@ -419,98 +468,64 @@ def get_server_online_count(ip: str, port: int, auth_token: str) -> dict:
 
 
 
+# ── Contagem de sessões SSH ────────────────────────────────────────────────
+# Os usuários do grupo `pmg_vpn` entram com `ForceCommand /bin/false` e
+# `PermitTTY no`, então são túneis puros: NÃO registram entrada em utmp e
+# `who` sempre retorna vazio. A contagem precisa vir do `ps`.
+#
+# Cada conexão gera DOIS processos:
+#   sshd: <user> [priv]   -> processo privilegiado (PPID 1), pai do outro
+#   sshd: <user>          -> a sessão do usuário
+# Contar as duas linhas dobra o número de conexões. Por isso filtramos por
+# NF==2 (só a linha da sessão) e ignoramos as formas de serviço
+# `sshd: [accepted]`, `sshd: [rexeced]`, `sshd: user@pts/0` e o listener.
+_SESSIONS_PS = (
+    "ps -eo args 2>/dev/null | "
+    "awk '$1==\"sshd:\" && NF==2 && $2 !~ /^[[\\/@]/ && $2!=\"root\" && $2!=\"sshd\" {print $2}'"
+)
+
+
+def _sessions_cmd_for_user(username: str) -> str:
+    """Count real sessions of one user. Exact string compare (no regex injection)."""
+    safe = username.replace("'", "'\\''")
+    return (
+        "ps -eo args 2>/dev/null | "
+        f"awk -v u='{safe}' '$1==\"sshd:\" && NF==2 && $2==u {{c++}} END{{print c+0}}'"
+    )
+
+
 def get_online_users_robust(ip: str, port: int, auth_token: str) -> list:
-    """Get online SSH users using the ps-based approach.
-    Modified from user's script to output parseable format.
-    Falls back through multiple detection methods.
+    """Return [{'username', 'connections'}] for every user with a live session.
+
+    Uses `ps` on purpose: the users are pure SSH tunnels, so utmp/`who` is
+    always empty, and /opt/pmg-monitor is a broken build on these servers
+    (ImportError on the bundled psutil) that only wasted a subprocess per call.
     """
-    import json as _json
-
-    # ── Method 1: pmg-monitor or plugin-sync binary (fastest, JSON output) ─
-    # Nota: pmg-monitor pode retornar {} vazio para usuários migrados de
-    # GestorSSH/DragonCore que não estão no seu banco local. Nesse caso
-    # NÃO retornamos — caímos no Method 2 para pegar todos os usuários via ps.
-    monitor_result = []
-    for monitor_bin in ('/opt/pmg-monitor', '/opt/sshplus/plugin-sync'):
-        ok, out = send_command(ip, port, auth_token,
-                               f"{monitor_bin} --monitor-users 2>/dev/null")
-        if ok and out.strip().startswith('{'):
-            try:
-                data = _json.loads(out.strip())
-                monitor_result = [
-                    {'username': u, 'connections': int(c)}
-                    for u, c in data.items()
-                    if u and u not in ('root', 'sshd', '')
-                ]
-                if monitor_result:
-                    break
-            except Exception:
-                pass
-
-    # ── Method 2: ps -eo args ────────────────────────────────────────────────
-    # BUG CORRIGIDO: awk usava -F'[: ]+' que retornava "usuario@pts/0" como
-    # username. Agora usa -F'[: @]+' para separar o "@pts/X" do username.
-    cmd = (
-        "ps -eo args 2>/dev/null | grep 'sshd:' | grep -v grep | grep -v '\\[' | "
-        "awk -F'[: @]+' '/sshd:/ {if($2 && $2!=\"root\" && $2!=\"sshd\") print $2}' | "
-        "grep -v '^root$' | grep -v '^sshd$' | grep -v '^$' | "
-        "sort | uniq -c | awk '{print $2 \":\" $1}'"
+    ok, out = send_command(
+        ip, port, auth_token,
+        _SESSIONS_PS + " | sort | uniq -c | awk '{print $2 \":\" $1}'"
     )
-    ok, out = send_command(ip, port, auth_token, cmd)
-    ps_result = []
-    if ok and out.strip():
-        for line in out.strip().splitlines():
-            line = line.strip()
-            if ':' in line:
-                uname, count = line.rsplit(':', 1)
-                uname = uname.strip()
-                if uname and uname not in ('root', 'sshd', ''):
-                    try:
-                        ps_result.append({'username': uname, 'connections': int(count.strip())})
-                    except ValueError:
-                        pass
-
-    # Mescla: monitor_result tem prioridade (mais preciso), mas ps_result
-    # captura usuários migrados que o pmg-monitor não conhece
-    if ps_result:
-        if monitor_result:
-            # Une os dois, sem duplicatas — ps_result sobrescreve contagem
-            monitor_names = {r['username'].lower() for r in monitor_result}
-            merged = list(monitor_result)
-            for item in ps_result:
-                if item['username'].lower() not in monitor_names:
-                    merged.append(item)
-            return merged
-        return ps_result
-
-    if monitor_result:
-        return monitor_result
-
-    # ── Method 3: who fallback ─────────────────────────────────────────────
-    cmd_who = (
-        "who 2>/dev/null | awk '{print $1}' | grep -v '^root$' | "
-        "sort | uniq -c | awk '{print $2 \":\" $1}'"
-    )
-    ok3, out3 = send_command(ip, port, auth_token, cmd_who)
     result = []
-    if ok3 and out3.strip():
-        for line in out3.strip().splitlines():
-            line = line.strip()
-            if ':' in line:
-                uname, count = line.rsplit(':', 1)
-                uname = uname.strip()
-                if uname and uname != 'root':
-                    try:
-                        result.append({'username': uname, 'connections': int(count.strip())})
-                    except ValueError:
-                        pass
+    if not ok or not out.strip():
+        return result
+    for line in out.strip().splitlines():
+        line = line.strip()
+        if ':' not in line:
+            continue
+        uname, count = line.rsplit(':', 1)
+        uname = uname.strip()
+        if not uname or uname in ('root', 'sshd'):
+            continue
+        try:
+            result.append({'username': uname, 'connections': int(count.strip())})
+        except ValueError:
+            continue
     return result
 
 
 def count_user_connections_on_server(ip: str, port: int, auth_token: str, username: str) -> int:
-    """Count active sessions for a specific user."""
-    cmd = f"who 2>/dev/null | grep -c '^{username} ' || echo 0"
-    ok, out = send_command(ip, port, auth_token, cmd)
+    """Count active sessions for a specific user (ps-based, see _SESSIONS_PS)."""
+    ok, out = send_command(ip, port, auth_token, _sessions_cmd_for_user(username))
     try:
         return max(0, int(out.strip()))
     except Exception:
@@ -545,6 +560,33 @@ def broadcast_renew(user, days_for_server: int, db_module) -> list:
         )
         results.append((srv['name'], ok, msg))
     return results
+
+
+def build_block_cmd(user) -> str:
+    """Command that fully blocks a user on a server.
+
+    `passwd -l` alone is not enough: it does NOT drop sessions that are already
+    open, and it does nothing at all for VLESS/Xray users — they keep connecting
+    with their UUID even after the panel marks them suspended. The agent's
+    `blockuser` handles the password lock, the session kill, the account expiry
+    and the removal of the UUID from the Xray config.
+    """
+    username = user['username']
+    uuid = user['v2ray_uuid'] if 'v2ray_uuid' in user.keys() else None
+    return (
+        f"/root/pmaster_agent blockuser {username} {uuid or ''} 2>/dev/null || "
+        f"/root/dragonmodule blockuser {username} {uuid or ''} 2>/dev/null || true"
+    )
+
+
+def build_unblock_cmd(user) -> str:
+    """Command that unlocks a user. The renewal itself recreates the account
+    (and re-adds the UUID to Xray), so unlocking is just a safety net."""
+    username = user['username']
+    return (
+        f"/root/pmaster_agent unblockuser {username} 2>/dev/null || "
+        f"/root/dragonmodule unblockuser {username} 2>/dev/null || true"
+    )
 
 
 def broadcast_delete(user, db_module) -> list:
@@ -583,3 +625,831 @@ def broadcast_command(user, command: str, db_module) -> list:
         ok, out = send_command(srv['ip'], srv['module_port'], srv['auth_token'], command)
         results.append((srv['name'], ok, out))
     return results
+
+
+VNC_WEB_UNIT = """[Unit]
+Description=Painel Master VNC web (NoVNC via websockify)
+# Expõe a saida do x11vnc em HTTP/WebSocket para o painel web, para que o
+# navegador abra o console sem cliente VNC instalado. O acesso e controlado
+# no painel; a porta so aceita conexao do IP do painel.
+After=network-online.target pmaster-vnc.service
+Wants=network-online.target
+Requires=pmaster-vnc.service
+
+[Service]
+Type=simple
+ExecStart={websockify_bin} --web {novnc_dir} 0.0.0.0:6080 127.0.0.1:5900
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+VNC_FIREWALL_SCRIPT = """#!/bin/sh
+# Firewall do console VNC do Painel Master.
+#
+# Por padrao as portas ficam restritas ao IP do painel: o acesso normal e
+# pelo navegador, atraves do painel, e o 5900/6080 nao aceitam mais ninguem.
+# "open" libera para a internet, para quando for preciso entrar com um
+# cliente VNC externo (RealVNC, TigerVNC) de uma maquina que nao e o painel.
+#
+# Uso: pmaster-vnc-firewall restrict|open|status
+#
+# Por que restringir por padrao: o x11vnc usa VNC auth classica, que e DES
+# de 56 bits e aceita senha de 8 caracteres. Com a porta 5900 aberta na
+# internet isso e quebravel por forca bruta, e o root do servidor e a
+# recompensa. Por isso o padrao e fechar e o acesso normal ser pelo painel.
+
+PANEL_IP="${PM_PANEL_IP:-}"
+PORTS="5900,6080"
+CHAIN=PMVNC
+MODEFILE=/etc/pmaster-vnc/firewall-mode
+
+chain_exists() { iptables -n -L "$CHAIN" >/dev/null 2>&1; }
+
+is_ipv4() {
+    case "$1" in
+        ''|*[!0-9.]*) return 1 ;;
+        *.*.*.*) ;;
+        *) return 1 ;;
+    esac
+    _a=$(echo "$1" | cut -d. -f1)
+    _b=$(echo "$1" | cut -d. -f2)
+    _c=$(echo "$1" | cut -d. -f3)
+    _d=$(echo "$1" | cut -d. -f4)
+    for _o in "$_a" "$_b" "$_c" "$_d"; do
+        [ -n "$_o" ] || return 1
+        [ "$_o" -ge 0 ] 2>/dev/null && [ "$_o" -le 255 ] 2>/dev/null || return 1
+    done
+    return 0
+}
+
+# Apaga TODOS os saltos para a cadeia, em qualquer formato, e instala um so.
+#
+# Nao basta remover o que coincide com a regra nova. Versoes anteriores do
+# painel gravavam o salto como "-j PMVNC" simples, sem multiport, e essa regra
+# casa com QUALQUER pacote de entrada, nao so com 5900/6080. Ainda hoje, o
+# salto fica no topo do INPUT: sobrando ele, todo trafego que chega de fora
+# cai na cadeia e termina no DROP -- inclusive o SSH. Quem fizesse o upgrade
+# perderia o acesso a maquina.
+#
+# Por isso a limpeza e por varredura: qualquer linha da INPUT que pule para a
+# cadeia e removida, e so depois entra a regra correta, com as portas.
+ensure_jump() {
+    iptables -S INPUT 2>/dev/null | grep -- "-j $CHAIN" | while read -r _line; do
+        _del=$(echo "$_line" | sed "s/^-A INPUT/-D INPUT/")
+        iptables $_del 2>/dev/null
+    done
+    iptables -I INPUT -p tcp -m multiport --dports "$PORTS" -j "$CHAIN" || return 1
+    return 0
+}
+
+apply() {
+    mode="$1"
+    mkdir -p /etc/pmaster-vnc
+
+    # Validar ANTES de tocar em qualquer regra. A cadeia e esvaziada logo
+    # abaixo; se a validacao viesse depois, um "open" sem IP do painel
+    # recusado deixaria a cadeia vazia -- ou seja, a porta sem filtro --
+    # enquanto o arquivo de modo continuaria dizendo "restrict". Recusar
+    # precisa nao ter efeito colateral.
+    if [ "$mode" = "open" ] && ! is_ipv4 "$PANEL_IP"; then
+        echo "modo open exige o IP do painel (PM_PANEL_IP); recusado para nao abrir sem filtro" >&2
+        return 1
+    fi
+
+    chain_exists || iptables -N "$CHAIN" || return 1
+    ensure_jump || return 1
+    iptables -F "$CHAIN"
+    case "$mode" in
+        open)
+            iptables -A "$CHAIN" -s "$PANEL_IP" -j ACCEPT
+            iptables -A "$CHAIN" -j ACCEPT
+            ;;
+        restrict)
+            # loopback: o proprio websockify fala com o x11vnc em 127.0.0.1
+            iptables -A "$CHAIN" -s 127.0.0.1 -j ACCEPT
+            if is_ipv4 "$PANEL_IP"; then
+                iptables -A "$CHAIN" -s "$PANEL_IP" -j ACCEPT
+            fi
+            iptables -A "$CHAIN" -j DROP
+            ;;
+        *)
+            echo "modo invalido: $mode" >&2
+            return 1
+            ;;
+    esac
+    echo "$mode" > "$MODEFILE"
+    return 0
+}
+
+case "${1:-}" in
+    restrict|open)
+        if apply "$1"; then
+            echo "$1"
+            exit 0
+        fi
+        echo "falha ao aplicar regra de firewall" >&2
+        exit 1
+        ;;
+    status)
+        if [ -f "$MODEFILE" ]; then
+            echo -n "modo: "; cat "$MODEFILE"
+        else
+            echo "modo: desconhecido (nunca aplicado)"
+        fi
+        echo "portas: $PORTS"
+        echo "regras:"
+        iptables -S "$CHAIN" 2>/dev/null | sed 's/^/  /' || echo "  cadeia $CHAIN inexistente"
+        exit 0
+        ;;
+    *)
+        echo "uso: $0 restrict|open|status" >&2
+        exit 2
+        ;;
+esac
+"""
+
+VNC_FIREWALL_UNIT = """[Unit]
+Description=Aplica as regras de firewall do console VNC do Painel Master
+# As regras do iptables nao sobrevivem a reboot, entao reaplica o ultimo modo
+# usado assim que a rede sobe. Sem isso o servidor voltaria com 5900/6080
+# abertos para a internet, que era o estado antes de existirem estas regras.
+After=network-online.target
+Wants=network-online.target
+Before=pmaster-vnc-web.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'M=$(cat /etc/pmaster-vnc/firewall-mode 2>/dev/null || echo restrict); /usr/local/sbin/pmaster-vnc-firewall $M >/dev/null'
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+def _ssh_run(ssh, cmd, timeout=300):
+    """Executa um comando remoto aguardando o fim, devolvendo (rc, stdout, stderr).
+
+    A versao anterior usava ssh.exec_command() sem ler stdout/stderr, o que
+    descartava o codigo de saida e nunca aguardava a instalacao dos pacotes.
+    """
+    stdin, stdout, stderr = ssh.exec_command(cmd, timeout=timeout)
+    out = stdout.read().decode('utf-8', 'replace')
+    err = stderr.read().decode('utf-8', 'replace')
+    rc = stdout.channel.recv_exit_status()
+    return rc, out, err
+
+
+def _panel_ip_from_ssh(ssh) -> str:
+    """Descobre o IP do painel pelo proprio SSH, sem configuracao previa.
+
+    A conexao que instala o console vem do painel, entao o servidor ja sabe de
+    onde ela veio. Isso evita fixar o IP do painel no codigo, que quebraria em
+    qualquer outra VPS, e evita depender de env var ou de detectar IP publico
+    por servico externo.
+    """
+    _, out, _ = _ssh_run(ssh, 'echo ${SSH_CONNECTION%% *}')
+    cand = out.strip().splitlines()[0].strip() if out.strip() else ''
+    parts = cand.split('.')
+    if len(parts) == 4 and all(x.isdigit() and 0 <= int(x) <= 255 for x in parts):
+        return cand
+    return ''
+
+
+def _wait_vnc_port(ssh, port, timeout=45):
+    """Espera a porta do VNC abrir de fato, em vez de checar uma unica vez.
+
+    Checava com 4 segundos de espera fixa logo apos o restart, e o x11vnc
+    ainda nao tinha feito bind: dava falso 'CLOSED' mesmo com o servico
+    ativo, o que escondia as credenciais do painel.
+    """
+    cmd = (
+        f"for i in $(seq 1 {int(timeout)}); do "
+        f"  ss -tulnH 2>/dev/null | awk '{{print $5}}' | grep -qE '[:.]{port}$' && echo OPEN && exit 0; "
+        f"  sleep 1; "
+        f"done; echo CLOSED"
+    )
+    _, out, _ = _ssh_run(ssh, cmd, timeout=timeout + 15)
+    return out.strip().splitlines()[-1].strip().upper() if out.strip() else 'CLOSED'
+
+
+VNC_START_SCRIPT = r"""#!/bin/sh
+# Console de recuperacao do Painel Master (Xvfb + x11vnc)
+# Gerado por server_comm.setup_vnc_ssh - nao editar a mao.
+export DISPLAY=:99
+PASSFILE=/etc/pmaster-vnc/pass
+
+# Paleta escura: o console e para recuperar um servidor que caiu, e a maior
+# parte da tela ficava branca — o xterm vem com fundo branco por padrao e o
+# desktop do fluxbox cinza claro. Alem de feio, texto claro sobre fundo claro
+# e ruim de ler numa tela pequena. These colors are also what the browser
+# NoVNC chrome uses, so the two do not clash.
+FONTE=Monospace
+TAM=13
+FUNDO='#0d1117'
+TEXTO='#c9d1d9'
+CURSOR='#58a6ff'
+
+pkill -x x11vnc 2>/dev/null
+pkill -f 'Xvfb :99' 2>/dev/null
+sleep 1
+rm -f /tmp/.X99-lock
+
+Xvfb :99 -screen 0 1280x800x24 -nolisten tcp -ac &
+XVFB_PID=$!
+
+# espera o X ficar pronto antes de tentar falar com ele
+i=0
+while [ $i -lt 30 ]; do
+    xdpyinfo -display :99 >/dev/null 2>&1 && break
+    kill -0 $XVFB_PID 2>/dev/null || break
+    i=$((i + 1))
+    sleep 1
+done
+
+# O gerenciador de janelas continua: sem ele quem perde o foco de teclado e o
+# console de recuperacao fica inutil, porque o usuario digita e nada acontece.
+# Mas a barra de titulo do fluxbox entra como uma faixa clara no meio da tela,
+# entao a decoracao vai desligada e o fundo da area de trabalho tambem.
+if command -v fluxbox >/dev/null 2>&1; then
+    mkdir -p /root/.fluxbox
+    cat > /root/.fluxbox/init <<FLUXEOF
+session.screen0.defaultDeco: NONE
+session.screen0.rootColor: $FUNDO
+session.screen0.workspaces: 1
+session.menuFile: /dev/null
+FLUXEOF
+    fluxbox >/dev/null 2>&1 &
+    sleep 1
+fi
+
+# xsetroot depois do fluxbox: o gerenciador pinta a area de trabalho ao subir
+# e sobrescreveria a cor, entao a ultima palavra e nossa.
+if command -v xsetroot >/dev/null 2>&1; then
+    xsetroot -display :99 -solid "$FUNDO" 2>/dev/null
+fi
+
+# Terminal de recuperacao, senao nao ha como digitar comando nenhum.
+# -b/-bw 0 remove as bordas internas e externas do xterm, que sozinhas ja
+# desenham um retangulo claro em volta do conteudo.
+if command -v xterm >/dev/null 2>&1; then
+    xterm -display :99 -geometry 1276x796+2+2 \
+          -fa "$FONTE" -fs "$TAM" \
+          -bg "$FUNDO" -fg "$TEXTO" -cr "$CURSOR" \
+          -b 0 -bw 0 -b 0 \
+          -T "Recuperacao - $(hostname)" \
+          -e env TERM=xterm-256color COLORTERM=truecolor \
+                PS1='\[\e[38;5;39m\]\u@\h\[\e[0m\]:\[\e[38;5;245m\]\w\[\e[0m\]\$ ' \
+                /bin/bash -l &
+fi
+
+exec x11vnc -display :99 -forever -shared -rfbport {port} \
+     -rfbauth $PASSFILE -listen 0.0.0.0 -noxdamage -repeat \
+     -desktop "Painel Master - $(hostname)"
+
+"""
+
+
+def setup_vnc_ssh(ip: str, root_user: str, root_password: str, new_password: str = None,
+                  panel_ip: str = '') -> tuple:
+    """Instala e configura um console VNC (Xvfb + x11vnc) para recuperacao da maquina.
+
+    Serve para recuperar o servidor pelo VNC quando o SSH (porta 22) estiver
+    corrompido ou indisponivel: o servico sobe no boot, independente do SSH.
+
+    Returns (success: bool, info: dict) com:
+      - 'vnc_port'  : porta VNC (5900)
+      - 'vnc_user'  : usuario de acesso
+      - 'vnc_pass'  : senha do VNC
+      - 'success'   : True somente se a porta respondeu de fato
+      - 'warnings'  : lista de problemas nao fatais
+      - 'message'   : descricao legivel
+    """
+    import secrets
+    import string
+
+    vnc_port = 5900
+    warnings = []
+    notes = []
+
+    # Senha em texto puro e guardada para permitir reinstalacao idempotente.
+    # Antes, cada clique gerava senha nova, invalidando a que o usuario ja tinha.
+    pass_plain_path = '/etc/pmaster-vnc/pass.txt'
+
+    try:
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(ip, username=root_user, password=root_password, timeout=25)
+
+        # ---- 1. detectar gerenciador de pacotes -------------------------------
+        _, pm_out, _ = _ssh_run(ssh, "command -v apt-get || command -v yum || command -v dnf || true")
+        pm = pm_out.strip().splitlines()[-1].strip() if pm_out.strip() else ''
+        if not pm:
+            ssh.close()
+            return False, {
+                'success': False, 'vnc_port': vnc_port, 'vnc_user': root_user,
+                'vnc_pass': None, 'warnings': warnings,
+                'message': 'Nao foi possivel detectar o gerenciador de pacotes (apt-get/yum/dnf).',
+            }
+
+        # ---- 2. instalar pacotes, AGUARDANDO de verdade ----------------------
+        if pm.endswith('apt-get'):
+            pkgs = 'xvfb x11vnc xauth fluxbox xterm x11-utils'
+            # novnc/websockify sao separados porque podem nao existir no repo;
+            # o console classico (x11vnc) nao deve falhar por causa deles
+            rc, _, _ = _ssh_run(ssh, 'export DEBIAN_FRONTEND=noninteractive; '
+                                     'apt-get update -qq >/dev/null 2>&1; '
+                                     f'apt-get install -y -qq {pkgs}', timeout=900)
+        else:
+            pkgs = 'xorg-x11-server-Xvfb x11vnc fluxbox xterm xorg-x11-utils'
+            inst = 'yum' if pm.endswith('yum') else 'dnf'
+            rc, _, _ = _ssh_run(ssh, f'{inst} install -y -q {pkgs}', timeout=900)
+        if rc != 0:
+            warnings.append(f'instalacao de pacotes retornou codigo {rc}')
+
+        # ---- 2b. console web: novnc + websockify, opcionais -----------------
+        # Sem eles o VNC classico funciona, mas o console no navegador nao.
+        # Nao pode derrubar a instalacao inteira por causa disso.
+        if pm.endswith('apt-get'):
+            _ssh_run(ssh, 'export DEBIAN_FRONTEND=noninteractive; '
+                          'apt-get install -y -qq novnc websockify >/dev/null 2>&1; true', timeout=600)
+        else:
+            _ssh_run(ssh, 'command -v websockify >/dev/null 2>&1 || '
+                          '{ yum install -y -q novnc websockify || dnf install -y -q novnc websockify; } '
+                          '>/dev/null 2>&1; true', timeout=600)
+        _, ws_path, _ = _ssh_run(ssh, "command -v websockify || true")
+        websockify_bin = ws_path.strip().splitlines()[-1].strip() if ws_path.strip() else ''
+        novnc_dir = ''
+        for cand in ('/usr/share/novnc', '/usr/share/webapps/novnc', '/usr/share/novnc-utils'):
+            _, found, _ = _ssh_run(ssh, f"test -f {cand}/vnc_lite.html && echo SIM || echo NAO")
+            if 'SIM' in found:
+                novnc_dir = cand
+                break
+        if not websockify_bin or not novnc_dir:
+            websockify_bin = ''
+            warnings.append('novnc/websockify nao disponiveis neste servidor: o VNC classico '
+                            '(cliente externo) funciona, mas o console no navegador nao. '
+                            'No RHEL eles costumam precisar de um repositorio extra.')
+        else:
+            websockify_bin = websockify_bin.strip()
+        web_possible = bool(websockify_bin and novnc_dir)
+
+        # ---- 3. confirmar que os binarios existem ---------------------------
+        _, bin_out, _ = _ssh_run(
+            ssh, "for b in Xvfb x11vnc xdpyinfo; do command -v $b >/dev/null 2>&1 "
+                 "&& echo OK:$b || echo FALTA:$b; done"
+        )
+        faltando = [l.split(':', 1)[1] for l in bin_out.splitlines() if l.startswith('FALTA:')]
+        if faltando:
+            ssh.close()
+            return False, {
+                'success': False, 'vnc_port': vnc_port, 'vnc_user': root_user,
+                'vnc_pass': None, 'warnings': warnings,
+                'message': ('Pacotes nao instalados: ' + ', '.join(faltando)
+                            + '. Verifique a saida de apt-get/yum no servidor.'),
+            }
+        for b in ('fluxbox', 'xterm'):
+            _, has, _ = _ssh_run(ssh, f"command -v {b} >/dev/null 2>&1 && echo SIM || echo NAO")
+            if 'SIM' not in has:
+                warnings.append(f'{b} nao instalado: area de trabalho pode ficar sem janela/terminal')
+
+        # ---- 4. senha: reaproveitar a existente, senao gerar ---------------
+        _, cur, _ = _ssh_run(ssh, f"cat {pass_plain_path} 2>/dev/null || true")
+        vnc_pass = (new_password or '').strip() or cur.strip()
+        if not vnc_pass:
+            vnc_pass = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
+            notes.append('senha gerada')
+        else:
+            notes.append('senha existente preservada')
+        vnc_pass = vnc_pass[:8]  # VNC auth classica corta em 8 caracteres
+
+        # texto puro (root-only) para permitir reinstalar sem trocar a senha
+        _ssh_run(ssh, f"mkdir -p /etc/pmaster-vnc && chmod 700 /etc/pmaster-vnc && "
+                      f"printf '%s\\n' '{vnc_pass}' > {pass_plain_path} && "
+                      f"chmod 600 {pass_plain_path}")
+
+        # arquivo binario exigido pelo -rfbauth
+        _, _, store_err = _ssh_run(
+            ssh, f"x11vnc -storepasswd '{vnc_pass}' /etc/pmaster-vnc/pass >/dev/null 2>&1 "
+                 f"|| printf '%s\\n' '{vnc_pass}' > /etc/pmaster-vnc/pass"
+        )
+        _, chk, _ = _ssh_run(ssh, "test -s /etc/pmaster-vnc/pass && echo TEM || echo VAZIO")
+        if 'VAZIO' in chk:
+            warnings.append('arquivo de senha do VNC ficou vazio')
+        _ssh_run(ssh, "chmod 600 /etc/pmaster-vnc/pass 2>/dev/null")
+
+        # ---- 5. script de inicializacao + unit ------------------------------
+        sftp = ssh.open_sftp()
+        try:
+            with sftp.open('/usr/local/bin/pmaster-vnc-start', 'w') as f:
+                f.write(VNC_START_SCRIPT.format(port=vnc_port))
+            sftp.chmod('/usr/local/bin/pmaster-vnc-start', 0o755)
+            unit = (
+                "[Unit]\n"
+                "Description=Painel Master VNC (console de recuperacao)\n"
+                "After=network-online.target\n"
+                "Wants=network-online.target\n"
+                "\n"
+                "[Service]\n"
+                "Type=simple\n"
+                "ExecStartPre=-/usr/bin/pkill -x x11vnc\n"
+                "ExecStartPre=-/usr/bin/pkill -f Xvfb\n"
+                "ExecStart=/usr/local/bin/pmaster-vnc-start\n"
+                "Restart=always\n"
+                "RestartSec=5\n"
+                "KillMode=control-group\n"
+                "\n"
+                "[Install]\n"
+                "WantedBy=multi-user.target\n"
+            )
+            with sftp.open('/etc/systemd/system/pmaster-vnc.service', 'w') as f:
+                f.write(unit)
+
+            # console web: NoVNC servido por websockify, que traduz WebSocket
+            # em TCP. E o que permite abrir a tela no navegador do painel.
+            if web_possible:
+                with sftp.open('/etc/systemd/system/pmaster-vnc-web.service', 'w') as f:
+                    f.write(VNC_WEB_UNIT.format(websockify_bin=websockify_bin,
+                                                novnc_dir=novnc_dir))
+            with sftp.open('/usr/local/sbin/pmaster-vnc-firewall', 'w') as f:
+                f.write(VNC_FIREWALL_SCRIPT)
+            sftp.chmod('/usr/local/sbin/pmaster-vnc-firewall', 0o755)
+            with sftp.open('/etc/systemd/system/pmaster-vnc-firewall.service', 'w') as f:
+                f.write(VNC_FIREWALL_UNIT)
+        finally:
+            sftp.close()
+
+        # ---- 6. subir os servicos e fechar o acesso externo -----------------
+        # Antes, o painel abria a porta 5900 para qualquer um e nunca fechava.
+        # O x11vnc usa VNC auth classica (DES de 56 bits, senha de 8 chars),
+        # entao deixar isso aberto e a internet e forca bruta com root de premio.
+        # Agora o padrao e permitir apenas o IP do painel, que e o caminho normal.
+        _ssh_run(ssh,
+                 "systemctl daemon-reload; "
+                 "systemctl enable pmaster-vnc pmaster-vnc-firewall >/dev/null 2>&1; "
+                 "systemctl restart pmaster-vnc; "
+                 "systemctl restart pmaster-vnc-firewall"
+                 + ("; systemctl enable pmaster-vnc-web >/dev/null 2>&1; "
+                    "systemctl restart pmaster-vnc-web" if web_possible else ""),
+                 timeout=180)
+        # o IP vem do proprio SSH; o argumento so e usado como reserva
+        real_panel_ip = _panel_ip_from_ssh(ssh) or panel_ip
+        if not real_panel_ip:
+            warnings.append('nao foi possivel descobrir o IP do painel; o firewall pode '
+                            'ficar restrito ao endereco errado')
+        _ssh_run(ssh, f"PM_PANEL_IP={real_panel_ip} /usr/local/sbin/pmaster-vnc-firewall "
+                      f"restrict >/dev/null 2>&1", timeout=90)
+        _, mode_out, _ = _ssh_run(ssh, "/usr/local/sbin/pmaster-vnc-firewall status 2>/dev/null | head -1")
+        if 'restrict' not in mode_out:
+            warnings.append('nao foi possivel confirmar o firewall do VNC; verifique se iptables existe')
+
+        # ---- 7. verificar de verdade, com espera ----------------------------
+        port_state = _wait_vnc_port(ssh, vnc_port)
+        _, act, _ = _ssh_run(ssh, "systemctl is-active pmaster-vnc 2>/dev/null || true")
+        active = 'active' in act
+
+        if not active:
+            _, jrnl, _ = _ssh_run(ssh, "journalctl -u pmaster-vnc --no-pager -n 12 2>/dev/null | tail -12")
+            ssh.close()
+            return False, {
+                'success': False, 'vnc_port': vnc_port, 'vnc_user': root_user,
+                'vnc_pass': vnc_pass, 'warnings': warnings, 'journal': jrnl,
+                'message': (f'servico pmaster-vnc esta {act.strip() or "inativo"}. '
+                            f'Ultimas linhas do log:\n{jrnl.strip()}'),
+            }
+        if port_state != 'OPEN':
+            ssh.close()
+            return False, {
+                'success': False, 'vnc_port': vnc_port, 'vnc_user': root_user,
+                'vnc_pass': vnc_pass, 'warnings': warnings,
+                'message': (f'servico ativo, mas a porta {vnc_port} nao respondeu apos 45s. '
+                            f'Verifique se o x11vnc subiu (journalctl -u pmaster-vnc).'),
+            }
+
+        # ---- 8. confirmacao ponta a ponta a partir do painel ---------------
+        rfb = False
+        try:
+            import socket
+            s = socket.create_connection((ip, vnc_port), 6)
+            s.settimeout(6)
+            banner = s.recv(12)
+            rfb = banner.startswith(b'RFB')
+            s.close()
+        except Exception as e:
+            warnings.append(f'nao foi possivel confirmar o banner RFB a partir do painel: {e}')
+
+        # ---- 9. conferir se ha area de trabalho de verdade ------------------
+        _, wm, _ = _ssh_run(ssh, "ps -eo args | grep -E 'fluxbox|xterm' | grep -v grep | wc -l")
+        if wm.strip() in ('0', ''):
+            warnings.append('display sem gerenciador de janelas/terminal: a tela pode aparecer preta')
+
+        ssh.close()
+
+        ok = rfb
+        if not ok:
+            warnings.append('porta aberta mas o servico nao respondeu com banner RFB')
+
+        msg = 'VNC configurado com sucesso.' if ok else \
+              f'VNC instalado e rodando na porta {vnc_port}, mas a confirmacao final falhou.'
+        if notes:
+            msg += ' (' + '; '.join(notes) + ')'
+        if warnings:
+            msg += ' Avisos: ' + '; '.join(warnings) + '.'
+
+        return ok, {
+            'success': ok,
+            'vnc_port': vnc_port,
+            'vnc_user': root_user,
+            'vnc_pass': vnc_pass,
+            'rfb_ok': rfb,
+            'vnc_web_possible': web_possible,
+            'warnings': warnings,
+            'message': msg,
+        }
+    except Exception as e:
+        return False, {'success': False, 'vnc_port': vnc_port, 'vnc_user': root_user,
+                       'vnc_pass': None, 'warnings': warnings,
+                       'message': f'Erro ao configurar VNC: {e}'}
+
+
+def vnc_status_ssh(ip: str, root_user: str, root_password: str) -> tuple:
+    """Le o estado do console VNC no servidor, sem alterar nada.
+
+    Serve para o modal mostrar a situacao real (servico ativo, console web no
+    ar, firewall restrito ou liberado) assim que abre, em vez de so depois de
+    instalar.
+    """
+    vnc_port = 5900
+    web_port = 6080
+    try:
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(ip, username=root_user, password=root_password, timeout=25)
+
+        _, act, _ = _ssh_run(ssh, "systemctl is-active pmaster-vnc 2>/dev/null || true")
+        _, web, _ = _ssh_run(ssh, "systemctl is-active pmaster-vnc-web 2>/dev/null || true")
+        active = 'active' in act
+        web_active = 'active' in web
+
+        # o console no navegador depende de novnc + websockify, que nao existem
+        # em todo servidor. Distinguir "nao instalado" de "nao disponivel" evita
+        # mandar o usuario instalar de novo sem resolver o problema.
+        _, novnc, _ = _ssh_run(
+            ssh, "for d in /usr/share/novnc /usr/share/webapps/novnc; do "
+                 "[ -f $d/vnc_lite.html ] && echo SIM && break; done; "
+                 "command -v websockify >/dev/null 2>&1 && echo WS || true"
+        )
+        web_possible = 'SIM' in novnc and 'WS' in novnc
+
+        port_state = _wait_vnc_port(ssh, vnc_port, timeout=12)
+
+        _, mode, _ = _ssh_run(
+            ssh, "cat /etc/pmaster-vnc/firewall-mode 2>/dev/null || echo desconhecido"
+        )
+        mode = mode.strip() or 'desconhecido'
+
+        # a senha em texto puro so existe se o install ja tiver rodado
+        _, pw, _ = _ssh_run(ssh, "head -1 /etc/pmaster-vnc/pass.txt 2>/dev/null || true")
+        vnc_pass = pw.strip() or None
+
+        _, wm, _ = _ssh_run(ssh, "ps -eo args | grep -E 'fluxbox|xterm -geometry' | grep -v grep | wc -l")
+        desktop = wm.strip() not in ('0', '')
+
+        ssh.close()
+        return True, {
+            'success': active and port_state == 'OPEN',
+            'installed': active,
+            'vnc_active': active,
+            'vnc_web_active': web_active,
+            'vnc_web_possible': web_possible,
+            'vnc_port': vnc_port,
+            'vnc_web_port': web_port,
+            'vnc_user': root_user,
+            'vnc_pass': vnc_pass,
+            'port_state': port_state,
+            'firewall_mode': mode,
+            'has_desktop': desktop,
+            'warnings': ([] if desktop else ['display sem gerenciador de janelas/terminal'])
+                        + ([] if web_possible else
+                           ['novnc/websockify nao existem neste servidor: o console no '
+                            'navegador nao vai funcionar; o VNC classico continua'])
+        }
+    except Exception as e:
+        return False, {'success': False, 'vnc_pass': None,
+                       'message': f'Erro ao consultar o VNC: {e}'}
+
+
+def vnc_firewall_ssh(ip: str, root_user: str, root_password: str,
+                     mode: str, panel_ip: str = '') -> tuple:
+    """Liga ou desliga o acesso externo ao console VNC.
+
+    'restrict' (padrao) so aceita conexao do painel. 'open' libera 5900/6080
+    para a internet, para permitir entrar com um cliente VNC externo. Liberar
+    expoe o servidor a forca bruta: o x11vnc usa VNC auth classica, que e DES
+    de 56 bits, entao a senha de 8 caracteres e quebravel.
+
+    O modo fica gravado no servidor e reaplicado no boot.
+    """
+    if mode not in ('restrict', 'open'):
+        return False, {'success': False,
+                       'message': f"modo invalido: {mode} (use 'restrict' ou 'open')"}
+    try:
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(ip, username=root_user, password=root_password, timeout=25)
+
+        cmd = '/usr/local/sbin/pmaster-vnc-firewall ' + mode
+        real_panel_ip = _panel_ip_from_ssh(ssh) or panel_ip
+        if real_panel_ip:
+            cmd = f'PM_PANEL_IP={real_panel_ip} ' + cmd
+        rc, out, err = _ssh_run(ssh, cmd, timeout=90)
+        if rc != 0:
+            ssh.close()
+            return False, {'success': False,
+                           'message': f'falha ao aplicar o firewall: {err.strip() or out.strip()}'}
+
+        # confirma que a regra de fato ficou no lugar
+        _, chk, _ = _ssh_run(
+            ssh, "iptables -S PMVNC 2>/dev/null | grep -c '^-A' || echo 0"
+        )
+        ssh.close()
+        esperado = 3 if mode == 'restrict' else 1
+        got = int((chk.strip() or '0').splitlines()[-1])
+        if got != esperado:
+            return False, {'success': False,
+                           'message': (f'firewall nao ficou como esperado: '
+                                       f'{got} regras na cadeia, esperava {esperado}')}
+        aviso = (' Portas 5900 e 6080 abertas para a internet: o VNC usa DES de 56 bits '
+                 'e esta exposto a forca bruta. Volte para restrito quando terminar.'
+                 if mode == 'open' else '')
+        return True, {
+            'success': True,
+            'firewall_mode': mode,
+            'message': ('Acesso externo liberado.' + aviso) if mode == 'open'
+                       else 'Acesso restrito ao painel. Portas fechadas para a internet.',
+        }
+    except Exception as e:
+        return False, {'success': False, 'message': f'Erro ao ajustar o firewall: {e}'}
+
+
+# ---- Proxy do console VNC no proprio painel --------------------------------
+# Estas duas pecas ficam no painel, nao no servidor do console, entao nao vao
+# por SSH: sao arquivos do proprio painel. Ficam aqui para que uma instalacao
+# nova possa recria-las, em vez de depender de alguem copiar na mao.
+# Sem o mapa, todo servidor cai no default e o console abre em branco.
+
+VNC_NGINX_LOCATION = """# ---- Console VNC (NoVNC) ---------------------------------------------------
+# O navegador nunca fala com o servidor VNC direto: passa pelo painel. O nginx
+# valida a sessao do Flask com auth_request antes de encaminhar, entao o
+# console fica inacessivel a quem nao estiver logado como admin - e a porta do
+# websockify no servidor so aceita o IP do painel.
+location ~ ^/servers/vnc/(?<vnc_sid>\\d+)/(?<vnc_rest>.*)$ {
+    auth_request /_vnc_authz;
+    error_page 401 = @vnc_unauth;
+    error_page 403 = @vnc_denied;
+
+    proxy_pass http://$vnc_backend/$vnc_rest;
+
+    # Upgrade de WebSocket: o noVNC fala direto com o x11vnc por tras do
+    # websockify, entao o handshake tem que passar intacto.
+    proxy_http_version 1.1;
+    proxy_set_header Host              $host;
+    proxy_set_header Upgrade           $http_upgrade;
+    proxy_set_header Connection        "upgrade";
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header CF-Connecting-IP  $http_cf_connecting_ip;
+
+    # Console e sessao longa e ociosa. Com o timeout padrao de 60s a conexao
+    # cairia sozinha toda vez que o usuario parasse para digitar um comando.
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_buffering off;
+}
+
+location @vnc_unauth {
+    default_type application/json;
+    return 401 '{"success":false,"message":"Sessao expirada. Faca login novamente."}';
+}
+
+location @vnc_denied {
+    default_type application/json;
+    return 403 '{"success":false,"message":"Acesso negado: requer admin."}';
+}
+
+# Subrequisicao do auth_request. "internal" impede que alguem chame pela
+# internet e use isto para sondar sessao de terceiros.
+location = /_vnc_authz {
+    internal;
+    proxy_pass http://127.0.0.1:2083/_vnc_authz;
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+    proxy_set_header Cookie           $http_cookie;
+    proxy_set_header X-Original-URI   $request_uri;
+}
+"""
+
+
+def vnc_nginx_upstreams_map(servers) -> str:
+    """Monta o mapa de upstreams do VNC a partir da lista de servidores.
+
+    'default' aponta para porta descartavel de proposito: um id que nao esteja
+    no mapa nao pode acabar conectado em algum servidor real por acidente.
+    """
+    linhas = [
+        '# Mapa de servidores VNC: id do servidor -> backend websockify.',
+        '# Gerado pelo painel (regenerado quando a lista de servidores muda).',
+        '# default aponta para porta descartavel: um id desconhecido nao deve',
+        '# acabar conectado em algum servidor real.',
+        'map $vnc_sid $vnc_backend {',
+        '    default        "127.0.0.1:1";',
+    ]
+    for srv in servers or []:
+        ip = (srv.get('ip') or '').strip()
+        try:
+            sid = int(srv.get('id'))
+        except (TypeError, ValueError):
+            continue
+        # sem ip nao ha backend; sem id nao ha rota. Entrada invalida e
+        # ignorada de proposito: gerar "null" quebraria o reload do nginx.
+        if not ip or ip.lower() in ('none', 'null', '0.0.0.0'):
+            continue
+        linhas.append(f'    {sid}             "{ip}:6080";')
+    linhas.append('}')
+    return '\n'.join(linhas) + '\n'
+
+
+def install_vnc_proxy(servers) -> tuple:
+    """Instala/atualiza o proxy do console VNC no proprio painel.
+
+    Roda localmente: escreve o snippet e o mapa de upstreams, inclui o snippet
+    nos server blocks do nginx e recarrega. Idempotente, entao pode rodar a
+    cada cadastro de servidor ou no start do painel.
+    """
+    import shutil
+    import subprocess
+
+    snippet_path = '/etc/nginx/snippets/vnc-location.conf'
+    map_path = '/etc/nginx/conf.d/vnc-upstreams.conf'
+    site_dirs = ['/etc/nginx/sites-enabled', '/etc/nginx/conf.d']
+
+    if shutil.which('nginx') is None:
+        return False, {'success': False,
+                       'message': 'nginx nao encontrado neste painel; o console VNC no '
+                                  'navegador depende do proxy, entao nao da para instalar.'}
+
+    try:
+        os.makedirs(os.path.dirname(snippet_path), exist_ok=True)
+        with open(snippet_path, 'w', encoding='utf-8') as f:
+            f.write(VNC_NGINX_LOCATION)
+        with open(map_path, 'w', encoding='utf-8') as f:
+            f.write(vnc_nginx_upstreams_map(servers))
+
+        # garantir que o mapa exista no contexto http
+        with open('/etc/nginx/nginx.conf', 'r', encoding='utf-8') as f:
+            main = f.read()
+        if 'conf.d/*.conf' not in main and 'snippets/' not in main:
+            return False, {'success': False,
+                           'message': ('o nginx.conf nao inclui conf.d/*.conf; inclua para que '
+                                       'o mapa de upstreams do VNC seja carregado.')}
+
+        incluidos = 0
+        for d in site_dirs:
+            if not os.path.isdir(d):
+                continue
+            for nome in os.listdir(d):
+                caminho = os.path.join(d, nome)
+                if not os.path.isfile(caminho):
+                    continue
+                try:
+                    with open(caminho, 'r', encoding='utf-8') as f:
+                        txt = f.read()
+                except Exception:
+                    continue
+                if 'listen' not in txt or 'server {' not in txt:
+                    continue
+                if 'vnc-location.conf' in txt:
+                    continue
+                if 'location / {' not in txt:
+                    continue
+                novo = txt.replace('location / {',
+                                   f'include {snippet_path};\n\n    location / {{', 1)
+                with open(caminho, 'w', encoding='utf-8') as f:
+                    f.write(novo)
+                incluidos += 1
+
+        chk = subprocess.run(['nginx', '-t'], capture_output=True, text=True)
+        if chk.returncode != 0:
+            return False, {'success': False,
+                           'message': 'nginx -t falhou:\n' + (chk.stderr or chk.stdout)[-500:]}
+        subprocess.run(['nginx', '-s', 'reload'], capture_output=True, text=True)
+        return True, {
+            'success': True,
+            'message': (f'Proxy do console VNC atualizado. '
+                        f'{incluidos} server block(s)receberam o include.'),
+        }
+    except Exception as e:
+        return False, {'success': False, 'message': f'Falha ao instalar o proxy do VNC: {e}'}

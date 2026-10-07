@@ -136,6 +136,36 @@ CREATE TABLE IF NOT EXISTS ssh_user_servers (
     FOREIGN KEY (server_id)   REFERENCES servers(id)    ON DELETE CASCADE
 );
 
+-- Suporte: revenda abre ticket, admin responde. O historico fica em
+-- ticket_messages e nunca e sobrescrito, para dar contexto do que ja foi
+-- combinado com o cliente.
+CREATE TABLE IF NOT EXISTS tickets (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL,   -- quem abriu
+    subject    TEXT    NOT NULL,
+    category   TEXT    NOT NULL DEFAULT 'bug',
+    priority   TEXT    NOT NULL DEFAULT 'normal',
+    status     TEXT    NOT NULL DEFAULT 'open',
+    created_at TEXT    DEFAULT (datetime('now')),
+    updated_at TEXT    DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES panel_users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS ticket_messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id  INTEGER NOT NULL,
+    author_id  INTEGER NOT NULL,
+    body       TEXT    NOT NULL,
+    is_staff   INTEGER DEFAULT 0,   -- 1 = resposta do admin
+    created_at TEXT    DEFAULT (datetime('now')),
+    FOREIGN KEY (ticket_id) REFERENCES tickets(id)   ON DELETE CASCADE,
+    FOREIGN KEY (author_id) REFERENCES panel_users(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tickets_user    ON tickets(user_id);
+CREATE INDEX IF NOT EXISTS idx_tickets_status  ON tickets(status);
+CREATE INDEX IF NOT EXISTS idx_ticket_msg_tid  ON ticket_messages(ticket_id);
+
 INSERT OR IGNORE INTO backup_config (id) VALUES (1);
 
 INSERT OR IGNORE INTO settings VALUES ('panel_name',  'Painel Master');
@@ -945,3 +975,216 @@ def migrate_schema_v2():
         except Exception:
             pass
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Suporte / tickets
+# ---------------------------------------------------------------------------
+
+# Categorias e estados sao listas fechadas de proposito. Um valor fora da
+# lista viraria um filtro que nao filtra e um estado que ninguem sabe
+# tratar, entao tudo que chega do formulario passa por estes conjuntos.
+TICKET_CATEGORIES = {
+    'bug':         'Bug',
+    'sugestao':    'Sugestão',
+    'reclamacao':  'Reclamação',
+    'financeiro':  'Financeiro',
+    'outro':       'Outro',
+}
+TICKET_PRIORITIES = {
+    'baixa':  'Baixa',
+    'normal': 'Normal',
+    'alta':   'Alta',
+}
+TICKET_STATUSES = {
+    'open':     'Aberto',
+    'answered': 'Respondido',
+    'closed':   'Fechado',
+}
+
+
+def migrate_schema_tickets():
+    """Create support tables on an existing database (live schema migration)."""
+    conn = get_db()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS tickets (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER NOT NULL,
+            subject    TEXT    NOT NULL,
+            category   TEXT    NOT NULL DEFAULT 'bug',
+            priority   TEXT    NOT NULL DEFAULT 'normal',
+            status     TEXT    NOT NULL DEFAULT 'open',
+            created_at TEXT    DEFAULT (datetime('now')),
+            updated_at TEXT    DEFAULT (datetime('now')),
+            FOREIGN KEY (user_id) REFERENCES panel_users(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS ticket_messages (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticket_id  INTEGER NOT NULL,
+            author_id  INTEGER NOT NULL,
+            body       TEXT    NOT NULL,
+            is_staff   INTEGER DEFAULT 0,
+            created_at TEXT    DEFAULT (datetime('now')),
+            FOREIGN KEY (ticket_id) REFERENCES tickets(id)   ON DELETE CASCADE,
+            FOREIGN KEY (author_id) REFERENCES panel_users(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_tickets_user   ON tickets(user_id);
+        CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
+        CREATE INDEX IF NOT EXISTS idx_ticket_msg_tid ON ticket_messages(ticket_id);
+    """)
+    conn.commit()
+    conn.close()
+
+
+def create_ticket(user_id: int, subject: str, category: str, priority: str,
+                  body: str) -> tuple:
+    """Open a ticket with its first message. Returns (ok, message, ticket_id)."""
+    subject = (subject or '').strip()
+    body    = (body or '').strip()
+    if not subject or not body:
+        return False, 'Assunto e descrição são obrigatórios.', None
+    if category not in TICKET_CATEGORIES:
+        category = 'outro'
+    if priority not in TICKET_PRIORITIES:
+        priority = 'normal'
+
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO tickets (user_id, subject, category, priority, status) "
+        "VALUES (?,?,?,?,'open')",
+        (user_id, subject, category, priority),
+    )
+    tid = cur.lastrowid
+    conn.execute(
+        "INSERT INTO ticket_messages (ticket_id, author_id, body, is_staff) "
+        "VALUES (?,?,?,0)",
+        (tid, user_id, body),
+    )
+    conn.commit()
+    conn.close()
+    return True, 'Ticket aberto.', tid
+
+
+def get_tickets(visible_user_ids=None, status: str = '', search: str = '') -> list:
+    """List tickets joined with author and reply count.
+
+    visible_user_ids restricts the result to those panel_users ids. Passing
+    None means "everyone" and is only used for the admin listing -- the
+    reseller routes always pass a list, never None.
+    """
+    conn = get_db()
+    sql = (
+        "SELECT t.*, p.username AS author, "
+        "       (SELECT COUNT(*) FROM ticket_messages m WHERE m.ticket_id = t.id) AS replies "
+        "FROM tickets t LEFT JOIN panel_users p ON p.id = t.user_id "
+    )
+    args = []
+    if visible_user_ids is not None:
+        if not visible_user_ids:
+            conn.close()
+            return []
+        sql += f"WHERE t.user_id IN ({','.join('?' * len(visible_user_ids))}) "
+        args.extend(visible_user_ids)
+    if status in TICKET_STATUSES:
+        sql += "AND " if visible_user_ids is not None else "WHERE "
+        sql += "t.status = ? "
+        args.append(status)
+    sql += "ORDER BY t.updated_at DESC, t.id DESC"
+    rows = conn.execute(sql, args).fetchall()
+    conn.close()
+    return rows
+
+
+def get_ticket(ticket_id: int):
+    """Return one ticket with its author name, or None."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT t.*, p.username AS author FROM tickets t "
+        "LEFT JOIN panel_users p ON p.id = t.user_id WHERE t.id = ?",
+        (ticket_id,),
+    ).fetchone()
+    conn.close()
+    return row
+
+
+def get_ticket_messages(ticket_id: int) -> list:
+    """Return the full conversation, oldest first."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT m.*, p.username AS author, p.role AS author_role "
+        "FROM ticket_messages m LEFT JOIN panel_users p ON p.id = m.author_id "
+        "WHERE m.ticket_id = ? ORDER BY m.id",
+        (ticket_id,),
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def add_ticket_message(ticket_id: int, author_id: int, body: str,
+                       is_staff: bool) -> tuple:
+    """Append a message and, for a staff reply, flip the ticket to 'answered'."""
+    body = (body or '').strip()
+    if not body:
+        return False, 'Escreva uma mensagem.'
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO ticket_messages (ticket_id, author_id, body, is_staff) "
+            "VALUES (?,?,?,?)",
+            (ticket_id, author_id, body, 1 if is_staff else 0),
+        )
+        # A revenda que complementa um ticket respondido devolve para
+        # 'answered' -> 'open': assim o admin sabe que ha algo novo.
+        novo = 'answered' if is_staff else 'open'
+        conn.execute(
+            "UPDATE tickets SET status = ?, updated_at = datetime('now') WHERE id = ?",
+            (novo, ticket_id),
+        )
+        conn.commit()
+    except Exception:
+        conn.close()
+        raise
+    conn.close()
+    return True, 'Mensagem enviada.'
+
+
+def set_ticket_status(ticket_id: int, status: str) -> tuple:
+    if status not in TICKET_STATUSES:
+        return False, 'Estado inválido.'
+    conn = get_db()
+    conn.execute(
+        "UPDATE tickets SET status = ?, updated_at = datetime('now') WHERE id = ?",
+        (status, ticket_id),
+    )
+    conn.commit()
+    conn.close()
+    return True, f'Ticket {TICKET_STATUSES[status].lower()}.'
+
+
+def delete_ticket(ticket_id: int):
+    conn = get_db()
+    conn.execute("DELETE FROM ticket_messages WHERE ticket_id = ?", (ticket_id,))
+    conn.execute("DELETE FROM tickets WHERE id = ?", (ticket_id,))
+    conn.commit()
+    conn.close()
+
+
+def ticket_counts(visible_user_ids=None) -> dict:
+    """Ticket totals per status, for the filter badges."""
+    conn = get_db()
+    sql = "SELECT status, COUNT(*) AS n FROM tickets"
+    args = []
+    if visible_user_ids is not None:
+        if not visible_user_ids:
+            conn.close()
+            return {'all': 0, 'open': 0, 'answered': 0, 'closed': 0}
+        sql += f" WHERE user_id IN ({','.join('?' * len(visible_user_ids))})"
+        args.extend(visible_user_ids)
+    sql += " GROUP BY status"
+    rows = conn.execute(sql, args).fetchall()
+    conn.close()
+    c = {'all': 0, 'open': 0, 'answered': 0, 'closed': 0}
+    for r in rows:
+        c[r['status']] = r['n']
+        c['all'] += r['n']
+    return c

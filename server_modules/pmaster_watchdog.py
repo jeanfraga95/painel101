@@ -107,6 +107,27 @@ def check_module_health():
 def restart_module():
     """Reinicia o módulo."""
     log("*** REINICIANDO MODULO ***")
+
+    # ── Preferência: serviço systemd (supervisionado, sobe no boot) ─────────
+    import subprocess
+    try:
+        rc = subprocess.call('systemctl is-enabled pmaster-agent 2>/dev/null',
+                             shell=True)
+        if rc == 0:
+            os.system('systemctl enable pmaster-agent 2>/dev/null || true')
+            os.system('systemctl restart pmaster-agent 2>/dev/null || true')
+            log("Módulo reiniciado via systemd (pmaster-agent)")
+            import time; time.sleep(2)
+            if is_port_open(MODULE_PORT):
+                log("Porta aberta após reinício (systemd)")
+            else:
+                log("ATENCAO: Porta não abriu após reinício (systemd)")
+            return
+    except Exception as e:
+        log(f"Erro ao checar systemd: {e}")
+
+    # ── Fallback: fluxo legado (nohup) para sistemas sem systemd ───────────
+    log("systemd indisponível, usando fallback nohup")
     # Mata processos existentes
     os.system('pkill -f "python3.*pmaster_module.py" 2>/dev/null || true')
     os.system('pkill -f pmaster_module.py 2>/dev/null || true')
@@ -118,7 +139,7 @@ def restart_module():
     # Inicia novo processo
     result = os.system(f'nohup python3 {MODULE_PATH} > /root/pmaster_module.log 2>&1 &')
     if result == 0:
-        log("Módulo reiniciado com sucesso")
+        log("Módulo reiniciado com sucesso (nohup)")
         # Aguarda 2 segundos e verifica se subiu
         time.sleep(2)
         if is_port_open(MODULE_PORT):

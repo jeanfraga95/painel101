@@ -1,0 +1,16 @@
+[Unit]
+Description=Painel Master HTTP Agent (port 7270)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /root/pmaster_module.py
+WorkingDirectory=/root
+Restart=always
+RestartSec=3
+StandardOutput=append:/root/pmaster_module.log
+StandardError=append:/root/pmaster_module.log
+
+[Install]
+WantedBy=multi-user.target

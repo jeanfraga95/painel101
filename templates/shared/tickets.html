@@ -1,0 +1,180 @@
+{% extends 'base.html' %}
+{% block title %}Suporte — {{ panel_name }}{% endblock %}
+{% block page_title %}<i class="fas fa-life-ring me-2"></i>Suporte{% endblock %}
+
+{% block content %}
+
+{# ── Filtros ──────────────────────────────────────────────────────────────── #}
+<div class="card mb-3">
+  <div class="card-body py-3">
+
+    <div class="d-flex flex-wrap gap-2 mb-3">
+      <a class="filter-chip {{ 'active' if f_status=='' }}" href="?status=">
+        <i class="fas fa-list-ul"></i>Todos <span class="chip-n">{{ counts.all }}</span>
+      </a>
+      <a class="filter-chip {{ 'active' if f_status=='open' }}" href="?status=open">
+        <i class="fas fa-folder-open"></i>Abertos <span class="chip-n">{{ counts.open }}</span>
+      </a>
+      <a class="filter-chip {{ 'active' if f_status=='answered' }}" href="?status=answered">
+        <i class="fas fa-reply"></i>Respondidos <span class="chip-n">{{ counts.answered }}</span>
+      </a>
+      <a class="filter-chip {{ 'active' if f_status=='closed' }}" href="?status=closed">
+        <i class="fas fa-check-circle"></i>Fechados <span class="chip-n">{{ counts.closed }}</span>
+      </a>
+    </div>
+
+    <form method="GET" action="{{ url_for('tickets_list') }}">
+      <div class="row g-2 align-items-end">
+        <div class="col-auto">
+          <button class="btn btn-grad" type="button"
+                  data-bs-toggle="modal" data-bs-target="#newTicketModal">
+            <i class="fas fa-plus me-1"></i>Novo Ticket
+          </button>
+        </div>
+        <div class="col-sm-5">
+          <label class="form-label small text-muted mb-1">Buscar por assunto</label>
+          <div class="input-group input-group-sm">
+            <span class="input-group-text"><i class="fas fa-search"></i></span>
+            <input type="text" name="q" value="{{ busca }}" class="form-control"
+                   placeholder="palavra no assunto">
+          </div>
+        </div>
+        <div class="col-auto">
+          <input type="hidden" name="status" value="{{ f_status }}">
+          <button class="btn btn-outline-secondary btn-sm" type="submit">Filtrar</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+{# ── Lista ────────────────────────────────────────────────────────────────── #}
+<div class="card">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0">
+        <thead>
+          <tr>
+            <th style="width:70px">#</th>
+            <th>Assunto</th>
+            {% if current_user.role == 'admin' %}<th style="width:150px">Revenda</th>{% endif %}
+            <th style="width:140px">Categoria</th>
+            <th style="width:110px">Prioridade</th>
+            <th style="width:130px">Estado</th>
+            <th style="width:70px" class="text-center">Msgs</th>
+            <th style="width:150px">Atualizado</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for t in tickets %}
+          <tr>
+            <td class="text-muted">#{{ t.id }}</td>
+            <td>
+              <a href="{{ url_for('ticket_detail', ticket_id=t.id) }}" class="text-decoration-none">
+                {{ t.subject }}
+              </a>
+            </td>
+            {% if current_user.role == 'admin' %}
+            <td class="text-muted small">{{ t.author or '—' }}</td>
+            {% endif %}
+            <td><span class="badge bg-secondary">{{ categorias.get(t.category, t.category) }}</span></td>
+            <td>
+              {% if t.priority == 'alta' %}
+                <span class="badge bg-danger">Alta</span>
+              {% elif t.priority == 'baixa' %}
+                <span class="badge bg-dark border">Baixa</span>
+              {% else %}
+                <span class="badge bg-info text-dark">Normal</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if t.status == 'open' %}
+                <span class="badge bg-warning text-dark">Aberto</span>
+              {% elif t.status == 'answered' %}
+                <span class="badge bg-primary">Respondido</span>
+              {% else %}
+                <span class="badge bg-success">Fechado</span>
+              {% endif %}
+            </td>
+            <td class="text-center text-muted">{{ t.replies }}</td>
+            <td class="text-muted small">{{ t.updated_at }}</td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="{{ 8 if current_user.role == 'admin' else 7 }}" class="text-center text-muted py-4">
+              Nenhum ticket por aqui ainda. Clique em <strong>Novo Ticket</strong> para abrir o primeiro.
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{# ── Modal: abrir ticket ──────────────────────────────────────────────────── #}
+<div class="modal fade" id="newTicketModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fas fa-plus me-2"></i>Novo Ticket</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-3">
+          <div class="col-12">
+            <label class="form-label">Assunto</label>
+            <input type="text" id="tk_subject" class="form-control"
+                   placeholder="resuma o problema em uma linha" maxlength="120">
+          </div>
+          <div class="col-6">
+            <label class="form-label">Categoria</label>
+            <select id="tk_category" class="form-select">
+              {% for k, v in categorias.items() %}
+              <option value="{{ k }}">{{ v }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-6">
+            <label class="form-label">Prioridade</label>
+            <select id="tk_priority" class="form-select">
+              {% for k, v in prioridades.items() %}
+              <option value="{{ k }}" {{ 'selected' if k == 'normal' }}>{{ v }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-12">
+            <label class="form-label">Descrição</label>
+            <textarea id="tk_body" class="form-control" rows="6"
+                      placeholder="detalhe o que aconteceu, o que esperava e como reproduzir"></textarea>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" class="btn btn-grad" onclick="submitTicket()">Abrir ticket</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  function submitTicket() {
+    const subject = document.getElementById('tk_subject').value.trim();
+    const body    = document.getElementById('tk_body').value.trim();
+    if (!subject || !body) { showToast('Preencha assunto e descrição', 'danger'); return; }
+    apiPost('{{ url_for("tickets_create") }}', {
+      subject:   subject,
+      body:      body,
+      category:  document.getElementById('tk_category').value,
+      priority:  document.getElementById('tk_priority').value,
+    }, d => {
+      showToast(d.message, d.success ? 'success' : 'danger');
+      if (d.success) setTimeout(() => location.href = '/tickets/' + d.ticket_id, 700);
+    });
+  }
+</script>
+{% endblock %}

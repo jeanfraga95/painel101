@@ -1,0 +1,128 @@
+{% extends 'base.html' %}
+{% block title %}Ticket #{{ ticket.id }} — {{ panel_name }}{% endblock %}
+{% block page_title %}<i class="fas fa-life-ring me-2"></i>Ticket #{{ ticket.id }}{% endblock %}
+
+{% block content %}
+
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+  <div>
+    <h5 class="mb-1">{{ ticket.subject }}</h5>
+    <small class="text-muted">
+      Aberto por <strong>{{ ticket.author or '—' }}</strong> em {{ ticket.created_at }}
+    </small>
+  </div>
+  <div class="d-flex gap-2 align-items-center">
+    <a href="{{ url_for('tickets_list') }}" class="btn btn-outline-secondary btn-sm">
+      <i class="fas fa-arrow-left me-1"></i>Voltar
+    </a>
+
+    {# Só o admin mexe no estado. A revenda reabre automaticamente ao
+       complementar um ticket respondido (ver add_ticket_message). #}
+    {% if is_admin %}
+    <div class="btn-group btn-group-sm" role="group" aria-label="Estado do ticket">
+      {% for k, v in status_labels.items() %}
+      <button type="button" class="btn {{ 'btn-primary' if ticket.status == k else 'btn-outline-primary' }}"
+              onclick="setStatus('{{ k }}')">{{ v }}</button>
+      {% endfor %}
+    </div>
+    <button type="button" class="btn btn-outline-danger btn-sm" onclick="delTicket()">
+      <i class="fas fa-trash me-1"></i>Excluir
+    </button>
+    {% endif %}
+  </div>
+</div>
+
+<div class="mb-3">
+  <span class="badge bg-secondary">{{ categorias.get(ticket.category, ticket.category) }}</span>
+  {% if ticket.priority == 'alta' %}
+    <span class="badge bg-danger">Prioridade alta</span>
+  {% elif ticket.priority == 'baixa' %}
+    <span class="badge bg-dark border">Prioridade baixa</span>
+  {% else %}
+    <span class="badge bg-info text-dark">Prioridade normal</span>
+  {% endif %}
+  <span class="badge {{ 'bg-warning text-dark' if ticket.status == 'open'
+                          else ('bg-primary' if ticket.status == 'answered' else 'bg-success') }}">
+    {{ status_labels.get(ticket.status, ticket.status) }}
+  </span>
+</div>
+
+{# ── Conversa ─────────────────────────────────────────────────────────────── #}
+<div class="card mb-3">
+  <div class="card-body">
+    {% for m in messages %}
+    <div class="d-flex mb-3 {{ 'flex-row-reverse' if m.is_staff }}">
+      <div class="me-2 flex-shrink-0">
+        {% if m.is_staff %}
+          <i class="fas fa-user-shield fa-fw fa-lg text-primary"></i>
+        {% else %}
+          <i class="fas fa-user fa-fw fa-lg text-muted"></i>
+        {% endif %}
+      </div>
+      <div class="flex-grow-1" style="min-width:0">
+        <div class="d-flex {{ 'flex-row-reverse' if m.is_staff }} gap-2 small text-muted mb-1">
+          <strong class="text-body">{{ m.author or 'removido' }}</strong>
+          {% if m.is_staff %}<span class="badge bg-primary">suporte</span>{% endif %}
+          <span>{{ m.created_at }}</span>
+        </div>
+        {# whitespace-pre-wrap preserva as quebras de linha que a revenda
+           digitou no ticket; sem isso tudo vira um parágrafo só. #}
+        <div class="p-2 rounded {{ 'bg-primary bg-opacity-10' if m.is_staff else 'bg-dark bg-opacity-50' }}"
+             style="white-space:pre-wrap; word-break:break-word;">{{ m.body }}</div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+{# ── Responder ────────────────────────────────────────────────────────────── #}
+{% if ticket.status != 'closed' or is_admin %}
+<div class="card">
+  <div class="card-body">
+    <label class="form-label">
+      {{ 'Responder ao cliente' if is_admin else 'Complementar o ticket' }}
+    </label>
+    <textarea id="reply_body" class="form-control mb-2" rows="4"
+              placeholder="{{ 'escreva a resposta que a revenda vai ler' if is_admin else 'adicione mais detalhes ao problema' }}"></textarea>
+    <button type="button" class="btn btn-grad" onclick="sendReply()">
+      <i class="fas fa-paper-plane me-1"></i>Enviar
+    </button>
+  </div>
+</div>
+{% else %}
+<div class="alert alert-secondary">
+  Este ticket está fechado. Abra um novo ticket se precisar de mais alguma coisa.
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  const TICKET_ID = {{ ticket.id }};
+
+  function sendReply() {
+    const body = document.getElementById('reply_body').value.trim();
+    if (!body) { showToast('Escreva uma mensagem', 'danger'); return; }
+    apiPost(`/tickets/${TICKET_ID}/reply`, {body: body}, d => {
+      showToast(d.message, d.success ? 'success' : 'danger');
+      if (d.success) setTimeout(() => location.reload(), 700);
+    });
+  }
+
+  function setStatus(status) {
+    apiPost(`/tickets/${TICKET_ID}/status`, {status: status}, d => {
+      showToast(d.message, d.success ? 'success' : 'danger');
+      if (d.success) setTimeout(() => location.reload(), 700);
+    });
+  }
+
+  function delTicket() {
+    if (!confirm('Excluir este ticket e toda a conversa? A ação não pode ser desfeita.')) return;
+    apiPost(`/tickets/${TICKET_ID}/delete`, {}, d => {
+      showToast(d.message, d.success ? 'success' : 'danger');
+      if (d.success) setTimeout(() => location.href = '/tickets', 700);
+    });
+  }
+</script>
+{% endblock %}

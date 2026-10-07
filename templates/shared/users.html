@@ -110,7 +110,7 @@
         <tbody>
           {% for u in users %}
           {% set d = days_until(u.expires_at) %}
-          <tr id="row_{{ u.id }}" data-expired="{{ '1' if d <= 0 else '0' }}">
+          <tr id="row_{{ u.id }}" data-expired="{{ '1' if d < 0 else '0' }}">
             <td>
               <input type="checkbox" class="form-check-input row-chk" value="{{ u.id }}"
                      onchange="updateBulkBar()">
@@ -126,8 +126,9 @@
             </td>
             <td data-user-id="{{ u.id }}">{{ u.expires_at[:10] }}</td>
             <td>
-              <span class="badge {{ 'bg-danger' if d <= 0 else ('bg-warning text-dark' if d <= 3 else ('bg-secondary' if d <= 7 else 'bg-success')) }}">
-                {{ d }}d
+              <span class="badge {{ 'bg-danger' if d < 0 else ('bg-warning text-dark' if d <= 3 else ('bg-secondary' if d <= 7 else 'bg-success')) }}"
+                    title="{{ 'expirado' if d < 0 else ('vence hoje' if d == 0 else 'dias restantes') }}">
+                {% if d < 0 %}{{ d|abs }}d atrasado{% elif d == 0 %}hoje{% else %}{{ d }}d{% endif %}
               </span>
             </td>
             <td>{{ u.connection_limit }}</td>

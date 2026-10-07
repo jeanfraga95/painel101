@@ -85,8 +85,8 @@
             </td>
             <td>{{ r.expires_at[:10] if r.expires_at else '—' }}</td>
             <td>
-              <span class="badge {{ 'bg-danger' if d <= 0 else ('bg-warning text-dark' if d <= 7 else 'bg-success') }}">
-                {{ d if d < 999 else '∞' }}d
+              <span class="badge {{ 'bg-danger' if d < 0 else ('bg-warning text-dark' if d <= 7 else 'bg-success') }}">
+                {% if d == 999 %}∞{% elif d < 0 %}{{ d|abs }}d atrasado{% elif d == 0 %}hoje{% else %}{{ d }}d{% endif %}
               </span>
             </td>
             <td>

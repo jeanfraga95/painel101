@@ -90,7 +90,7 @@
           <span>{{ u.username }}
             {% if u.is_test %}<span class="badge bg-warning text-dark ms-1">teste</span>{% endif %}
           </span>
-          <span class="badge {{ 'bg-danger' if d <= 0 else ('bg-warning text-dark' if d <= 3 else 'bg-secondary') }}">{{ d }}d</span>
+          <span class="badge {{ 'bg-danger' if d < 0 else ('bg-warning text-dark' if d <= 3 else 'bg-secondary') }}">{% if d < 0 %}expirado{% elif d == 0 %}hoje{% else %}{{ d }}d{% endif %}</span>
         </div>
         {% endfor %}
       </div>

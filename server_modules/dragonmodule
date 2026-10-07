@@ -135,9 +135,75 @@ removessh(){
 timedata(){
     usuario=$1
     dias=$2
-    finaldate=$(date "+%Y-%m-%d" -d "+$dias days")
+    # +1 igual ao createssh: a conta morre no dia SEGUINTE ao vencimento,
+    # para o usuario usar ate o ultimo dia.
+    finaldate=$(date "+%Y-%m-%d" -d "+$((dias + 1)) days")
     chage -E $finaldate $usuario
     echo "RENOVADOCOMSUCESSO"
+}
+
+v2ray_remove_client(){
+    uuidel=$1
+    [ -z "$uuidel" ] && return 1
+    found=0
+    for config_file in \
+        "/usr/local/etc/xray/config.json" \
+        "/etc/xray/config.json" \
+        "/etc/v2ray/config.json"
+    do
+        [ -f "$config_file" ] || continue
+        jq -e --arg id "$uuidel" '
+            .inbounds[]? | select(.protocol=="vless")
+            | .settings.clients[]? | select(.id==$id)
+        ' "$config_file" > /dev/null 2>&1 || continue
+        tmp="${config_file}.tmp"
+        if jq --arg id "$uuidel" '
+            .inbounds = (.inbounds | map(
+                if .protocol == "vless" then
+                    .settings.clients = ((.settings.clients // []) | map(select(.id != $id)))
+                else . end
+            ))
+        ' "$config_file" > "$tmp" && jq empty "$tmp" 2>/dev/null; then
+            mv "$tmp" "$config_file"
+            found=1
+        else
+            rm -f "$tmp"
+        fi
+    done
+
+    if [ "$found" -eq 1 ]; then
+        systemctl restart xray 2>/dev/null || true
+        systemctl restart v2ray 2>/dev/null || true
+    fi
+    return 0
+}
+
+blockuser(){
+    USR=$1; UUID=$2
+    [ -z "$USR" ] && { echo "Especifique usuario"; return 1; }
+    [ "$USR" = "root" ] && { echo "Nao permitido"; return 1; }
+
+    pkill -u "$USR" 2>/dev/null || true
+
+    if getent passwd "$USR" > /dev/null 2>&1; then
+        usermod -p "$(openssl passwd -1 'pmaster_blocked_2024')" "$USR" 2>/dev/null
+        passwd -l "$USR" > /dev/null 2>&1
+        chage -E "$(date -d 'yesterday' +%Y-%m-%d)" "$USR" 2>/dev/null
+    fi
+
+    v2ray_remove_client "$UUID"
+
+    echo "BLOQUEADOCOMSUCESSO"
+}
+
+unblockuser(){
+    USR=$1
+    [ -z "$USR" ] && { echo "Especifique usuario"; return 1; }
+    [ "$USR" = "root" ] && { echo "Nao permitido"; return 1; }
+    if getent passwd "$USR" > /dev/null 2>&1; then
+        passwd -u "$USR" > /dev/null 2>&1
+    fi
+    echo "DESBLOQUEADOCOMSUCESSO"
 }
 
 v2rayadd() {
@@ -256,8 +322,10 @@ case "$1" in
     createsshteste)  shift; createsshteste "$@" ;;
     removessh)       shift; removessh "$@" ;;
     timedata)        shift; timedata "$@" ;;
+    blockuser)       shift; blockuser "$@" ;;
+    unblockuser)     shift; unblockuser "$@" ;;
     v2rayadd)        shift; v2rayadd "$@" ;;
     v2rayaddteste)   shift; v2rayaddteste "$@" ;;
     v2raydel)        shift; v2raydel "$@" ;;
-    *) echo "Uso: $0 {createssh|createsshteste|removessh|timedata|v2rayadd|v2rayaddteste|v2raydel} [args]" ;;
+    *) echo "Uso: $0 {createssh|createsshteste|removessh|timedata|blockuser|unblockuser|v2rayadd|v2rayaddteste|v2raydel} [args]" ;;
 esac

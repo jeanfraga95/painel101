@@ -95,6 +95,13 @@
             <button class="btn btn-sm btn-outline-warning text-warning" data-bs-toggle="modal" data-bs-target="#cmdModal_{{ srv.id }}">
               <i class="fas fa-terminal me-1"></i>Comando
             </button>
+            <button class="btn btn-sm btn-outline-info text-info" id="vncName_{{ srv.id }}" data-vnc-install="{{ srv.id }}" title="Instala/configura VNC para recuperar a máquina quando o SSH não está disponível">
+              <i class="fas fa-download me-1"></i>VNC
+            </button>
+            <button class="btn btn-sm btn-outline-secondary" data-vnc-open="{{ srv.id }}"
+                    title="Abrir o console do servidor no navegador">
+              <i class="fas fa-display me-1"></i>Console
+            </button>
             <button class="btn btn-sm btn-outline-danger" onclick="deleteServer({{ srv.id }}, '{{ srv.name }}')">
               <i class="fas fa-trash"></i>
             </button>
@@ -132,6 +139,60 @@
               <button class="btn btn-warning text-dark" onclick="runCommand({{ srv.id }})">
                 <i class="fas fa-play me-2"></i>Executar
               </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+<style>
+/* o noVNC cria um div dentro do alvo; sem dimensao explicita a tela fica 0x0 */
+  .vnc-screen { width: 100%; height: 72vh; min-height: 380px; background: #0d1117; overflow: hidden; }
+  .vnc-screen > div { width: 100%; height: 100%; }
+  .vnc-screen canvas { display: block; }
+
+  /* O noVNC 1.0.0 monta a barra de controle em cinza claro, e ela aparece
+     como uma faixa branca em cima da tela. Como a tela em si ja e escura,
+     essa barra destoava; aqui ela entra na mesma paleta. Os !important sao
+     necessarios porque o noVNC injeta o estilo dele por JS depois deste
+     bloco, entao precisa ganhar no mesmo peso. */
+  #noVNC_control_bar { background-color: #161b22 !important; border-bottom: 1px solid #30363d !important; }
+  #noVNC_control_bar .noVNC_button,
+  #noVNC_button_fullscreen,
+  #noVNC_button_ctrl_alt_del { background-color: #161b22 !important; color: #c9d1d9 !important; }
+  #noVNC_control_bar .noVNC_button:hover { background-color: #21262d !important; }
+  .noVNC_notice { background-color: #161b22 !important; color: #c9d1d9 !important; }
+  .noVNC_status { color: #c9d1d9 !important; }
+  </style>
+
+      <!-- Console VNC: modal com o noVNC embutido -->
+      <div class="modal fade" id="vncModal_{{ srv.id }}" tabindex="-1" data-bs-backdrop="static">
+        <div class="modal-dialog modal-xl modal-dialog-centered">
+          <div class="modal-content">
+            <div class="modal-header py-2">
+              <h6 class="modal-title"><i class="fas fa-desktop me-2"></i>Console — {{ srv.name }}</h6>
+              <div class="ms-auto d-flex gap-1 align-items-center">
+                <span id="vncBadge_{{ srv.id }}" class="badge text-bg-secondary me-2"></span>
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="vncFs_{{ srv.id }}" data-vnc-fs="{{ srv.id }}"
+                        title="Tela cheia"><i class="fas fa-expand"></i></button>
+                <button type="button" class="btn btn-sm btn-outline-warning" id="vncCad_{{ srv.id }}" data-vnc-cad="{{ srv.id }}"
+                        title="Enviar Ctrl+Alt+Del"><i class="fas fa-power-off"></i></button>
+                <button type="button" class="btn btn-sm btn-close" data-bs-dismiss="modal"></button>
+              </div>
+            </div>
+            <div class="modal-body p-0 bg-black">
+              <div id="vncStatus_{{ srv.id }}" class="p-4"></div>
+              <div id="vncScreen_{{ srv.id }}" class="vnc-screen d-none"></div>
+            </div>
+            <div class="modal-footer py-2 d-flex justify-content-between align-items-center flex-wrap gap-2">
+              <div class="small text-muted" id="vncFw_{{ srv.id }}"></div>
+              <div class="d-flex gap-2">
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="vncInstall_{{ srv.id }}" data-vnc-reinstall="{{ srv.id }}">
+                  <i class="fas fa-rotate me-1"></i>Reinstalar
+                </button>
+                <button type="button" class="btn btn-sm btn-outline-warning" id="vncToggle_{{ srv.id }}" data-vnc-toggle="{{ srv.id }}">
+                  <i class="fas fa-globe me-1"></i><span id="vncToggleTxt_{{ srv.id }}"></span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -399,6 +460,239 @@ function runCommand(id) {
     document.getElementById('cmdOutPre_' + id).textContent = d.output || d.message || 'Sem output';
   });
 }
+
+// ---- Console VNC no navegador ---------------------------------------------
+// O noVNC e carregado como modulo ES direto do servidor, atraves do proxy do
+// painel. A senha vem do corpo JSON da API autenticada e nao vai na URL: se
+// fosse parametro de query ficaria no historico do navegador, no log do nginx
+// e no Referer.
+const vncLive = {};
+
+function vncEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+async function vncPost(path, body) {
+  const r = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(body || {}),
+    credentials: 'same-origin'
+  });
+  return await r.json();
+}
+
+function vncSpinner(msg) {
+  return '<div class="text-center text-secondary py-4">' +
+         '<div class="spinner-border spinner-border-sm me-2"></div>' + vncEsc(msg) + '</div>';
+}
+
+function vncStatusBox(id, html) {
+  const s = document.getElementById('vncStatus_' + id);
+  const c = document.getElementById('vncScreen_' + id);
+  s.innerHTML = html;
+  s.classList.remove('d-none');
+  c.classList.add('d-none');
+}
+
+async function setupVnc(id) {
+  const name = document.getElementById('vncName_' + id)?.textContent || 'o servidor';
+  if (!confirm('Instalar/configurar o console VNC em ' + name + ' via SSH?\n\n' +
+               'A senha atual e preservada, entao reinstalar nao invalida o que voce ja tem.\n' +
+               'O acesso ao console fica restrito a este painel.\n\nConfirmar?')) return;
+
+  const modal = new bootstrap.Modal(document.getElementById('vncModal_' + id));
+  modal.show();
+  vncStatusBox(id, vncSpinner('Instalando o console. Pode levar alguns minutos...'));
+
+  const d = await vncPost(`/servers/setup_vnc/${id}`, {});
+  if (d.success) {
+    vncConnect(id, d.vnc_pass, d);
+  } else {
+    let html = '<div class="alert alert-danger mb-2"><i class="fas fa-times-circle me-1"></i>' +
+               'Falha ao configurar o VNC.</div>';
+    if (d.message) {
+      html += '<pre class="small text-muted mb-2" style="white-space:pre-wrap">' +
+              vncEsc(d.message) + '</pre>';
+    }
+    if ((d.warnings || []).length) {
+      html += '<ul class="small text-warning mb-0">' +
+              d.warnings.map(w => '<li>' + vncEsc(w) + '</li>').join('') + '</ul>';
+    }
+    vncStatusBox(id, html);
+  }
+}
+
+async function vncRefresh(id) {
+  const d = await vncPost(`/servers/vnc_status/${id}`, {});
+  if (!d.installed) {
+    vncStatusBox(id, '<div class="text-center text-secondary py-4">' +
+      '<i class="fas fa-desktop fa-2x mb-2 d-block"></i>' +
+      'Console nao instalado neste servidor.</div>');
+    return;
+  }
+  vncConnect(id, d.vnc_pass, d);
+  return d;
+}
+
+async function vncConnect(id, password, info) {
+  const base = `/servers/vnc/${id}`;
+  const badge = document.getElementById('vncBadge_' + id);
+  const fwTxt = document.getElementById('vncFw_' + id);
+  const toggle = document.getElementById('vncToggle_' + id);
+  const toggleTxt = document.getElementById('vncToggleTxt_' + id);
+
+  if (info) {
+    const ext = info.firewall_mode === 'open';
+    if (badge) {
+      badge.textContent = ext ? 'acesso externo liberado' : 'restrito ao painel';
+      badge.className = 'badge me-2 ' + (ext ? 'text-bg-warning' : 'text-bg-success');
+    }
+    if (fwTxt) {
+      fwTxt.innerHTML = 'Senha <code>' + vncEsc(password || '—') + '</code> · ' +
+        'console web :' + (info.vnc_web_port || 6080) + ' · VNC :' + (info.vnc_port || 5900) +
+        (info.has_desktop === false ? ' · <span class="text-warning">display sem terminal</span>' : '');
+    }
+    if (toggleTxt) toggleTxt.textContent = ext ? 'Restringir ao painel' : 'Liberar acesso externo';
+    if (toggle) toggle.dataset.mode = ext ? 'restrict' : 'open';
+  }
+
+  const statusDiv = document.getElementById('vncStatus_' + id);
+  const screen = document.getElementById('vncScreen_' + id);
+
+  // encerra a sessao anterior antes de criar outra
+  if (vncLive[id]) {
+    try { vncLive[id].disconnect(); } catch (e) {}
+    vncLive[id] = null;
+  }
+
+  statusDiv.innerHTML = vncSpinner('Conectando ao console...');
+  statusDiv.classList.remove('d-none');
+  screen.classList.add('d-none');
+
+  let RFB;
+  try {
+    const mod = await import(`${base}/core/rfb.js`);
+    RFB = mod.default;
+  } catch (e) {
+    vncStatusBox(id, '<div class="alert alert-danger">Nao foi possivel carregar o noVNC: ' +
+      vncEsc(e.message) + '</div>');
+    return;
+  }
+
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const url = `${proto}://${location.host}${base}/websockify`;
+
+  let rfb;
+  try {
+    rfb = new RFB(screen, url, { credentials: { password: password || '' } });
+  } catch (e) {
+    vncStatusBox(id, '<div class="alert alert-danger">Falha ao abrir a conexao: ' +
+      vncEsc(e.message) + '</div>');
+    return;
+  }
+  vncLive[id] = rfb;
+
+  rfb.scaleViewport = true;
+  rfb.resizeSession = false;
+  rfb.clipViewport = false;
+  rfb.focusOnClick = true;
+  rfb.viewOnly = false;
+  rfb.background = '#000';
+
+  rfb.addEventListener('connect', () => {
+    statusDiv.classList.add('d-none');
+    screen.classList.remove('d-none');
+    screen.focus();
+  });
+
+  rfb.addEventListener('disconnect', (ev) => {
+    vncLive[id] = null;
+    const limpo = ev && ev.detail && ev.detail.clean === true;
+    vncStatusBox(id, limpo
+      ? '<div class="text-center text-secondary py-4">Sessao encerrada.</div>'
+      : '<div class="alert alert-warning mb-0">Conexao com o console caiu.</div>');
+  });
+
+  rfb.addEventListener('credentialsrequired', () => {
+    const p = prompt('Senha do VNC:');
+    if (p === null) { rfb.disconnect(); return; }
+    rfb.sendCredentials({ password: p });
+  });
+
+  rfb.addEventListener('securityfailure', (ev) => {
+    const d2 = ev && ev.detail;
+    vncStatusBox(id, '<div class="alert alert-danger mb-0">Falha de seguranca: ' +
+      vncEsc(d2 && d2.message ? d2.message : 'senha recusada pelo servidor') + '</div>');
+  });
+
+  // barra de status dentro da area do console
+  const bar = document.createElement('div');
+  bar.style.cssText = 'position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.65);' +
+                      'color:#ddd;font-size:11px;padding:2px 8px;z-index:5';
+  document.getElementById('vncModal_' + id).querySelector('.modal-body').style.position = 'relative';
+  screen.parentElement.appendChild(bar);
+  rfb.addEventListener('clipboard', () => {});
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('[data-vnc-install]').forEach(b => {
+    b.addEventListener('click', () => setupVnc(b.dataset.vncInstall));
+  });
+  document.querySelectorAll('[data-vnc-open]').forEach(b => {
+    b.addEventListener('click', () => {
+      const id = b.dataset.vncOpen;
+      new bootstrap.Modal(document.getElementById('vncModal_' + id)).show();
+      vncRefresh(id);
+    });
+  });
+  document.querySelectorAll('[data-vnc-reinstall]').forEach(b => {
+    b.addEventListener('click', () => setupVnc(b.dataset.vncReinstall));
+  });
+  document.querySelectorAll('[data-vnc-toggle]').forEach(b => {
+    b.addEventListener('click', async () => {
+      const id = b.dataset.vncToggle;
+      const mode = b.dataset.mode === 'open' ? 'restrict' : 'open';
+      if (mode === 'open') {
+        const ok = confirm(
+          'Liberar o console VNC para a internet?\n\n' +
+          'As portas 5900 e 6080 passam a aceitar qualquer origem.\n\n' +
+          'O x11vnc usa autenticacao classica do VNC, que e DES de 56 bits, ' +
+          'entao a senha de 8 caracteres e quebravel por forca bruta. Quem ' +
+          'conseguir entrar tem root da maquina.\n\n' +
+          'Use so se precisar entrar de um cliente VNC externo, e restrinja depois.\n\n' +
+          'Confirmar?');
+        if (!ok) return;
+      }
+      const d = await vncPost(`/servers/vnc_firewall/${id}`, { mode: mode, confirm: '1' });
+      if (d.success) {
+        vncRefresh(id);
+      } else {
+        alert(d.message || 'Falha ao alterar o acesso.');
+      }
+    });
+  });
+  document.querySelectorAll('[data-vnc-fs]').forEach(b => {
+    b.addEventListener('click', () => {
+      const el = document.getElementById('vncModal_' + b.dataset.vncFs);
+      if (!document.fullscreenElement) el.requestFullscreen?.();
+      else document.exitFullscreen?.();
+    });
+  });
+  document.querySelectorAll('[data-vnc-cad]').forEach(b => {
+    b.addEventListener('click', () => {
+      const rfb = vncLive[b.dataset.vncCad];
+      if (!rfb) { alert('Sem sessao de console ativa.'); return; }
+      rfb.sendKey(0xffe3, true);   // Ctrl
+      rfb.sendKey(0xffe9, true);   // Alt
+      rfb.sendKey(0xffff, true);   // Del
+      rfb.sendKey(0xffff, false);
+      rfb.sendKey(0xffe9, false);
+      rfb.sendKey(0xffe3, false);
+    });
+  });
+});
 
 // SSE stats
 {% for srv in servers %}

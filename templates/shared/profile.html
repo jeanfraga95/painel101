@@ -19,7 +19,7 @@
               {{ current_user.expires_at[:10] if current_user.expires_at else '—' }}
               {% if current_user.expires_at %}
                 {% set d = days_until(current_user.expires_at) %}
-                <span class="badge ms-1 {{ 'bg-danger' if d<=3 else ('bg-warning text-dark' if d<=7 else 'bg-success') }}">{{ d }}d</span>
+                <span class="badge ms-1 {{ 'bg-danger' if d<0 or d<=3 else ('bg-warning text-dark' if d<=7 else 'bg-success') }}">{% if d < 0 %}vencido há {{ d|abs }}d{% elif d == 0 %}hoje{% else %}{{ d }}d{% endif %}</span>
               {% endif %}
             </td>
           </tr>

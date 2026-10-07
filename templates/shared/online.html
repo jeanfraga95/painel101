@@ -56,7 +56,7 @@
         <select id="resellerFilter" class="form-select form-select-sm" onchange="applyFilter()">
           <option value="">Todos os donos</option>
           {% for r in all_resellers %}
-          <option value="{{ r.username|lower }}">{{ r.username }}</option>
+          <option value="{{ r.username|lower }}">{{ r.username }}{% if r.role == 'admin' %} (próprios){% endif %}</option>
           {% endfor %}
         </select>
       </div>

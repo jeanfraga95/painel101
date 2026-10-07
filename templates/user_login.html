@@ -57,9 +57,9 @@ body { min-height:100vh; display:flex; align-items:center; justify-content:cente
       <div class="text-muted">venceu há {{ d|abs }} dia(s)</div>
       {% else %}
       <div class="display-6 fw-bold {{ 'text-danger' if d <= 3 else ('text-warning' if d <= 7 else 'text-success') }}">
-        {{ d }} dia(s)
+        {% if d == 0 %}hoje{% else %}{{ d }} dia(s){% endif %}
       </div>
-      <div class="text-muted">restantes</div>
+      <div class="text-muted">{% if d == 0 %}último dia de acesso{% else %}restantes{% endif %}</div>
       {% endif %}
       <div class="mt-1"><small>Válido até: <strong>{{ user_data.expires_at[:10] }}</strong></small></div>
     </div>
