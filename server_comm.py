@@ -1098,6 +1098,7 @@ if command -v fluxbox >/dev/null 2>&1; then
 session.screen0.defaultDeco: NONE
 session.screen0.rootColor: $FUNDO
 session.screen0.workspaces: 1
+session.screen0.focusModel: FocusFollowsMouse
 session.menuFile: /dev/null
 FLUXEOF
     fluxbox >/dev/null 2>&1 &
@@ -1113,8 +1114,13 @@ fi
 # Terminal de recuperacao, senao nao ha como digitar comando nenhum.
 # -b/-bw 0 remove as bordas internas e externas do xterm, que sozinhas ja
 # desenham um retangulo claro em volta do conteudo.
+# ATENCAO: a geometria do xterm e em CELULAS, nao em pixels. Um -geometry como
+# 1276x796 num Xvfb de 1280x800 faz o TUI (menus do vpnmanager, `opencode` etc.)
+# achar que tem 1276 colunas e desenhar o menu fora da area visivel — por isso o
+# menu "nao aparecia". Use uma grade que caiba na tela com a fonte de 13px:
+# ~150 colunas x 44 linhas. (correcao VNC fixa)
 if command -v xterm >/dev/null 2>&1; then
-    xterm -display :99 -geometry 1276x796+2+2 \
+    xterm -display :99 -geometry 150x44+2+2 \
           -fa "$FONTE" -fs "$TAM" \
           -bg "$FUNDO" -fg "$TEXTO" -cr "$CURSOR" \
           -b 0 -bw 0 -b 0 \

@@ -103,6 +103,24 @@
   </div>
 </div>
 
+<div class="modal fade" id="calDayModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-scrollable modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title mb-0"><i class="fas fa-calendar-day me-2 text-info"></i><span id="calDayTitle">Vencimentos</span></h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+      </div>
+      <div class="modal-body p-3" id="calDayList"></div>
+      <div class="modal-footer py-2 d-flex justify-content-between">
+        <button type="button" class="btn btn-sm btn-outline-danger" id="calRenewAllBtn">
+          <i class="fas fa-redo me-1"></i>Renovar todos
+        </button>
+        <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Fechar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 {% if panel_theme == 'dark' %}
 <style>
   #expCal {
@@ -137,12 +155,32 @@
   }
   #expCal .fc-daygrid-event { border-radius: 6px; border: 0; margin: 1px 2px; }
   #expCal .fc-daygrid-day-number, #expCal .fc-col-header-cell-cushion { font-weight: 600; }
+  @media (max-width: 720px) {
+    #expCal { min-width: 0; }
+    #expCal .fc-toolbar { flex-wrap: wrap; gap: 4px 8px; }
+    #expCal .fc-toolbar-title { font-size: 1.02rem !important; }
+    #expCal .fc-button { font-size: .78rem !important; padding: .22rem .5rem !important; }
+    #expCal .pmg-chip { gap: 4px; padding: 1px 6px; }
+    #expCal .pmg-dias { padding: 2px 5px; font-size: 9px; }
+    #expCal .fc-daygrid-day-number { font-size: .78rem; }
+    #expCal .fc-col-header-cell-cushion { font-size: .76rem; }
+    #expCal .fc-daygrid-day-frame { min-height: 32px !important; }
+    #expCal .fc-list-event-title, #expCal .fc-list-event-time { font-size: .82rem; }
+  }
 </style>
 
 <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
 <script>
 (function() {
   function fmt(d) { return d.toLocaleDateString('pt-BR'); }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g,
+      c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
+  const BREAK = 700;
+  const narrow = () => window.innerWidth < BREAK;
+  const defaultView = () => narrow() ? 'listWeek' : 'dayGridMonth';
+  let dayEvents = [];
 
   function chipHTML(ev) {
     const days = ev.extendedProps.days;
@@ -162,10 +200,73 @@
     return dom;
   }
 
+  function daysLabel(days) {
+    if (days < 0) return { cls: 'danger', label: `expirado há ${-days}d` };
+    if (days === 0) return { cls: 'warning text-dark', label: 'vence hoje' };
+    if (days <= 3) return { cls: 'warning text-dark', label: `${days}d` };
+    return { cls: 'success', label: `${days}d` };
+  }
+
+  function openDayEvents(dateStr, events) {
+    dayEvents = events || [];
+    const list = document.getElementById('calDayList');
+    if (!list) return;
+    document.getElementById('calDayTitle').textContent =
+      'Vencendo em ' + fmt(new Date(dateStr + 'T12:00:00'));
+    list.innerHTML = dayEvents.map(ev => {
+      const dl = daysLabel(ev.extendedProps.days);
+      return `
+        <div class="d-flex justify-content-between align-items-center gap-2 pb-2 mb-2"
+             style="border-bottom:1px solid var(--bs-border-color)" data-cald="${ev.id}">
+          <div class="text-truncate">
+            <span class="fw-semibold" style="font-size:.95rem">${esc(ev.title)}</span>
+            <span class="badge text-bg-${dl.cls} ms-1">${dl.label}</span>
+          </div>
+          <button type="button" class="btn btn-sm btn-outline-success px-2 flex-shrink-0" data-cald-ren="${ev.id}">
+            <i class="fas fa-redo"></i>
+          </button>
+        </div>`;
+    }).join('') || '<p class="text-muted small mb-0">Sem eventos neste dia.</p>';
+    list.querySelectorAll('[data-cald-ren]').forEach(btn => {
+      btn.addEventListener('click', () => renewById(parseInt(btn.dataset.caldRen, 10)));
+    });
+    new bootstrap.Modal(document.getElementById('calDayModal')).show();
+  }
+
+  function renewById(id) {
+    apiPost(`/users/renew/${id}`, { days: 30 }, d => {
+      showToast(d.message, d.success ? 'success' : 'danger');
+      if (!d.success) return;
+      const row = document.querySelector(`[data-cald="${id}"]`);
+      if (row) row.remove();
+      const el = document.getElementById('expCal');
+      if (el && el._pmgCal) el._pmgCal.refetchEvents();
+    });
+  }
+
+  function renewAll() {
+    const ids = dayEvents.map(e => e.id);
+    if (!ids.length) return;
+    if (!confirm(`Renovar os ${ids.length} usuário(s) listados (+30 dias)?`)) return;
+    let done = 0;
+    ids.forEach(id => apiPost(`/users/renew/${id}`, { days: 30 }, d => {
+      if (!d.success) showToast(d.message, 'danger');
+      done++;
+      if (done === ids.length) {
+        showToast('Renovações concluídas.', 'success');
+        bootstrap.Modal.getInstance(document.getElementById('calDayModal'))?.hide();
+        const el = document.getElementById('expCal');
+        if (el && el._pmgCal) el._pmgCal.refetchEvents();
+      }
+    }));
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
-    const cal = new FullCalendar.Calendar(document.getElementById('expCal'), {
+    const el = document.getElementById('expCal');
+    if (!el) return;
+    const cal = new FullCalendar.Calendar(el, {
       locale: 'pt-br',
-      initialView: 'dayGridMonth',
+      initialView: defaultView(),
       height: 'auto',
       fixedWeekCount: false,
       nowIndicator: true,
@@ -176,6 +277,7 @@
       },
       buttonText: { today: 'Hoje', month: 'Mês', week: 'Semana', list: 'Lista' },
       dayMaxEvents: 4,
+      dayMaxEventRows: 5,
       moreLinkText: (n) => `+${n} mais`,
       noEventsText: 'Nenhum vencimento neste período',
       events: { url: '/api/dashboard/calendar', method: 'GET' },
@@ -185,23 +287,34 @@
         info.el.title = `${info.event.title} — ${d < 0 ? `expirado há ${-d}d` : (d === 0 ? 'vence hoje' : `vence em ${d}d`)}. Clique para renovar.`;
       },
       eventClick: (info) => {
-        const days = info.event.extendedProps.days;
-        const dStr = days < 0 ? `expirado há ${-d}d` : (days === 0 ? 'vence hoje' : `vence em ${days}d`);
+        const d = info.event.extendedProps.days;
+        const dStr = d < 0 ? `expirado há ${-d}d` : (d === 0 ? 'vence hoje' : `vence em ${d}d`);
         if (!confirm(`Renovar "${info.event.title}" (${dStr})?\n\nAdicionar 30 dias?`)) return;
-        apiPost(`/users/renew/${info.event.id}`, {days: 30}, d => {
-          showToast(d.message, d.success ? 'success' : 'danger');
-          if (d.success) setTimeout(() => cal.refetchEvents(), 1200);
-        });
+        renewById(info.event.id);
       },
       dateClick: (info) => {
         const events = cal.getEvents().filter(e => e.startStr === info.dateStr);
-        if (!events.length) return;
-        const lines = events.map(e => e.title).sort();
-        alert('Vencendo em ' + fmt(info.date) + ':\n\n' +
-              lines.slice(0, 25).join('\n') + (lines.length > 25 ? `\n… +${lines.length - 25}` : ''));
+        if (events.length) openDayEvents(info.dateStr, events);
+      },
+      moreLinkClick: (info) => {
+        openDayEvents(info.dateStr, info.allSegs.map(s => s.event));
       }
     });
+    el._pmgCal = cal;
     cal.render();
+
+    let lastNarrow = narrow();
+    window.addEventListener('resize', () => {
+      const want = defaultView();
+      if (want === cal.view.type) return;
+      const other = narrow() ? 'dayGridMonth' : 'listWeek';
+      if (cal.view.type === other || cal.view.type === 'dayGridWeek') cal.changeView(want);
+    });
+  });
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const b = document.getElementById('calRenewAllBtn');
+    if (b) b.addEventListener('click', renewAll);
   });
 })();
 </script>
