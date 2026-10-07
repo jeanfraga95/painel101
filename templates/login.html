@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="csrf-token" content="{{ csrf_token() }}">
 <title>{{ panel_name }} — Login</title>
 <meta name="theme-color" content="{{ panel_color }}">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -318,6 +319,7 @@ html, body { max-width: 100vw; }
     {% endwith %}
 
     <form method="POST" id="loginForm">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="mb-3">
         <label class="form-label fw-semibold">Usuário</label>
         <div class="input-group">

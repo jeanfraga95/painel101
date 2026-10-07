@@ -299,6 +299,99 @@ def sync_users_to_server(ip: str, port: int, auth_token: str, users: list, force
 
 
 
+def diagnose_server(ip: str, port: int, auth_token: str,
+                    root_user: str, root_password: str) -> dict:
+    """Roda uma checagem de ponta a ponta no servidor.
+
+    Cobre os dois problemas mais comuns relatados:
+      - módulo não instalado / fora do ar / porta errada;
+      - usuário criado no painel mas que não chega na VPS (token inválido,
+        agent ausente, serviço parado).
+
+    Returns {'checks': [{'ok', 'name', 'detail'}], 'ssh': bool, 'module': bool}
+    """
+    checks = []
+
+    def add(name, ok, detail):
+        checks.append({'name': name, 'ok': bool(ok), 'detail': str(detail)[:400]})
+
+    # 1) Módulo HTTP na porta configurada
+    mod_ok, mod_out = send_command(ip, port, auth_token, 'echo PMG_DIAG_OK', timeout=15)
+    if mod_out.startswith('HTTP 401') or '401' in mod_out:
+        add('Módulo (HTTP {})'.format(port), False,
+            'Módulo está respondendo mas rejeitou o token (401). '
+            'O token salvo no painel não corresponde ao do servidor.')
+    else:
+        add('Módulo (HTTP {})'.format(port), mod_ok,
+            mod_out if not mod_ok else 'Respondendo e autenticado.')
+
+    # 2) SSH root
+    ssh = None
+    ssh_ok = False
+    try:
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(ip, username=root_user, password=root_password, timeout=20)
+        ssh_ok = True
+        add('SSH ({}@{})'.format(root_user, ip), True, 'Conectado.')
+    except Exception as e:
+        add('SSH ({}@{})'.format(root_user, ip), False,
+            'Falha na conexão SSH: {}'.format(e))
+
+    if ssh_ok and ssh:
+        # 3) agent presente e com sintaxe válida
+        rc, out, err = _ssh_run(ssh, 'test -f /root/pmaster_agent && echo Y || echo N')
+        presence = out.strip().splitlines()[-1:] == ['Y'] if out.strip() else False
+        rc2, out2, _ = _ssh_run(ssh, 'bash -n /root/pmaster_agent 2>&1 && echo SYNTAX_OK || echo SYNTAX_ERR')
+        syntax_ok = 'SYNTAX_OK' in out2
+        if presence and syntax_ok:
+            add('Agent /root/pmaster_agent', True, 'Presente e com sintaxe válida.')
+        elif presence:
+            add('Agent /root/pmaster_agent', False,
+                'Presente mas com erro de sintaxe: {}'.format(out2.strip()[:200]))
+        else:
+            add('Agent /root/pmaster_agent', False,
+                'Não encontrado em /root/pmaster_agent. É preciso instalar os módulos.')
+
+        # 4) módulo no disco + serviço ativo
+        rc, out, _ = _ssh_run(ssh, 'test -f /root/pmaster_module.py && echo Y || echo N')
+        mod_present = out.strip().splitlines()[-1:] == ['Y'] if out.strip() else False
+        _, out, _ = _ssh_run(ssh, 'systemctl is-active pmaster-agent 2>/dev/null || echo inactive')
+        svc_state = (out.strip() or 'inactive').splitlines()[-1].strip()
+        if mod_present and svc_state == 'active':
+            add('Serviço pmaster-agent', True, 'Ativo e módulo no disco.')
+        elif mod_present:
+            add('Serviço pmaster-agent', False,
+                'Módulo existe mas o serviço está "{}".'.format(svc_state))
+        else:
+            add('Serviço pmaster-agent', False,
+                'Módulo ausente e serviço "{}".'.format(svc_state))
+
+        # 5) porta do módulo escutando
+        _, out, _ = _ssh_run(ssh, f"ss -ltn 2>/dev/null | grep -E ':{port}\\b' || echo NONE")
+        listening = 'NONE' not in out
+        add('Porta :{} escutando'.format(port), listening,
+            out.strip().replace('\n', ' | ') if listening else
+            'Nada escutando na porta {}.'.format(port))
+
+        # 6) sync/wd presentes e cron do watchdog
+        rc, out, _ = _ssh_run(ssh,
+            'test -f /root/pmaster_sync.py && test -f /root/pmaster_watchdog.py && echo Y || echo N')
+        sync_present = out.strip().splitlines()[-1:] == ['Y'] if out.strip() else False
+        _, out, _ = _ssh_run(ssh, 'crontab -l 2>/dev/null | grep -c pmaster_watchdog || echo 0')
+        cron_count = out.strip().splitlines()[-1].strip()
+        if sync_present and cron_count not in ('0', ''):
+            add('Sync / watchdog', True, 'Presentes; watchdog no cron ({}x).'.format(cron_count))
+        else:
+            add('Sync / watchdog', False,
+                '{} — sync: {}, watchdog no cron: {}.'.format(
+                    'OK' if sync_present else 'sync ausente',
+                    'presente' if sync_present else 'ausente',
+                    cron_count if cron_count not in ('', '0') else 'falta (reinstalar os módulos)'))
+
+    return {'checks': checks, 'ssh': ssh_ok, 'module': mod_ok}
+
+
 def install_modules_ssh(ip: str, root_user: str, root_password: str, auth_token: str) -> tuple:
     """Use paramiko to upload module files to the SSH server."""
     modules_dir = os.path.join(os.path.dirname(__file__), 'server_modules')

@@ -98,6 +98,44 @@ app.jinja_env.globals['days_until'] = days_until
 app.jinja_env.globals['now_br'] = now_br
 
 
+# ---------------------------------------------------------------------------
+# CSRF protection
+# ---------------------------------------------------------------------------
+
+def get_csrf_token() -> str:
+    if 'csrf_token' not in session:
+        session['csrf_token'] = secrets.token_hex(32)
+    return session['csrf_token']
+
+
+# Rotas chamadas por terceiros (webhooks) ou que só leem/expõem dados não
+# fazem parte do "estado autenticado" e não podem carregar token de sessão.
+CSRF_EXEMPT = frozenset({
+    'mp_webhook', 'telegram_webhook',
+    'checkuser_dtunnel', 'checkuser_index', 'checkuser_api',
+    'checkuser', 'checkuser_check_path',
+})
+
+
+@app.before_request
+def csrf_protect():
+    if request.method not in ('POST', 'PUT', 'PATCH', 'DELETE'):
+        return None
+    if request.endpoint in CSRF_EXEMPT:
+        return None
+    if session.get('csrf_token') is None:
+        session['csrf_token'] = secrets.token_hex(32)
+    sent = request.form.get('csrf_token') or request.headers.get('X-CSRF-Token') or ''
+    if not (sent and secrets.compare_digest(sent, session['csrf_token'])):
+        return jsonify(success=False, message='Requisição inválida. Recarregue a página e tente novamente.'), 403
+    return None
+
+
+@app.context_processor
+def inject_csrf():
+    return {'csrf_token': get_csrf_token}
+
+
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -137,12 +175,11 @@ def admin_required(f):
 def err_500(e):
     orig = getattr(e, 'original_exception', e)
     tb   = traceback.format_exception(type(orig), orig, orig.__traceback__)
-    msg  = ''.join(tb)
-    app.logger.error('Erro 500:\n%s', msg)
+    app.logger.error('Erro 500:\n%s', ''.join(tb))
     if request.method == 'POST':
-        short = f"{type(orig).__name__}: {str(orig)}"
-        return jsonify(success=False, message=f'Erro interno: {short[:300]}'), 500
-    return (f'<h3>Erro 500</h3><pre style="white-space:pre-wrap;font-size:12px">{msg[:3000]}</pre>', 500)
+        return jsonify(success=False, message='Erro interno no servidor. Tente novamente.'), 500
+    return ('<h3>Erro interno no servidor</h3>'
+            '<p>Ocorreu um erro inesperado. Tente novamente em instantes.</p>', 500)
 
 
 @app.errorhandler(404)
@@ -253,6 +290,45 @@ def dashboard():
         user_categories = [c for c in all_cats if c['id'] in avail_cat_ids]
         return render_template('reseller/dashboard.html', stats=stats, expiring=expiring,
                                servers=servers, categories=user_categories)
+
+
+@app.route('/api/dashboard/calendar')
+@login_required
+def dashboard_calendar():
+    """Eventos de vencimento para o calendário do dashboard (FullCalendar)."""
+    user = get_current_user()
+    if user['role'] == 'admin':
+        users = db.get_ssh_users(all_users=True)
+    else:
+        sub_ids = [s['id'] for s in db.get_all_resellers_under(user['id'])]
+        users = db.get_ssh_users_for_tree([user['id']] + sub_ids)
+    today = now_br().date()
+    events = []
+    for u in users:
+        try:
+            exp = datetime.fromisoformat(str(u['expires_at'])[:19])
+        except Exception:
+            continue
+        d = days_until(u['expires_at'])
+        if d > 120:
+            continue
+        if d < 0:
+            color = '#dc3545'
+        elif d == 0:
+            color = '#fd7e14'
+        elif d <= 3:
+            color = '#ffc107'
+        else:
+            color = '#198754'
+        events.append({
+            'id': u['id'],
+            'title': u['username'],
+            'start': exp.strftime('%Y-%m-%d'),
+            'color': color,
+            'textColor': '#fff',
+            'extendedProps': {'days': d, 'id': u['id']},
+        })
+    return jsonify(events)
 
 
 # ---------------------------------------------------------------------------
@@ -1412,6 +1488,31 @@ def install_modules(server_id):
         return jsonify(success=False, message='Servidor não encontrado')
     ok, msg = sc.install_modules_ssh(srv['ip'], srv['root_user'], srv['root_password'], srv['auth_token'])
     return jsonify(success=ok, message=msg)
+
+
+@app.route('/servers/diagnose/<int:server_id>', methods=['POST'])
+@admin_required
+def diagnose_server(server_id):
+    """Diagnostica conectividade SSH + módulo 7270 + agent no servidor."""
+    srv = db.get_server(server_id)
+    if not srv:
+        return jsonify(success=False, message='Servidor não encontrado')
+
+    try:
+        result = sc.diagnose_server(
+            srv['ip'], srv['module_port'], srv['auth_token'],
+            srv['root_user'], srv['root_password'])
+    except Exception as e:
+        app.logger.error('Erro ao diagnosticar servidor %s: %s', srv['ip'], e)
+        return jsonify(success=False, message='Falha ao diagnosticar: {}'.format(e))
+
+    checks = result['checks']
+    failed = [c for c in checks if not c['ok']]
+    healthy = len(failed) == 0
+    summary = ('Servidor OK.' if healthy else
+               '{} problema(s) encontrado(s).'.format(len(failed)))
+    return jsonify(success=True, message=summary, checks=checks,
+                   healthy=healthy, ssh=result['ssh'], module=result['module'])
 
 
 def refresh_vnc_proxy() -> None:

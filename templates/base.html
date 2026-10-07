@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="csrf-token" content="{{ csrf_token() }}">
 <title>{% block title %}{{ panel_name }}{% endblock %}</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
@@ -353,6 +354,8 @@ body {
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 <script>
+const PMG_CSRF = document.querySelector('meta[name="csrf-token"]')?.content || '';
+
 function showToast(msg, type='success') {
   const c = document.getElementById('toastContainer');
   const id = 'toast_' + Date.now();
@@ -368,6 +371,7 @@ function showToast(msg, type='success') {
 
 function apiPost(url, data, cb, errCb) {
   const fd = new FormData();
+  fd.append('csrf_token', PMG_CSRF);
   for (const [k,v] of Object.entries(data)) fd.append(k, v);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 60000); // 60s timeout
@@ -451,6 +455,21 @@ function _copySuccess(btnEl) {
 function copyText(text)      { universalCopy(text); }
 function pmCopyGlobal(text)  { universalCopy(text); }
 function _legacyCopy(text)   { _execCommandCopy(text); }
+
+// ── CSRF: injeta o token em qualquer <form> logo antes do submit ────────────
+// Cobre formulários estáticos e os montados via JS (modais, respostas de
+// ticket etc.) sem depender de MutationObserver.
+document.addEventListener('submit', function(e) {
+  const f = e.target;
+  if (f instanceof HTMLFormElement && /^post$/i.test(f.method || '')) {
+    if (f.querySelector('input[name="csrf_token"]')) return;
+    const inp = document.createElement('input');
+    inp.type = 'hidden';
+    inp.name = 'csrf_token';
+    inp.value = PMG_CSRF || '';
+    f.appendChild(inp);
+  }
+}, true);
 </script>
 {% block extra_js %}{% endblock %}
 </body>

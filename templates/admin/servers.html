@@ -86,6 +86,9 @@
             <button class="btn btn-sm btn-outline-primary" onclick="installModules({{ srv.id }})">
               <i class="fas fa-upload me-1"></i>Módulos
             </button>
+            <button class="btn btn-sm btn-outline-danger" onclick="diagnoseServer({{ srv.id }})">
+              <i class="fas fa-stethoscope me-1"></i>Diagnosticar
+            </button>
             <button class="btn btn-sm btn-outline-success" onclick="syncServer({{ srv.id }})">
               <i class="fas fa-sync me-1"></i>Sincronizar
             </button>
@@ -343,6 +346,102 @@
   </div>
 </div>
 
+<!-- Diagnose Modal -->
+<div class="modal fade" id="diagModal" tabindex="-1" data-bs-backdrop="static">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h6 class="modal-title"><i class="fas fa-stethoscope me-2"></i>Diagnóstico — <span id="diagSrvName">Servidor</span></h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="diagSummary" class="mb-3"></div>
+        <div id="diagResults"></div>
+      </div>
+      <div class="modal-footer d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <div class="small text-muted" id="diagHint">
+          A correção reinstala os módulos (porta 7270), refaz o token, o serviço
+          pmaster-agent e o watchdog — ideal para usuário que nasce só no painel
+          ou módulo que não responde.
+        </div>
+        <div class="d-flex gap-2">
+          <button class="btn btn-success" id="diagFixBtn" disabled>
+            <i class="fas fa-wrench me-1"></i>Corrigir automaticamente
+          </button>
+          <button class="btn btn-outline-secondary" onclick="diagnoseServer(window.__diagServerId)">
+            <i class="fas fa-sync me-1"></i>Repetir
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function diagnoseServer(id) {
+  window.__diagServerId = id;
+  const card = document.getElementById('scard_' + id);
+  const name = card ? (card.querySelector('strong').textContent || '') : ('#' + id);
+  document.getElementById('diagSrvName').textContent = name;
+  document.getElementById('diagFixBtn').disabled = true;
+  document.getElementById('diagHint').style.display = '';
+  document.getElementById('diagResults').innerHTML =
+    '<div class="text-center text-secondary py-4"><div class="spinner-border spinner-border-sm me-2"></div>Diagnosticando… (SSH + módulo 7270)</div>';
+  new bootstrap.Modal(document.getElementById('diagModal')).show();
+
+  apiPost(`/servers/diagnose/${id}`, {}, d => {
+    if (!d.success) {
+      document.getElementById('diagResults').innerHTML =
+        `<div class="alert alert-danger mb-0"><i class="fas fa-times-circle me-1"></i>${vncEsc(d.message)}</div>`;
+      return;
+    }
+    renderDiag(id, d);
+  });
+}
+
+function renderDiag(id, d) {
+  const el = document.getElementById('diagResults');
+  const summary = document.getElementById('diagSummary');
+  if (d.healthy) {
+    summary.innerHTML = '<div class="alert alert-success mb-0"><i class="fas fa-check-circle me-1"></i>' +
+      vncEsc(d.message) + ' — todas as verificações passaram.</div>';
+  } else {
+    summary.innerHTML = `<div class="alert alert-danger mb-0"><i class="fas fa-exclamation-triangle me-1"></i>` +
+      vncEsc(d.message) + '</div>';
+  }
+
+  let rows = '';
+  for (const c of d.checks) {
+    const icon = c.ok ? 'fa-check-circle text-success' : 'fa-times-circle text-danger';
+    rows += `<div class="list-group-item d-flex justify-content-between align-items-start gap-2">
+      <div>
+        <div class="fw-semibold"><i class="fas ${icon} me-2"></i>${vncEsc(c.name)}</div>
+        <div class="small text-muted mt-1">${vncEsc(c.detail)}</div>
+      </div>
+      <span class="badge text-bg-${c.ok ? 'success' : 'danger'} mt-1">${c.ok ? 'OK' : 'Falha'}</span>
+    </div>`;
+  }
+  el.innerHTML = rows ? `<div class="list-group">${rows}</div>` : '<p class="text-muted">Sem verificações.</p>';
+  document.getElementById('diagFixBtn').disabled = d.healthy;
+}
+
+document.getElementById('diagFixBtn').addEventListener('click', () => {
+  const id = window.__diagServerId;
+  if (!id) return;
+  document.getElementById('diagFixBtn').disabled = true;
+  document.getElementById('diagResults').innerHTML =
+    '<div class="text-center text-secondary py-4"><div class="spinner-border spinner-border-sm me-2"></div>Corrigindo — reinstalando módulos e reiniciando o serviço…</div>';
+  apiPost(`/servers/install_modules/${id}`, {}, d => {
+    document.getElementById('diagResults').innerHTML =
+      `<div class="alert alert-${d.success ? 'success' : 'danger'} mb-0"><i class="fas ${d.success ? 'fa-check-circle' : 'fa-times-circle'} me-1"></i>` +
+      vncEsc(d.message) + '</div>';
+    document.getElementById('diagHint').style.display = 'none';
+    document.getElementById('diagFixBtn').disabled = true;
+    setTimeout(() => diagnoseServer(id), d.success ? 600 : 2500);
+  });
+});
+</script>
+
 <script>
 function genToken() {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -474,10 +573,12 @@ function vncEsc(s) {
 }
 
 async function vncPost(path, body) {
+  const params = new URLSearchParams(body || {});
+  params.set('csrf_token', PMG_CSRF);
   const r = await fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams(body || {}),
+    body: params,
     credentials: 'same-origin'
   });
   return await r.json();

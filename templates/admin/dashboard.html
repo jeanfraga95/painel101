@@ -2,6 +2,14 @@
 {% block title %}Dashboard — {{ panel_name }}{% endblock %}
 {% block page_title %}<i class="fas fa-tachometer-alt me-2"></i>Dashboard{% endblock %}
 
+{% block extra_css %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css">
+<style>
+#expCal { min-height: 480px; }
+#expCal .fc-event { cursor: pointer; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="row g-3 mb-4">
   <div class="col-6 col-md-3">
@@ -85,6 +93,64 @@
   </div>
 </div>
 {% endif %}
+
+<div class="card mb-4">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span class="fw-semibold"><i class="fas fa-calendar-alt me-2 text-info"></i>Calendário de vencimentos</span>
+    <div class="d-flex align-items-center gap-3 small">
+      <span class="d-inline-flex align-items-center gap-1"><span class="badge" style="background:#198754">&nbsp;</span>&gt;3d</span>
+      <span class="d-inline-flex align-items-center gap-1"><span class="badge" style="background:#ffc107">&nbsp;</span>1–3d</span>
+      <span class="d-inline-flex align-items-center gap-1"><span class="badge" style="background:#fd7e14">&nbsp;</span>hoje</span>
+      <span class="d-inline-flex align-items-center gap-1"><span class="badge" style="background:#dc3545">&nbsp;</span>expirado</span>
+    </div>
+  </div>
+  <div class="card-body">
+    <div id="expCal"></div>
+    <div class="small text-muted mt-2">
+      Clique em um dia para ver quem vence nele; clique em um usuário para renovar. Limite de 120 dias à frente.
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
+<script>
+(function() {
+  function fmt(d) { return d.toLocaleDateString('pt-BR'); }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const cal = new FullCalendar.Calendar(document.getElementById('expCal'), {
+      locale: 'pt-br',
+      initialView: 'dayGridMonth',
+      height: 'auto',
+      headerToolbar: {
+        left: 'prev,next today',
+        center: 'title',
+        right: 'dayGridMonth,listWeek'
+      },
+      buttonText: { today: 'Hoje', month: 'Mês', week: 'Semana', list: 'Lista' },
+      events: { url: '/api/dashboard/calendar', method: 'GET' },
+      dayMaxEvents: 3,
+      eventClick: (info) => {
+        const days = info.event.extendedProps.days;
+        const dStr = days < 0 ? `expirado há ${-days}d` : (days === 0 ? 'vence hoje' : `vence em ${days}d`);
+        if (!confirm(`Renovar "${info.event.title}" (${dStr})?\n\nAdicionar 30 dias?`)) return;
+        apiPost(`/users/renew/${info.event.id}`, {days: 30}, d => {
+          showToast(d.message, d.success ? 'success' : 'danger');
+          if (d.success) setTimeout(() => cal.refetchEvents(), 1200);
+        });
+      },
+      dateClick: (info) => {
+        const events = cal.getEvents().filter(e => e.startStr === info.dateStr);
+        if (!events.length) return;
+        const lines = events.map(e => e.title).sort();
+        alert('Vencendo em ' + fmt(info.date) + ':\n\n' +
+              lines.slice(0, 25).join('\n') + (lines.length > 25 ? `\n… +${lines.length - 25}` : ''));
+      }
+    });
+    cal.render();
+  });
+})();
+</script>
 
 <script>
 function quickRenew(userId) {
