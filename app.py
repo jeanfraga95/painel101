@@ -363,9 +363,11 @@ def dashboard_calendar():
     if user['role'] == 'admin':
         users = db.get_ssh_users(all_users=True)
     else:
-        # Cada usuário vê só os próprios usuários finais no calendário,
-        # não os criados por sub-revendas.
-        users = db.get_ssh_users(owner_id=user['id'])
+        # Cada usuário vê só a árvore dele: os próprios usuários finais + os
+        # dos revendas abaixo dele. Usuários finais de revendas de fora da
+        # árvore nunca aparecem.
+        sub_ids = [s['id'] for s in db.get_all_resellers_under(user['id'])]
+        users = db.get_ssh_users_for_tree([user['id']] + sub_ids)
     today = now_br().date()
     events = []
     for u in users:
@@ -393,6 +395,63 @@ def dashboard_calendar():
             'extendedProps': {'days': d, 'id': u['id']},
         })
     return jsonify(events)
+
+
+# ---------------------------------------------------------------------------
+# Anotações / lembretes (bloco de notas privado de cada usuário)
+# ---------------------------------------------------------------------------
+
+NOTA_CORES = ('amarelo', 'rosa', 'azul', 'verde', 'cinza')
+
+
+@app.route('/notes')
+@login_required
+def notes():
+    user = get_current_user()
+    notas = db.get_notes(user['id'])
+    return render_template('notes.html', notas=notas, cores=NOTA_CORES)
+
+
+@app.route('/notes/create', methods=['POST'])
+@login_required
+def note_create():
+    user = get_current_user()
+    titulo = (request.form.get('titulo') or '').strip()[:120]
+    conteudo = (request.form.get('conteudo') or '').strip()
+    cor = request.form.get('cor') or 'amarelo'
+    if cor not in NOTA_CORES:
+        cor = 'amarelo'
+    if not titulo and not conteudo:
+        return jsonify(success=False, message='Escreva algo na anotação')
+    new_id = db.create_note(user['id'], titulo, conteudo, cor)
+    return jsonify(success=True, message='Anotação criada', id=new_id)
+
+
+@app.route('/notes/update/<int:note_id>', methods=['POST'])
+@login_required
+def note_update(note_id):
+    user = get_current_user()
+    n = db.get_note(note_id, user['id'])
+    if not n:
+        return jsonify(success=False, message='Anotação não encontrada')
+    titulo = (request.form.get('titulo') or '').strip()[:120]
+    conteudo = (request.form.get('conteudo') or '').strip()
+    cor = request.form.get('cor') or n['cor']
+    if cor not in NOTA_CORES:
+        cor = 'amarelo'
+    if not titulo and not conteudo:
+        return jsonify(success=False, message='Escreva algo na anotação')
+    db.update_note(note_id, user['id'], titulo, conteudo, cor)
+    return jsonify(success=True, message='Anotação atualizada')
+
+
+@app.route('/notes/delete/<int:note_id>', methods=['POST'])
+@login_required
+def note_delete(note_id):
+    user = get_current_user()
+    if not db.delete_note(note_id, user['id']):
+        return jsonify(success=False, message='Anotação não encontrada')
+    return jsonify(success=True, message='Anotação excluída')
 
 
 # ---------------------------------------------------------------------------

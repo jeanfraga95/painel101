@@ -272,6 +272,9 @@ body {
     <a href="{{ url_for('tickets_list') }}" class="nav-link {% if 'ticket' in request.endpoint %}active{% endif %}">
       <i class="fas fa-life-ring"></i>Suporte
     </a>
+    <a href="{{ url_for('notes') }}" class="nav-link {% if request.endpoint == 'notes' %}active{% endif %}">
+      <i class="fas fa-sticky-note"></i>Anotações
+    </a>
     {% if current_user.role == 'admin' %}
     <a href="{{ url_for('checkuser_panel') }}" class="nav-link {% if request.endpoint == 'checkuser_panel' %}active{% endif %}">
       <i class="fas fa-user-check"></i>CheckUser

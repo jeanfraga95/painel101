@@ -1,0 +1,178 @@
+{% extends 'base.html' %}
+{% block title %}Anotações — {{ panel_name }}{% endblock %}
+{% block page_title %}<i class="fas fa-sticky-note me-2"></i>Anotações{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div class="text-muted small">
+    {{ notas|length }} anotaç{{ 'ão' if notas|length == 1 else 'ões' }} — privadas da sua conta.
+  </div>
+  <button type="button" class="btn btn-grad" onclick="notaAbrir()">
+    <i class="fas fa-plus me-1"></i>Nova anotação
+  </button>
+</div>
+
+<div id="notasList" class="row g-3">
+  {% for n in notas %}
+  <div class="col-12 col-sm-6 col-lg-4 col-xxl-3" data-nota-id="{{ n['id'] }}">
+    <div class="card postit nota-{{ n['cor'] }} h-100"
+         data-nota-titulo="{{ n['titulo']|e }}"
+         data-nota-conteudo="{{ n['conteudo']|e }}"
+         data-nota-cor="{{ n['cor']|e }}">
+      <div class="card-header postit-titulo d-flex justify-content-between align-items-center gap-2">
+        <div class="fw-bold text-truncate">
+          {{ n['titulo'] or 'Sem título' }}
+        </div>
+        <div class="d-flex flex-shrink-0 gap-1">
+          <button type="button" class="btn btn-sm btn-light py-0 px-1" title="Editar" onclick="notaAbrirEdit(this)">
+            <i class="fas fa-edit"></i>
+          </button>
+          <button type="button" class="btn btn-sm btn-light py-0 px-1" title="Excluir" onclick="notaExcluir('{{ n['id'] }}')">
+            <i class="fas fa-trash text-danger"></i>
+          </button>
+        </div>
+      </div>
+      <div class="card-body postit-corpo">
+        {% if n['conteudo'] %}
+        <div class="preformato">{{ n['conteudo'] }}</div>
+        {% else %}
+        <div class="text-muted fst-italic">—</div>
+        {% endif %}
+      </div>
+      <div class="card-footer postit-rodape d-flex justify-content-between small">
+        <span>Criada {{ n['created_at'] }}</span>
+        <span>Atualizada {{ n['updated_at'] }}</span>
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <div class="col-12 text-center text-muted py-5">
+    <i class="fas fa-sticky-note fs-1 d-block mb-2"></i>
+    Nenhuma anotação ainda.<br>Clique em <b>Nova anotação</b> para criar um lembrete.
+  </div>
+  {% endfor %}
+</div>
+
+<div class="modal fade" id="notaModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title mb-0"><i class="fas fa-sticky-note me-2 text-info"></i>Nova anotação</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="notaId">
+        <div class="mb-3">
+          <label class="form-label small fw-semibold">Título</label>
+          <input type="text" id="notaTitulo" class="form-control" maxlength="120" placeholder="Ex.: renovar plano do cliente">
+        </div>
+        <div class="mb-3">
+          <label class="form-label small fw-semibold">Anotação</label>
+          <textarea id="notaConteudo" class="form-control" rows="5" placeholder="Escreva seu lembrete..."></textarea>
+        </div>
+        <div class="mb-1">
+          <label class="form-label small fw-semibold d-block">Cor</label>
+          <div class="d-flex gap-2" id="notaCores">
+            {% for c in cores %}
+            <button type="button" class="cor-pick border-0 py-2 px-3 rounded nota-{{ c }} {{ 'cor-ativo' if c == 'amarelo' else '' }}"
+                    data-cor="{{ c }}" onclick="notaEscolherCor(this, '{{ c }}')"></button>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer py-2">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" class="btn btn-grad" id="notaSalvarBtn" onclick="notaSalvar()">Salvar</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let notaCor = 'amarelo';
+let notaModal = null;
+
+function notaAbrir(id, titulo, conteudo, cor) {
+  notaModal = notaModal || new bootstrap.Modal(document.getElementById('notaModal'));
+  document.getElementById('notaId').value = id || '';
+  document.getElementById('notaTitulo').value = titulo || '';
+  document.getElementById('notaConteudo').value = conteudo || '';
+  notaCor = cor && ['amarelo','rosa','azul','verde','cinza'].includes(cor) ? cor : 'amarelo';
+  document.querySelectorAll('.cor-pick').forEach(b => {
+    b.classList.toggle('cor-ativo', b.dataset.cor === notaCor);
+  });
+  document.querySelector('#notaModal .modal-title').innerHTML =
+    '<i class="fas fa-sticky-note me-2 text-info"></i>' + (id ? 'Editar anotação' : 'Nova anotação');
+  notaModal.show();
+}
+
+function notaAbrirEdit(btn) {
+  const card = btn.closest('[data-nota-cor]');
+  const cardId = btn.closest('[data-nota-id]');
+  notaAbrir(cardId ? cardId.dataset.notaId : '',
+            card.dataset.notaTitulo || '',
+            card.dataset.notaConteudo || '',
+            card.dataset.notaCor || 'amarelo');
+}
+
+function notaEscolherCor(btn, cor) {
+  notaCor = cor;
+  document.querySelectorAll('.cor-pick').forEach(b => b.classList.remove('cor-ativo'));
+  btn.classList.add('cor-ativo');
+}
+
+function notaSalvar() {
+  const id = document.getElementById('notaId').value;
+  const titulo = document.getElementById('notaTitulo').value.trim();
+  const conteudo = document.getElementById('notaConteudo').value.trim();
+  const data = { titulo: titulo, conteudo: conteudo, cor: notaCor };
+  const url = id ? `/notes/update/${id}` : '/notes/create';
+  apiPost(url, data, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (d.success) { notaModal.hide(); setTimeout(() => location.reload(), 500); }
+  });
+}
+
+function notaExcluir(id) {
+  if (!confirm('Excluir esta anotação?')) return;
+  apiPost(`/notes/delete/${id}`, {}, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (d.success) setTimeout(() => location.reload(), 500);
+  });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  // Enter na textarea salva quando dentro do modal
+  const ta = document.getElementById('notaConteudo');
+  if (ta) {
+    ta.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); notaSalvar(); }
+    });
+  }
+});
+</script>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+.postit { border: 0; box-shadow: 0 1px 4px rgba(0,0,0,.25); }
+.postit-titulo { border-bottom: 1px dashed rgba(0,0,0,.15); }
+.postit-rodape { border-top: 1px dashed rgba(0,0,0,.15); font-size: .7rem; color: rgba(0,0,0,.55); }
+.postit-corpo { color: #1f1f1f; }
+.preformato { white-space: pre-wrap; word-break: break-word; }
+.nota-amarelo { background: #fff3a8; }
+.nota-amarelo .postit-titulo { background: #f7e57a; }
+.nota-rosa    { background: #ffd6e0; }
+.nota-rosa .postit-titulo { background: #fb9db8; }
+.nota-azul    { background: #d3e6ff; }
+.nota-azul .postit-titulo { background: #9ec5fe; }
+.nota-verde   { background: #c9f5d9; }
+.nota-verde .postit-titulo { background: #8fe0ac; }
+.nota-cinza   { background: #e5e7eb; }
+.nota-cinza .postit-titulo { background: #c9ccd4; }
+.cor-pick { border-radius: 6px !important; opacity: .5; }
+.cor-pick.cor-ativo { outline: 2px solid #fff; outline-offset: 2px; opacity: 1; box-shadow: 0 0 0 2px rgba(0,0,0,.4); }
+</style>
+{% endblock %}

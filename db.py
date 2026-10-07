@@ -162,6 +162,20 @@ CREATE TABLE IF NOT EXISTS ticket_messages (
     FOREIGN KEY (author_id) REFERENCES panel_users(id)
 );
 
+-- Anotacoes / lembretes estilo bloco de notas, privadas de cada usuario.
+CREATE TABLE IF NOT EXISTS anotacoes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL,
+    titulo     TEXT    NOT NULL DEFAULT '',
+    conteudo   TEXT    NOT NULL DEFAULT '',
+    cor        TEXT    NOT NULL DEFAULT 'amarelo',
+    created_at TEXT    DEFAULT (datetime('now')),
+    updated_at TEXT    DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES panel_users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_anotacoes_user ON anotacoes(user_id);
+
 CREATE INDEX IF NOT EXISTS idx_tickets_user    ON tickets(user_id);
 CREATE INDEX IF NOT EXISTS idx_tickets_status  ON tickets(status);
 CREATE INDEX IF NOT EXISTS idx_ticket_msg_tid  ON ticket_messages(ticket_id);
@@ -1188,3 +1202,63 @@ def ticket_counts(visible_user_ids=None) -> dict:
         c[r['status']] = r['n']
         c['all'] += r['n']
     return c
+
+
+# ---------------------------------------------------------------------------
+# Anotacoes / lembretes
+# ---------------------------------------------------------------------------
+
+def get_notes(user_id: int) -> list:
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM anotacoes WHERE user_id=? ORDER BY updated_at DESC, id DESC",
+        (user_id,)
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def get_note(note_id: int, user_id: int = None) -> object:
+    conn = get_db()
+    if user_id is None:
+        row = conn.execute("SELECT * FROM anotacoes WHERE id=?", (note_id,)).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT * FROM anotacoes WHERE id=? AND user_id=?", (note_id, user_id)
+        ).fetchone()
+    conn.close()
+    return row
+
+
+def create_note(user_id: int, titulo: str, conteudo: str, cor: str = 'amarelo') -> int:
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO anotacoes (user_id, titulo, conteudo, cor) VALUES (?,?,?,?)",
+        (user_id, titulo.strip(), conteudo.strip(), cor)
+    )
+    new_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return new_id
+
+
+def update_note(note_id: int, user_id: int, titulo: str, conteudo: str, cor: str = 'amarelo') -> bool:
+    conn = get_db()
+    cur = conn.execute(
+        "UPDATE anotacoes SET titulo=?, conteudo=?, cor=?, updated_at=datetime('now') "
+        "WHERE id=? AND user_id=?",
+        (titulo.strip(), conteudo.strip(), cor, note_id, user_id)
+    )
+    conn.commit()
+    ok = cur.rowcount > 0
+    conn.close()
+    return ok
+
+
+def delete_note(note_id: int, user_id: int) -> bool:
+    conn = get_db()
+    cur = conn.execute("DELETE FROM anotacoes WHERE id=? AND user_id=?", (note_id, user_id))
+    conn.commit()
+    ok = cur.rowcount > 0
+    conn.close()
+    return ok
