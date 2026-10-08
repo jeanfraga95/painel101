@@ -365,6 +365,9 @@
           ou módulo que não responde.
         </div>
         <div class="d-flex gap-2">
+          <button class="btn btn-outline-warning" id="diagCleanBtn" onclick="cleanupServer(window.__diagServerId)">
+            <i class="fas fa-broom me-1"></i>Liberar espaço
+          </button>
           <button class="btn btn-success" id="diagFixBtn" disabled>
             <i class="fas fa-wrench me-1"></i>Corrigir automaticamente
           </button>
@@ -444,6 +447,38 @@ document.getElementById('diagFixBtn').addEventListener('click', () => {
     setTimeout(() => diagnoseServer(id), d.success ? 600 : 2500);
   });
 });
+
+function cleanupServer(id) {
+  if (!id) return;
+  if (!confirm('Rodar limpeza segura no servidor?\n\n' +
+               '• apt-get clean / autoclean (cache de pacotes)\n' +
+               '• journald limitado a 120M\n' +
+               '• logs rotacionados antigos removidos\n' +
+               '• logs grandes (+100M) truncados\n' +
+               '• arquivos antigos do /tmp removidos\n\n' +
+               'Nada é mexido em /home nem nos seus dados.')) return;
+  document.getElementById('diagResults').innerHTML =
+    '<div class="text-center text-secondary py-4"><div class="spinner-border spinner-border-sm me-2"></div>Liberando espaço…</div>';
+  document.getElementById('diagCleanBtn').disabled = true;
+  apiPost(`/servers/cleanup/${id}`, {}, d => {
+    document.getElementById('diagCleanBtn').disabled = false;
+    if (!d.success) {
+      document.getElementById('diagResults').innerHTML =
+        `<div class="alert alert-danger mb-0"><i class="fas fa-times-circle me-1"></i>${vncEsc(d.message)}</div>`;
+      return;
+    }
+    let extra = '';
+    if (d.freed_mb > 0 && (d.before_mb != null || d.after_mb != null)) {
+      extra = ` (antes: ${d.before_mb} MB livres → depois: ${d.after_mb} MB)`;
+    }
+    document.getElementById('diagResults').innerHTML =
+      `<div class="alert alert-success mb-0"><i class="fas fa-broom me-1"></i>${vncEsc(d.message)}</div>` +
+      (extra ? `<div class="small fw-semibold mt-2">${extra}</div>` : '') +
+      (d.detail ? `<div class="small text-muted mt-2"><pre class="mb-0" style="white-space:pre-wrap">${vncEsc(d.detail)}</pre></div>` : '');
+    document.getElementById('diagHint').style.display = 'none';
+    setTimeout(() => diagnoseServer(id), 900);
+  });
+}
 </script>
 
 <script>

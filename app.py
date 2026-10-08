@@ -1644,6 +1644,37 @@ def diagnose_server(server_id):
                    ssh=result['ssh'], module=result['module'])
 
 
+@app.route('/servers/cleanup/<int:server_id>', methods=['POST'])
+@admin_required
+def server_cleanup(server_id):
+    """Limpeza segura de espaço na VPS: apt clean, logs antigos/grandes e /tmp."""
+    srv = db.get_server(server_id)
+    if not srv:
+        return jsonify(success=False, message='Servidor não encontrado')
+    try:
+        ok, info = sc.cleanup_vps(srv['ip'], srv['module_port'], srv['auth_token'])
+    except Exception as e:
+        app.logger.error('Erro na limpeza do servidor %s: %s', srv['ip'], e)
+        return jsonify(success=False, message='Falha na limpeza: {}'.format(e))
+
+    if not ok:
+        return jsonify(success=False, message='Módulo não respondeu: {}'.format(
+            (info.get('detail') or 'erro').strip()[:200]))
+
+    freed = info.get('freed_mb')
+    before = info.get('before_mb')
+    after = info.get('after_mb')
+    if freed is None:
+        msg = 'Limpeza executada, mas não deu para medir o espaço liberado.'
+    elif freed <= 0:
+        msg = 'Nada de sobra para limpar (limpeza segura já estava em dia).'
+    else:
+        msg = 'Limpeza concluída: {} MB liberados.'.format(freed)
+    return jsonify(success=True, message=msg, freed_mb=freed,
+                   before_mb=before, after_mb=after,
+                   detail=(info.get('detail') or '')[:600])
+
+
 def refresh_vnc_proxy() -> None:
     """Regenera o mapa de upstreams do nginx a partir dos servidores cadastrados.
 

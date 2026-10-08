@@ -503,6 +503,82 @@ def diagnose_server(ip: str, port: int, auth_token: str,
     return {'checks': checks, 'ssh': True, 'module': mod_ok}
 
 
+def _vps_avail_mb(ip: str, port: int, auth_token: str) -> int:
+    """Espaço livre (MB) na partição raiz da VPS via módulo."""
+    ok, out = send_command(ip, port, auth_token,
+                           "df -P / | awk 'NR==2{print $4}'", timeout=30)
+    if not ok:
+        return None
+    try:
+        return max(0, int((out or '').strip().splitlines()[-1]))
+    except Exception:
+        return None
+
+
+def cleanup_vps(ip: str, port: int, auth_token: str, wait: int = 25) -> tuple:
+    """Libera espaço na VPS de forma segura, sem tocar nos dados do usuário:
+    - apt-get clean / autoclean (cache de pacotes baixados)
+    - journald contido em 120M
+    - logs rotacionados (.gz/.1/.2/.old) com +2 dias removidos
+    - logs grandes (+100M) com +1 dia truncados
+    - /tmp: arquivos com +1 dia removidos e diretórios vazios
+    Não mexe em /home, /root/vod e derivados.
+
+    Roda de forma ASSÍNCRONA (nohup na VPS) para o módulo HTTP não derrubar
+    a conexão em comandos demorados; aqui só fica esperando o processo
+    terminar (máx `wait` segundos) e mede o espaço liberado.
+
+    Retorna (success, info). info = {before_mb, after_mb, freed_mb, detail}.
+    """
+    before_mb = _vps_avail_mb(ip, port, auth_token)
+    inner = (
+        "apt-get clean 2>/dev/null; apt-get autoclean 2>/dev/null; "
+        "journalctl --vacuum-size=120M >/dev/null 2>&1; "
+        "find /var/log -type f -name '*.gz' -mtime +2 -delete 2>/dev/null; "
+        "find /var/log -type f -name '*.1' -mtime +2 -delete 2>/dev/null; "
+        "find /var/log -type f -name '*.2' -mtime +2 -delete 2>/dev/null; "
+        "find /var/log -type f -name '*.old' -mtime +2 -delete 2>/dev/null; "
+        "find /var/log -type f -size +100M -mtime +1 -exec truncate -s 0 {} + 2>/dev/null; "
+        "find /tmp -type f -mtime +1 -delete 2>/dev/null; "
+        "find /tmp -type d -empty -depth -delete 2>/dev/null"
+    )
+    launch = (
+        "nohup sh -c '{0}' >/tmp/pmg_cleanup.log 2>&1 & "
+        "echo $! > /tmp/pmg_cleanup.pid; echo LANCADO".format(inner)
+    )
+    ok, out = send_command(ip, port, auth_token, launch, timeout=30)
+    if not ok or 'LANCADO' not in (out or ''):
+        info = {'before_mb': before_mb, 'after_mb': None, 'freed_mb': None,
+                'detail': out or 'falha ao lançar limpeza'}
+        return False, info
+
+    # aguarda o processo de limpeza terminar
+    for _ in range(max(1, wait)):
+        time.sleep(1)
+        okc, outc = send_command(
+            ip, port, auth_token,
+            "p=$(cat /tmp/pmg_cleanup.pid 2>/dev/null); "
+            "[ -n \"$p\" ] && kill -0 \"$p\" 2>/dev/null && echo RODANDO || echo PRONTO",
+            timeout=20)
+        if outc and 'RODANDO' not in outc:
+            break
+
+    after_mb = _vps_avail_mb(ip, port, auth_token)
+    freed_mb = None
+    if before_mb is not None and after_mb is not None:
+        freed_mb = max(0, after_mb - before_mb)
+    okd, outd = send_command(ip, port, auth_token,
+                             "cat /tmp/pmg_cleanup.log 2>/dev/null | head -40",
+                             timeout=20)
+    info = {
+        'before_mb': before_mb,
+        'after_mb': after_mb,
+        'freed_mb': freed_mb,
+        'detail': outd or '',
+    }
+    return True, info
+
+
 def install_modules_ssh(ip: str, root_user: str, root_password: str, auth_token: str) -> tuple:
     """Use paramiko to upload module files to the SSH server."""
     modules_dir = os.path.join(os.path.dirname(__file__), 'server_modules')
