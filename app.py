@@ -8,6 +8,7 @@ import json
 import os
 import re
 import secrets
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
 from datetime import datetime, timedelta
@@ -55,6 +56,7 @@ try:
     db.migrate_schema_v2()
     db.migrate_schema_v3()
     db.migrate_schema_tickets()
+    db.migrate_schema_v4()
 except Exception as _startup_err:
     import traceback as _tb
     print(f"[PMG STARTUP ERROR] DB init failed: {_startup_err}", flush=True)
@@ -470,7 +472,11 @@ def _get_visible_users(current_user, sort='expires_at', search=''):
 
     if search:
         search_l = search.lower()
-        users = [u for u in users if search_l in u['username'].lower()]
+        phone_digits = ''.join(ch for ch in search if ch.isdigit())
+        users = [u for u in users
+                 if search_l in u['username'].lower()
+                 or (phone_digits and phone_digits in
+                     ''.join(ch for ch in (u['telefone'] or '') if ch.isdigit()))]
     return users
 
 
@@ -560,6 +566,7 @@ def create_user():
         category_id = request.form.get('category_id', type=int)
         use_v2ray   = request.form.get('use_v2ray') == '1'
         uuid        = request.form.get('uuid', '').strip() or (db.random_uuid() if use_v2ray else None)
+        telefone    = request.form.get('telefone', '').strip()
 
         if current_user['role'] != 'admin':
             if current_user['account_limit'] != -1:
@@ -590,7 +597,7 @@ def create_user():
 
         ok, msg, new_id = db.create_ssh_user(
             username, password, current_user['id'], primary_server_id,
-            expires_at, limit, uuid if use_v2ray else None, 0
+            expires_at, limit, uuid if use_v2ray else None, 0, telefone
         )
         if not ok:
             return jsonify(success=False, message=msg)
@@ -659,6 +666,7 @@ def create_test():
     category_id = request.form.get('category_id', type=int)
     use_v2ray   = request.form.get('use_v2ray') == '1'
     uuid        = db.random_uuid() if use_v2ray else None
+    telefone    = request.form.get('telefone', '').strip()
 
     if not category_id:
         return jsonify(success=False, message='Selecione uma categoria para o teste')
@@ -681,7 +689,7 @@ def create_test():
 
     ok, msg, new_id = db.create_ssh_user(
         username, password, current_user['id'], primary_server_id,
-        expires_at, limit, uuid if use_v2ray else None, 1
+        expires_at, limit, uuid if use_v2ray else None, 1, telefone
     )
     if not ok:
         return jsonify(success=False, message=msg)
@@ -880,7 +888,7 @@ def update_user(user_id):
         if u['owner_id'] not in tree_ids:
             return jsonify(success=False, message='Sem permissão')
 
-    allowed_fields = {'connection_limit', 'status', 'expires_at', 'password'}
+    allowed_fields = {'connection_limit', 'status', 'expires_at', 'password', 'telefone'}
     updates = {k: v for k, v in request.form.items() if k in allowed_fields}
     if 'connection_limit' in updates:
         try:
@@ -2340,24 +2348,40 @@ def _clean_username(username: str) -> str:
     return username.strip()
 
 
+_CONN_CACHE = {}
+_CONN_CACHE_TTL = 25  # segundos: apps de VPN consultam com frequência
+
+
 def _get_user_connections(username: str) -> int:
-    """Get current active connections for a user from all servers.
+    """Conexões ativas de um usuário em TODAS as VPSes.
 
-    Usa a contagem por `ps` do server_comm: os usuários são túneis puros
-    (ForceCommand /bin/false) e não aparecem no `who`, então a contagem por
-    `who` retornava sempre 0 para os apps VPN.
+    Otimizado para o CheckUser ficar leve:
+    - cache curto (TTL 25s) por username → consultas repetidas não tocam nas VPSes;
+    - consulta PARALELA às VPSes com timeout curto por servidor (≈1s típico,
+      no máximo ~4s mesmo com servidor fora do ar), em vez de esperar servidor
+      por servidor em sequência.
     """
-    total_connections = 0
-    for server in db.get_all_servers():
-        try:
-            total_connections += sc.get_user_connections(
-                server['ip'], server['module_port'],
-                server['auth_token'], username
-            )
-        except Exception:
-            continue
+    now = time.time()
+    hit = _CONN_CACHE.get(username)
+    if hit and now - hit[0] < _CONN_CACHE_TTL:
+        return hit[1]
 
-    return total_connections
+    servers = db.get_all_servers()
+
+    def _count(srv):
+        try:
+            return sc.get_user_connections(
+                srv['ip'], srv['module_port'], srv['auth_token'], username)
+        except Exception:
+            return 0
+
+    total = 0
+    if servers:
+        with ThreadPoolExecutor(max_workers=max(1, min(8, len(servers)))) as pool:
+            total = sum(pool.map(_count, servers))
+
+    _CONN_CACHE[username] = (now, total)
+    return total
 
 
 def _checkuser_response(username: str):
@@ -2499,6 +2523,7 @@ def user_credentials(user_id):
         v2ray_uuid=u['v2ray_uuid'],
         expires_at=u['expires_at'],
         connection_limit=u['connection_limit'],
+        telefone=u['telefone'] if u['telefone'] else '',
     )
 
 # ---------------------------------------------------------------------------

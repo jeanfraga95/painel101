@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS ssh_users (
     v2ray_uuid       TEXT,
     is_test          INTEGER DEFAULT 0,
     status           TEXT    DEFAULT 'active',
+    telefone         TEXT    DEFAULT '',
     UNIQUE(username),
     FOREIGN KEY (owner_id) REFERENCES panel_users(id),
     FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE SET NULL
@@ -421,7 +422,8 @@ def ssh_user_exists(username: str) -> bool:
 
 def create_ssh_user(username: str, password: str, owner_id: int, server_id: int,
                     expires_at: str, connection_limit: int,
-                    v2ray_uuid: str = None, is_test: int = 0) -> tuple:
+                    v2ray_uuid: str = None, is_test: int = 0,
+                    telefone: str = '') -> tuple:
     if ssh_user_exists(username):
         return False, 'Username já existe', None
 
@@ -430,10 +432,10 @@ def create_ssh_user(username: str, password: str, owner_id: int, server_id: int,
         cur = conn.execute(
             """INSERT INTO ssh_users
                (username, password, owner_id, server_id, expires_at,
-                connection_limit, v2ray_uuid, is_test)
-               VALUES (?,?,?,?,?,?,?,?)""",
+                connection_limit, v2ray_uuid, is_test, telefone)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
             (username.lower(), password, owner_id, server_id, expires_at,
-             connection_limit, v2ray_uuid, is_test)
+             connection_limit, v2ray_uuid, is_test, (telefone or '').strip())
         )
         new_id = cur.lastrowid
         # update owner's accounts_used
@@ -973,6 +975,19 @@ def migrate_schema_v3():
         );
     """)
     conn.commit()
+    conn.close()
+
+
+def migrate_schema_v4():
+    """Add telefone column to ssh_users (live schema migration)."""
+    conn = get_db()
+    try:
+        conn.executescript(
+            "ALTER TABLE ssh_users ADD COLUMN telefone TEXT DEFAULT ''"
+        )
+        conn.commit()
+    except Exception:
+        pass  # coluna já existe
     conn.close()
 
 

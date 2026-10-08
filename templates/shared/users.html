@@ -36,7 +36,7 @@
         <label class="form-label small text-muted mb-1">Buscar</label>
         <div class="input-group input-group-sm">
           <span class="input-group-text"><i class="fas fa-search"></i></span>
-          <input type="text" name="search" class="form-control" placeholder="Buscar usuário..." value="{{ search }}">
+          <input type="text" name="search" class="form-control" placeholder="Buscar por nome ou telefone..." value="{{ search }}">
         </div>
       </div>
       <div class="col-md-3">
@@ -162,7 +162,7 @@
                 <button class="btn btn-outline-secondary" onclick="recreateOnServer({{ u.id }}, this)" title="Recriar no servidor (se não existir)">
                   <i class="fas fa-sync-alt"></i>
                 </button>
-                <button class="btn btn-outline-info" onclick="openEditModal({{ u.id }}, '{{ u.username }}', {{ u.connection_limit }}, '{{ u.expires_at[:10] if u.expires_at else '' }}')" title="Editar / Servidores">
+                <button class="btn btn-outline-info" onclick="openEditModal({{ u.id }}, '{{ u.username }}', {{ u.connection_limit }}, '{{ u.expires_at[:10] if u.expires_at else '' }}', '{{ u.telefone or '' }}')" title="Editar / Servidores">
                   <i class="fas fa-edit"></i>
                 </button>
                 <button class="btn btn-outline-danger" onclick="deleteUser({{ u.id }}, '{{ u.username }}')" title="Deletar">
@@ -372,11 +372,12 @@ function deleteUser(id, name) {
   });
 }
 
-function openEditModal(id, username, currentLimit, currentExpiry) {
+function openEditModal(id, username, currentLimit, currentExpiry, currentTel) {
   _editUserId = id;
   document.getElementById('editModalTitle').textContent = 'Editar: ' + username;
   document.getElementById('editLimitInput').value = currentLimit;
   document.getElementById('editExpiryInput').value = currentExpiry || '';
+  document.getElementById('editTelInput').value = currentTel || '';
   document.getElementById('editPassInput').value = '';
   // Reset servers tab
   const body = document.getElementById('editServersBody');
@@ -415,8 +416,9 @@ function saveEditUser() {
   const limit = document.getElementById('editLimitInput').value.trim();
   const expiry = document.getElementById('editExpiryInput').value.trim();
   const pass = document.getElementById('editPassInput').value.trim();
+  const tel = document.getElementById('editTelInput').value.trim();
   if (!limit || isNaN(limit)) { showToast('Limite inválido', 'danger'); return; }
-  const body = {connection_limit: parseInt(limit)};
+  const body = {connection_limit: parseInt(limit), telefone: tel};
   if (expiry) body.expires_at = expiry;
   if (pass) {
     if (pass.length < 4) { showToast('Senha mínima 4 caracteres', 'danger'); return; }
@@ -499,11 +501,13 @@ function viewCredentials(id) {
            <code class="small text-info text-break">${d.v2ray_uuid}</code></div>` : '';
       const appLine = appLink
         ? `<div class="mt-2"><small class="text-muted">App:</small> <a href="${appLink}" target="_blank" class="small">${appLink}</a></div>` : '';
+      const telLine = d.telefone
+        ? `\n📱 Telefone: ${d.telefone}` : '';
 
       let copyText = `👤 Usuário: ${d.username}
 🔐 Senha: ${d.password}
 📅 Validade: ${d.expires_at}
-🔢 Limite: ${d.connection_limit}`;
+🔢 Limite: ${d.connection_limit}${telLine}`;
       if (d.v2ray_uuid) copyText += `
 🆔 UUID: ${d.v2ray_uuid}`;
       if (appLink) copyText += `
@@ -515,8 +519,9 @@ function viewCredentials(id) {
           <tr><td class="text-muted">Senha</td><td><code>${d.password}</code></td></tr>
           <tr><td class="text-muted">Validade</td><td>${d.expires_at ? d.expires_at.slice(0,10) : '—'}</td></tr>
           <tr><td class="text-muted">Limite</td><td>${d.connection_limit} conexões</td></tr>
-        </table>
-        ${uuidLine}${appLine}`;
+          <tr><td class="text-muted">Telefone</td><td>${d.telefone ? d.telefone : '<span class="text-muted">—</span>'}</td></tr>
+        </table>`
+        + uuidLine + appLine;
       document.getElementById('credCopyBtn').onclick = () => universalCopy(copyText, document.getElementById('credCopyBtn'));
       new bootstrap.Modal(document.getElementById('credModal')).show();
     });
@@ -609,6 +614,12 @@ setInterval(loadOnlineUsers, 20000);
           <!-- Tab 1: dados básicos -->
           <div class="tab-pane fade show active" id="editPaneInfo">
             <div class="row g-3">
+              <div class="col-md-6">
+                <label class="form-label fw-semibold">Telefone
+                  <small class="text-muted fw-normal">(só aparece na chave 🔑)</small>
+                </label>
+                <input type="tel" class="form-control" id="editTelInput" placeholder="(00) 00000-0000">
+              </div>
               <div class="col-md-6">
                 <label class="form-label fw-semibold">Limite de conexões</label>
                 <input type="number" class="form-control" id="editLimitInput" min="1" max="99">

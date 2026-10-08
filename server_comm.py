@@ -73,13 +73,15 @@ def get_online_users(ip: str, port: int, auth_token: str) -> list:
     return [u.strip() for u in out.splitlines() if u.strip()]
 
 
-def get_user_connections(ip: str, port: int, auth_token: str, username: str) -> int:
+def get_user_connections(ip: str, port: int, auth_token: str, username: str,
+                         timeout: int = 4) -> int:
     """Count active sessions for a given SSH user.
 
     `who` não serve aqui: os usuários são túneis puros (ForceCommand
     /bin/false) e não registram utmp, então sempre retornava 0.
     """
-    ok, out = send_command(ip, port, auth_token, _sessions_cmd_for_user(username))
+    ok, out = send_command(ip, port, auth_token, _sessions_cmd_for_user(username),
+                           timeout=timeout)
     try:
         return max(0, int(out.strip()))
     except Exception:

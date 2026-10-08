@@ -41,8 +41,12 @@
             </select>
             <div class="invalid-feedback">Selecione uma categoria.</div>
           </div>
-          <div class="col-12">
-            <div class="form-check form-switch">
+          <div class="col-md-6">
+            <label class="form-label">Telefone do cliente <span class="text-muted fw-normal">(opcional)</span></label>
+            <input type="tel" id="cu_telefone" class="form-control" placeholder="(00) 00000-0000">
+          </div>
+          <div class="col-md-6">
+            <div class="form-check form-switch mt-4 pt-2">
               <input class="form-check-input" type="checkbox" id="cu_v2ray" onchange="toggleUUID(this)">
               <label class="form-check-label" for="cu_v2ray">Habilitar V2Ray/Xray</label>
             </div>
@@ -114,8 +118,12 @@
             </select>
             <div class="invalid-feedback">Selecione uma categoria.</div>
           </div>
-          <div class="col-12">
-            <div class="form-check form-switch">
+          <div class="col-md-6">
+            <label class="form-label">Telefone do cliente <span class="text-muted fw-normal">(opcional)</span></label>
+            <input type="tel" id="ct_telefone" class="form-control" placeholder="(00) 00000-0000">
+          </div>
+          <div class="col-md-6">
+            <div class="form-check form-switch mt-4 pt-2">
               <input class="form-check-input" type="checkbox" id="ct_v2ray">
               <label class="form-check-label" for="ct_v2ray">Com V2Ray/Xray</label>
             </div>
@@ -269,6 +277,7 @@ function submitCreateUser() {
     category_id: catEl.value,
     use_v2ray:   v2 ? '1' : '0',
     uuid:        v2 ? document.getElementById('cu_uuid').value : '',
+    telefone:    document.getElementById('cu_telefone').value,
   }, d => {
     _setBtnLoading('btnCreateUser', false);
     if (d.success) showResult(d.user);
@@ -296,6 +305,7 @@ function submitCreateTest() {
     limit:       document.getElementById('ct_limit').value,
     category_id: catEl.value,
     use_v2ray:   v2 ? '1' : '0',
+    telefone:    document.getElementById('ct_telefone').value,
   }, d => {
     _setBtnLoading('btnCreateTest', false);
     if (d.success) showResult(d.user);
