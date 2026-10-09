@@ -799,11 +799,7 @@ def _sync_renew_to_category(u):
     known_ids = set(db.get_user_all_server_ids(u['id']))
     exp_days = _days_left(u)
 
-    for srv in cat_servers:
-        # Vincula o servidor ao usuário se ainda não estiver registrado
-        if srv['id'] != u['server_id'] and srv['id'] not in known_ids:
-            db.add_user_extra_server(u['id'], srv['id'])
-
+    def _create(srv):
         # Exclui e recria com os dados atuais do painel — garante que a VPS
         # fique idêntica ao painel independentemente do estado anterior.
         ok, msg = sc.create_ssh_user_on_server(
@@ -811,10 +807,22 @@ def _sync_renew_to_category(u):
             u['username'], u['password'], exp_days, u['connection_limit'],
             uuid=u['v2ray_uuid']
         )
+        return {'ok': ok, 'msg': msg, 'srv': srv}
 
-        results.append((srv['name'], ok, msg))
+    results = []
+    for srv in cat_servers:
+        # Vincula o servidor ao usuário se ainda não estiver registrado
+        if srv['id'] != u['server_id'] and srv['id'] not in known_ids:
+            db.add_user_extra_server(u['id'], srv['id'])
+        results.append(_create(srv))
 
-    return results
+    # 1 tentativa extra nos servidores que falharam (rede/transição) antes de
+    # repassar o erro para a interface — evita "falso negativo" na renovação.
+    for r in [r for r in results if not r['ok']]:
+        retry = _create(r['srv'])
+        r['ok'], r['msg'] = retry['ok'], retry['msg']
+
+    return [(r['srv']['name'], r['ok'], r['msg']) for r in results]
 
 
 def _days_left(u) -> int:
@@ -864,15 +872,42 @@ def renew_user(user_id):
 
     updated = db.get_ssh_user(user_id)
     srv_results = _sync_renew_to_category(updated)
-    server_msg  = '; '.join(f"{n}:{'OK' if ok else msg}" for n, ok, msg in srv_results) if srv_results else ''
+    ok_count = sum(1 for _, ok, _ in srv_results if ok)
+    fails = [(name, msg) for name, ok, msg in srv_results if not ok]
 
-    new_exp    = updated['expires_at'][:10] if updated else ''
+    new_exp = updated['expires_at'][:10]
     reativado  = ' e reativado' if was_suspended else ''
     convertido = ' (convertido de teste)' if was_test else ''
+
+    # A VPS falhou por completo → desfaz o aumento no painel para não "mentir"
+    # que renovou. O usuário continua com o vencimento antigo e sem queda de
+    # consistência entre painel e servidor.
+    if srv_results and ok_count == 0:
+        db.update_ssh_user(user_id, expires_at=u['expires_at'])
+        if was_test:
+            db.update_ssh_user(user_id, is_test=1)
+        fail_msg = '; '.join(f'{n}:{m}' for n, m in fails)
+        return jsonify(success=False,
+                       message='Renovação FALHOU no servidor. Nada foi alterado.',
+                       server_msg=fail_msg,
+                       new_expiry=u['expires_at'][:10] if u['expires_at'] else '',
+                       was_suspended=was_suspended)
+
+    if fails:
+        fds = ', '.join(n for n, _ in fails)
+        return jsonify(
+            success=True,
+            message=(f'Renovado{reativado}{convertido} +{days} dias '
+                     f'em {ok_count}/{len(srv_results)} servidor(es). '
+                     f'FALHOU na VPS: {fds}. Novo vencimento: {new_exp}'),
+            server_msg='; '.join(f'{n}:{m}' for n, m in fails),
+            new_expiry=new_exp, was_suspended=was_suspended)
+
     return jsonify(success=True,
                    message=f'Renovado{reativado}{convertido} +{days} dias. Novo vencimento: {new_exp}',
-                   server_msg=server_msg, new_expiry=new_exp,
-                   was_suspended=was_suspended)
+                   server_msg=''
+                   if not fails else '; '.join(f'{n}:{m}' for n, m in fails),
+                   new_expiry=new_exp, was_suspended=was_suspended)
 
 
 @app.route('/users/update/<int:user_id>', methods=['POST'])

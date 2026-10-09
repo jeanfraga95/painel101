@@ -845,18 +845,28 @@ def broadcast_renew(user, days_for_server: int, db_module) -> list:
     """
     server_ids = db_module.get_user_all_server_ids(user['id'])
     uuid = user['v2ray_uuid'] if 'v2ray_uuid' in user.keys() else None
+
+    def _create(srv):
+        return create_ssh_user_on_server(
+            srv['ip'], srv['module_port'], srv['auth_token'],
+            user['username'], user['password'], days_for_server,
+            user['connection_limit'], uuid=uuid
+        )
+
     results = []
     for sid in server_ids:
         srv = db_module.get_server(sid)
         if not srv:
             continue
-        ok, msg = create_ssh_user_on_server(
-            srv['ip'], srv['module_port'], srv['auth_token'],
-            user['username'], user['password'], days_for_server,
-            user['connection_limit'], uuid=uuid
-        )
-        results.append((srv['name'], ok, msg))
-    return results
+        ok, msg = _create(srv)
+        results.append({'ok': ok, 'msg': msg, 'srv': srv})
+
+    # 1 tentativa extra nos servidores que falharam (rede/transição)
+    for r in [r for r in results if not r['ok']]:
+        ok, msg = _create(r['srv'])
+        r['ok'], r['msg'] = ok, msg
+
+    return [(r['srv']['name'], r['ok'], r['msg']) for r in results]
 
 
 def build_block_cmd(user) -> str:

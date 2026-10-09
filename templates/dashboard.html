@@ -1,0 +1,311 @@
+{% extends 'base.html' %}
+{% block title %}Dashboard — {{ panel_name }}{% endblock %}
+{% block page_title %}<i class="fas fa-tachometer-alt me-2"></i>Dashboard{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css">
+<style>
+#expCal { min-height: 480px; }
+#expCal .fc-event { cursor: pointer; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="card stat-card h-100" style="animation-delay:.05s">
+      <div class="card-body d-flex align-items-center gap-3">
+        <div class="stat-icon bg-grad-accent"><i class="fas fa-users"></i></div>
+        <div>
+          <div class="fs-3 fw-bold">{{ stats.total_ssh }}</div>
+          <small class="text-muted">Usuários SSH</small>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card stat-card h-100" style="animation-delay:.1s">
+      <div class="card-body d-flex align-items-center gap-3">
+        <div class="stat-icon bg-grad-success"><i class="fas fa-user-tie"></i></div>
+        <div>
+          <div class="fs-3 fw-bold">{{ stats.total_resellers }}</div>
+          <small class="text-muted">Revendas</small>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card stat-card h-100" style="animation-delay:.15s">
+      <div class="card-body d-flex align-items-center gap-3">
+        <div class="stat-icon bg-grad-info"><i class="fas fa-server"></i></div>
+        <div>
+          <div class="fs-3 fw-bold">{{ stats.total_servers }}</div>
+          <small class="text-muted">Servidores</small>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card stat-card h-100" style="animation-delay:.2s">
+      <div class="card-body d-flex align-items-center gap-3">
+        <div class="stat-icon bg-grad-danger"><i class="fas fa-exclamation-triangle"></i></div>
+        <div>
+          <div class="fs-3 fw-bold">{{ stats.expiring_soon }}</div>
+          <small class="text-muted">Vencendo (7d)</small>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+    <span class="fw-semibold"><i class="fas fa-calendar-alt me-2 text-info"></i>Calendário de vencimentos</span>
+    <div class="d-flex align-items-center gap-3 small flex-wrap">
+      <span class="d-inline-flex align-items-center gap-1" title="Vence em mais de 3 dias"><span class="badge" style="background:#198754">&nbsp;</span>&gt;3d</span>
+      <span class="d-inline-flex align-items-center gap-1" title="Vence em 1 a 3 dias"><span class="badge" style="background:#ffc107">&nbsp;</span>1–3d</span>
+      <span class="d-inline-flex align-items-center gap-1" title="Vence hoje"><span class="badge" style="background:#fd7e14">&nbsp;</span>hoje</span>
+      <span class="d-inline-flex align-items-center gap-1" title="Já expirado"><span class="badge" style="background:#dc3545">&nbsp;</span>expirado</span>
+      <a href="{{ url_for('users_list', filter='expiring') }}" class="btn btn-sm btn-outline-warning ms-1">
+        <i class="fas fa-clock me-1"></i>Vencendo em 7d ({{ stats.expiring_soon }})
+      </a>
+    </div>
+  </div>
+  <div class="card-body">
+    <div id="expCal"></div>
+    <div class="small text-muted mt-2 d-flex flex-wrap justify-content-between gap-2">
+      <span><i class="fas fa-mouse-pointer me-1"></i>Clique em um dia para listar quem vence nele; clique em um usuário para renovar (+30 dias).</span>
+      <span><i class="fas fa-filter me-1"></i>Eventos até 120 dias à frente.</span>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="calDayModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-scrollable modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title mb-0"><i class="fas fa-calendar-day me-2 text-info"></i><span id="calDayTitle">Vencimentos</span></h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+      </div>
+      <div class="modal-body p-3" id="calDayList"></div>
+      <div class="modal-footer py-2 d-flex justify-content-between">
+        <button type="button" class="btn btn-sm btn-outline-danger" id="calRenewAllBtn">
+          <i class="fas fa-redo me-1"></i>Renovar todos
+        </button>
+        <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Fechar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if panel_theme == 'dark' %}
+<style>
+  #expCal {
+    --fc-border-color: rgba(255,255,255,.10);
+    --fc-page-bg-color: transparent;
+    --fc-neutral-bg-color: rgba(255,255,255,.03);
+    --fc-today-bg-color: rgba(63,145,255,.12);
+    --fc-list-event-hover-bg-color: rgba(255,255,255,.05);
+    --fc-button-text-color: #e9ecef;
+    --fc-button-bg-color: #2c3150;
+    --fc-button-border-color: #3a4070;
+    --fc-button-hover-bg-color: #383e66;
+    --fc-button-hover-border-color: #4a5190;
+    --fc-button-active-bg-color: #454c80;
+    --fc-highlight-bg-color: rgba(255,255,255,.08);
+    --fc-now-indicator-color: #6ea8fe;
+  }
+</style>
+{% endif %}
+<style>
+  #expCal { max-width: 1100px; margin: 0 auto; }
+  #expCal .fc-event-main { overflow: hidden; }
+  #expCal .pmg-chip {
+    display: flex; align-items: center; gap: 6px;
+    padding: 2px 8px; min-width: 0; white-space: nowrap;
+    cursor: pointer;
+  }
+  #expCal .pmg-chip .pmg-nome { overflow: hidden; text-overflow: ellipsis; }
+  #expCal .pmg-chip .pmg-dias {
+    flex-shrink: 0; font-size: 10px; font-weight: 700; line-height: 1;
+    border-radius: 999px; padding: 3px 6px;
+  }
+  #expCal .fc-daygrid-event { border-radius: 6px; border: 0; margin: 1px 2px; }
+  #expCal .fc-daygrid-day-number, #expCal .fc-col-header-cell-cushion { font-weight: 600; }
+  @media (max-width: 720px) {
+    #expCal { min-width: 0; }
+    #expCal .fc-toolbar { flex-wrap: wrap; gap: 4px 8px; }
+    #expCal .fc-toolbar-title { font-size: 1.02rem !important; }
+    #expCal .fc-button { font-size: .78rem !important; padding: .22rem .5rem !important; }
+    #expCal .pmg-chip { gap: 4px; padding: 1px 6px; }
+    #expCal .pmg-dias { padding: 2px 5px; font-size: 9px; }
+    #expCal .fc-daygrid-day-number { font-size: .78rem; }
+    #expCal .fc-col-header-cell-cushion { font-size: .76rem; }
+    #expCal .fc-daygrid-day-frame { min-height: 32px !important; }
+    #expCal .fc-list-event-title, #expCal .fc-list-event-time { font-size: .82rem; }
+  }
+</style>
+
+<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
+<script>
+(function() {
+  function fmt(d) { return d.toLocaleDateString('pt-BR'); }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g,
+      c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
+  const BREAK = 700;
+  const narrow = () => window.innerWidth < BREAK;
+  const defaultView = () => narrow() ? 'listWeek' : 'dayGridMonth';
+  let dayEvents = [];
+
+  function chipHTML(ev) {
+    const days = ev.extendedProps.days;
+    const dom = document.createElement('div');
+    dom.className += ' pmg-chip';
+    const nome = document.createElement('span');
+    nome.className = 'pmg-nome';
+    nome.textContent = ev.title;
+    dom.appendChild(nome);
+    if (days < 0 || days <= 3) {
+      const b = document.createElement('span');
+      b.className = 'pmg-dias';
+      b.style.background = 'rgba(0,0,0,.35)';
+      b.textContent = days < 0 ? `-${-days}d` : (days === 0 ? 'hoje' : `${days}d`);
+      dom.appendChild(b);
+    }
+    return dom;
+  }
+
+  function daysLabel(days) {
+    if (days < 0) return { cls: 'danger', label: `expirado há ${-days}d` };
+    if (days === 0) return { cls: 'warning text-dark', label: 'vence hoje' };
+    if (days <= 3) return { cls: 'warning text-dark', label: `${days}d` };
+    return { cls: 'success', label: `${days}d` };
+  }
+
+  function openDayEvents(dateStr, events) {
+    dayEvents = events || [];
+    const list = document.getElementById('calDayList');
+    if (!list) return;
+    document.getElementById('calDayTitle').textContent =
+      'Vencendo em ' + fmt(new Date(dateStr + 'T12:00:00'));
+    list.innerHTML = dayEvents.map(ev => {
+      const dl = daysLabel(ev.extendedProps.days);
+      return `
+        <div class="d-flex justify-content-between align-items-center gap-2 pb-2 mb-2"
+             style="border-bottom:1px solid var(--bs-border-color)" data-cald="${ev.id}">
+          <div class="text-truncate">
+            <span class="fw-semibold" style="font-size:.95rem">${esc(ev.title)}</span>
+            <span class="badge text-bg-${dl.cls} ms-1">${dl.label}</span>
+          </div>
+          <button type="button" class="btn btn-sm btn-outline-success px-2 flex-shrink-0" data-cald-ren="${ev.id}">
+            <i class="fas fa-redo"></i>
+          </button>
+        </div>`;
+    }).join('') || '<p class="text-muted small mb-0">Sem eventos neste dia.</p>';
+    list.querySelectorAll('[data-cald-ren]').forEach(btn => {
+      btn.addEventListener('click', () => renewById(parseInt(btn.dataset.caldRen, 10)));
+    });
+    new bootstrap.Modal(document.getElementById('calDayModal')).show();
+  }
+
+  function renewById(id) {
+    apiPost(`/users/renew/${id}`, { days: 30 }, d => {
+      showToast(d.message, d.success ? 'success' : 'danger');
+      if (d.success && d.server_msg) {
+        const falhouAlgum = d.server_msg.split(';').some(s => s.trim() && !s.includes(':OK'));
+        if (falhouAlgum) showToast('Atenção — falha na VPS: ' + d.server_msg, 'warning');
+      }
+      if (!d.success) return;
+      const row = document.querySelector(`[data-cald="${id}"]`);
+      if (row) row.remove();
+      const el = document.getElementById('expCal');
+      if (el && el._pmgCal) el._pmgCal.refetchEvents();
+    });
+  }
+
+  function renewAll() {
+    const ids = dayEvents.map(e => e.id);
+    if (!ids.length) return;
+    if (!confirm(`Renovar os ${ids.length} usuário(s) listados (+30 dias)?`)) return;
+    let done = 0;
+    let falhas = 0;
+    ids.forEach(id => apiPost(`/users/renew/${id}`, { days: 30 }, d => {
+      if (!d.success) {
+        falhas++;
+        showToast(d.message, 'danger');
+      } else if (d.server_msg && d.server_msg.split(';').some(s => s.trim() && !s.includes(':OK'))) {
+        falhas++;
+        showToast('Falha na VPS: ' + d.server_msg, 'warning');
+      }
+      done++;
+      if (done === ids.length) {
+        showToast(falhas
+          ? `Renovações concluídas com ${falhas} falha(s) na VPS.`
+          : 'Renovações concluídas.', falhas ? 'warning' : 'success');
+        bootstrap.Modal.getInstance(document.getElementById('calDayModal'))?.hide();
+        const el = document.getElementById('expCal');
+        if (el && el._pmgCal) el._pmgCal.refetchEvents();
+      }
+    }));
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const el = document.getElementById('expCal');
+    if (!el) return;
+    const cal = new FullCalendar.Calendar(el, {
+      locale: 'pt-br',
+      initialView: defaultView(),
+      height: 'auto',
+      fixedWeekCount: false,
+      nowIndicator: true,
+      headerToolbar: {
+        left: 'prev,next today',
+        center: 'title',
+        right: 'dayGridMonth,dayGridWeek,listWeek'
+      },
+      buttonText: { today: 'Hoje', month: 'Mês', week: 'Semana', list: 'Lista' },
+      dayMaxEvents: 4,
+      dayMaxEventRows: 5,
+      moreLinkText: (n) => `+${n} mais`,
+      noEventsText: 'Nenhum vencimento neste período',
+      events: { url: '/api/dashboard/calendar', method: 'GET' },
+      eventContent: (info) => chipHTML(info.event),
+      eventDidMount: (info) => {
+        const d = info.event.extendedProps.days;
+        info.el.title = `${info.event.title} — ${d < 0 ? `expirado há ${-d}d` : (d === 0 ? 'vence hoje' : `vence em ${d}d`)}. Clique para renovar.`;
+      },
+      eventClick: (info) => {
+        const d = info.event.extendedProps.days;
+        const dStr = d < 0 ? `expirado há ${-d}d` : (d === 0 ? 'vence hoje' : `vence em ${d}d`);
+        if (!confirm(`Renovar "${info.event.title}" (${dStr})?\n\nAdicionar 30 dias?`)) return;
+        renewById(info.event.id);
+      },
+      dateClick: (info) => {
+        const events = cal.getEvents().filter(e => e.startStr === info.dateStr);
+        if (events.length) openDayEvents(info.dateStr, events);
+      },
+      moreLinkClick: (info) => {
+        openDayEvents(info.dateStr, info.allSegs.map(s => s.event));
+      }
+    });
+    el._pmgCal = cal;
+    cal.render();
+
+    let lastNarrow = narrow();
+    window.addEventListener('resize', () => {
+      const want = defaultView();
+      if (want === cal.view.type) return;
+      const other = narrow() ? 'dayGridMonth' : 'listWeek';
+      if (cal.view.type === other || cal.view.type === 'dayGridWeek') cal.changeView(want);
+    });
+  });
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const b = document.getElementById('calRenewAllBtn');
+    if (b) b.addEventListener('click', renewAll);
+  });
+})();
+</script>
+{% endblock %}
