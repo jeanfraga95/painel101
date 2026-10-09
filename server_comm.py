@@ -122,6 +122,30 @@ def renew_user_on_server(ip: str, port: int, auth_token: str,
     return ok, out
 
 
+def verify_user_expiry(ip: str, port: int, auth_token: str, username: str,
+                       timeout: int = 20):
+    """Consulta a expiração REAL do usuário na VPS (campo 8 do /etc/shadow).
+
+    Usado quando o comando de criar/renovar dava timeout de resposta: o módulo
+    pode ter EXECUTADO mesmo assim, e o painel não pode desfazer algo que a VPS
+    já aplicou — senão criava divergência (VPS renovada, painel sem).
+    Retorna a data ou None (usuário ausente / sem expiração / erro).
+    """
+    from datetime import date as _date
+    ok, out = send_command(ip, port, auth_token,
+                           f"getent shadow {username} 2>/dev/null || true", timeout=timeout)
+    if not ok:
+        return None
+    for line in out.splitlines():
+        p = line.split(':')
+        if len(p) >= 8 and p[0] == username and p[7]:
+            try:
+                return _date.fromordinal(_date(1970, 1, 1).toordinal() + int(p[7]))
+            except ValueError:
+                return None
+    return None
+
+
 def create_test_user_on_server(ip: str, port: int, auth_token: str,
                                username: str, password: str, hours: int,
                                limit: int, uuid: str = None) -> tuple:
@@ -865,6 +889,23 @@ def broadcast_renew(user, days_for_server: int, db_module) -> list:
     for r in [r for r in results if not r['ok']]:
         ok, msg = _create(r['srv'])
         r['ok'], r['msg'] = ok, msg
+
+    # Resposta perdida ≠ não aplicado: se o módulo executou o create mesmo com
+    # timeout de resposta, a VPS já está com a validade certa (painel + 1). Neste
+    # caso considera aplicado, senão o painel desfazia algo que a VPS já fez e
+    # criava divergência (VPS renovada, painel não).
+    try:
+        from datetime import date as _date, timedelta as _td
+        target = _date.fromisoformat(user['expires_at'][:10]) + _td(days=1)
+    except Exception:
+        target = None
+    if target is not None:
+        for r in [r for r in results if not r['ok']]:
+            real = verify_user_expiry(r['srv']['ip'], r['srv']['module_port'],
+                                      r['srv']['auth_token'], user['username'])
+            if real == target:
+                r['ok'] = True
+                r['msg'] = (r['msg'] or '') + ' (aplicado na VPS; resposta perdida no timeout)'
 
     return [(r['srv']['name'], r['ok'], r['msg']) for r in results]
 

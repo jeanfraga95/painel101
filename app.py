@@ -822,6 +822,23 @@ def _sync_renew_to_category(u):
         retry = _create(r['srv'])
         r['ok'], r['msg'] = retry['ok'], retry['msg']
 
+    # Resposta perdida ≠ não aplicado: timeout de conexão pode ter vindo DEPOIS
+    # do módulo ter executado o create. Se a validade real na VPS já está na
+    # alvo (painel + 1), considera aplicado — se desfazer, cria VPS renovada e
+    # painel desatualizado.
+    try:
+        from datetime import date as _date, timedelta as _td
+        target = _date.fromisoformat(u['expires_at'][:10]) + _td(days=1)
+    except Exception:
+        target = None
+    if target is not None:
+        for r in [r for r in results if not r['ok']]:
+            real = sc.verify_user_expiry(r['srv']['ip'], r['srv']['module_port'],
+                                         r['srv']['auth_token'], u['username'])
+            if real == target:
+                r['ok'] = True
+                r['msg'] = (r['msg'] or '') + ' (aplicado na VPS; resposta perdida no timeout)'
+
     return [(r['srv']['name'], r['ok'], r['msg']) for r in results]
 
 
