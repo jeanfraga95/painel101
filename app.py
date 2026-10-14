@@ -57,6 +57,7 @@ try:
     db.migrate_schema_v3()
     db.migrate_schema_tickets()
     db.migrate_schema_v4()
+    db.migrate_schema_informativos()
 except Exception as _startup_err:
     import traceback as _tb
     print(f"[PMG STARTUP ERROR] DB init failed: {_startup_err}", flush=True)
@@ -266,12 +267,20 @@ def get_settings():
 # Inject settings and current user into every template
 @app.context_processor
 def inject_globals():
+    unread = 0
+    try:
+        cu = get_current_user()
+        if cu:
+            unread = db.count_informativos_nao_lidos(cu['id'])
+    except Exception:
+        unread = 0
     return dict(
         settings=get_settings(),
         current_user=get_current_user(),
         panel_name=db.get_setting('panel_name', 'Painel Master'),
         panel_color=db.get_setting('panel_color', '#0d6efd'),
         panel_theme=db.get_setting('panel_theme', 'dark'),
+        informativos_nao_lidos=unread,
     )
 
 
@@ -639,6 +648,8 @@ def create_user():
                 'expires_at': expires_at,
                 'uuid':       uuid if use_v2ray else None,
                 'app_link':   app_link,
+                'telefone':   telefone,
+                'limit':      limit,
                 'server_msg': server_msg,
             }
         )
@@ -732,6 +743,8 @@ def create_test():
             'uuid':       uuid if use_v2ray else None,
             'app_link':   app_link,
             'hours':      hours,
+            'telefone':   telefone,
+            'limit':      limit,
             'server_msg': server_msg,
         }
     )
@@ -3111,7 +3124,11 @@ def tickets_list():
                            f_status=f_status, busca=busca,
                            categorias=db.TICKET_CATEGORIES,
                            prioridades=db.TICKET_PRIORITIES,
-                           status_labels=db.TICKET_STATUSES)
+                           status_labels=db.TICKET_STATUSES,
+                           informativos=(db.get_informativos(only_active=False)
+                                         if user['role'] == 'admin'
+                                         else db.get_informativos_para_usuario(user['id'])),
+                           is_admin=(user['role'] == 'admin'))
 
 
 @app.route('/tickets/create', methods=['POST'])
@@ -3178,6 +3195,81 @@ def ticket_delete(ticket_id):
         return jsonify(success=False, message='Ticket não encontrado.'), 404
     db.delete_ticket(ticket_id)
     return jsonify(success=True, message='Ticket removido.')
+
+
+# ---------------------------------------------------------------------------
+# Informativos (avisos do Suporte)
+# ---------------------------------------------------------------------------
+# Regras:
+#   - Só o admin cria/edita/exclui informativos.
+#   - TODAS as revendas (qualquer nível na árvore) enxergam os informativos
+#     ativos, independente de parent_id — não há filtro por hierarquia.
+#   - A revenda marca como lido; o admin vê o relatório de quem já leu.
+
+@app.route('/informativos/create', methods=['POST'])
+@admin_required
+def informativo_create():
+    user = get_current_user()
+    ok, msg, iid = db.create_informativo(
+        user['id'],
+        request.form.get('titulo', ''),
+        request.form.get('conteudo', ''),
+    )
+    return jsonify(success=ok, message=msg, id=iid)
+
+
+@app.route('/informativos/update/<int:informativo_id>', methods=['POST'])
+@admin_required
+def informativo_update(informativo_id):
+    if not db.get_informativo(informativo_id):
+        return jsonify(success=False, message='Informativo não encontrado.'), 404
+    ativo = 0 if request.form.get('ativo', '1') in ('0', 'false', 'off') else 1
+    ok, msg = db.update_informativo(
+        informativo_id,
+        request.form.get('titulo', ''),
+        request.form.get('conteudo', ''),
+        ativo,
+    )
+    return jsonify(success=ok, message=msg)
+
+
+@app.route('/informativos/delete/<int:informativo_id>', methods=['POST'])
+@admin_required
+def informativo_delete(informativo_id):
+    db.delete_informativo(informativo_id)
+    return jsonify(success=True, message='Informativo excluído.')
+
+
+@app.route('/informativos/read/<int:informativo_id>', methods=['POST'])
+@login_required
+def informativo_read(informativo_id):
+    """Marca o informativo como lido para o usuário logado."""
+    user = get_current_user()
+    if not db.get_informativo(informativo_id):
+        return jsonify(success=False, message='Informativo não encontrado.'), 404
+    db.mark_informativo_read(informativo_id, user['id'])
+    return jsonify(success=True, message='Marcado como lido.',
+                   restante=db.count_informativos_nao_lidos(user['id']))
+
+
+@app.route('/informativos/<int:informativo_id>/reads')
+@admin_required
+def informativo_reads(informativo_id):
+    """Relatório de leitura: quem leu (com data) e quem ainda não leu."""
+    info = db.get_informativo(informativo_id)
+    if not info:
+        return jsonify(success=False, message='Informativo não encontrado.'), 404
+    lidos = {r['username']: r['read_at']
+             for r in db.get_informativo_reads(informativo_id)}
+    todos = db.get_resellers(parent_id=None)  # todas as revendas, toda a árvore
+    return jsonify(
+        success=True,
+        titulo=info['titulo'],
+        total=len(todos),
+        lidos=[{'username': u['username'], 'read_at': lidos[u['username']]}
+               for u in todos if u['username'] in lidos],
+        nao_lidos=[u['username'] for u in todos if u['username'] not in lidos],
+    )
 
 
 # ---------------------------------------------------------------------------

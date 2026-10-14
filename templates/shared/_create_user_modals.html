@@ -142,19 +142,29 @@
 
 <!-- Result Modal -->
 <div class="modal fade" id="resultModal" tabindex="-1">
-  <div class="modal-dialog modal-sm modal-dialog-centered">
+  <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header bg-success text-white">
         <h6 class="modal-title"><i class="fas fa-check-circle me-2"></i>Criado com sucesso!</h6>
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
       </div>
-      <div class="modal-body" id="resultBody">
+      <div class="modal-body">
+        <label class="form-label small text-muted mb-1">
+          <i class="fas fa-pen me-1"></i>Edite a mensagem antes de enviar ao cliente
+        </label>
+        <textarea id="resultMsg" class="form-control font-monospace" rows="10" spellcheck="false"></textarea>
+        <input type="hidden" id="resultPhone">
       </div>
       <div class="modal-footer">
-        <button type="button" class="btn btn-success w-100" id="copyResultBtn"
-                onclick="copyResult(this)">
-          <i class="fas fa-copy me-2"></i>Copiar tudo
-        </button>
+        <div class="d-flex gap-2 w-100 mb-2">
+          <button type="button" class="btn btn-success flex-fill" id="copyResultBtn"
+                  onclick="copyResult(this)">
+            <i class="fas fa-copy me-2"></i>Copiar
+          </button>
+          <a class="btn btn-outline-success flex-fill" id="waResultBtn" href="#" target="_blank" rel="noopener">
+            <i class="fab fa-whatsapp me-2"></i>WhatsApp
+          </a>
+        </div>
         <button type="button" class="btn btn-secondary w-100" data-bs-dismiss="modal">Fechar</button>
       </div>
     </div>
@@ -163,6 +173,13 @@
 
 <script>
 let lastResultText = '';
+
+// Monta o link do WhatsApp (com o telefone do cliente, se houver) já com o
+// texto editado — assim o revendedor só revisa e aperta enviar.
+function waLink(phone, text) {
+  const digits = (phone || '').replace(/\D/g, '');
+  return 'https://wa.me/' + digits + '?text=' + encodeURIComponent(text || '');
+}
 
 function toggleUUID(cb) {
   document.getElementById('cu_uuid_wrap').style.display = cb.checked ? 'block' : 'none';
@@ -190,20 +207,27 @@ function genTestCreds() {
 }
 
 function showResult(data) {
-  const appLink = data.app_link ? `\n🔗 App: ${data.app_link}` : '';
-  const uuidLine = data.uuid ? `\n🆔 UUID: ${data.uuid}` : '';
-  const hoursLine = data.hours ? `⏱️ Duração: ${data.hours}h\n` : '';
-  lastResultText = `👤 Usuário: ${data.username}\n🔐 Senha: ${data.password}\n${hoursLine}📅 Validade: ${data.expires_at}${uuidLine}${appLink}`;
+  const appLink = data.app_link || '';
+  const lines = [
+    `👤 Usuário: ${data.username}`,
+    `🔐 Senha: ${data.password}`,
+  ];
+  if (data.hours) lines.push(`⏱️ Duração: ${data.hours}h`);
+  lines.push(`📅 Validade: ${data.expires_at}`);
+  if (data.telefone) lines.push(`📱 Telefone: ${data.telefone}`);
+  if (data.limit) lines.push(`🔢 Limite: ${data.limit} conexões`);
+  if (data.uuid) lines.push(`🆔 UUID: ${data.uuid}`);
+  if (appLink) lines.push(`🔗 App: ${appLink}`);
+  lastResultText = lines.join('\n');
 
-  document.getElementById('resultBody').innerHTML = `
-    <div class="font-monospace small p-2 rounded border bg-secondary bg-opacity-10">
-      <div><b>Usuário:</b> ${data.username}</div>
-      <div><b>Senha:</b> ${data.password}</div>
-      ${data.hours ? `<div><b>Duração:</b> ${data.hours}h</div>` : ''}
-      <div><b>Validade:</b> ${data.expires_at}</div>
-      ${data.uuid ? `<div><b>UUID:</b> <span class="text-info">${data.uuid}</span></div>` : ''}
-      ${data.app_link ? `<div><b>App:</b> <a href="${data.app_link}" target="_blank">${data.app_link}</a></div>` : ''}
-    </div>`;
+  // Campo editável: o operador pode ajustar a mensagem (tom, dados, etc.)
+  // antes de copiar/enviar para o cliente.
+  const ta  = document.getElementById('resultMsg');
+  const wa  = document.getElementById('waResultBtn');
+  ta.value  = lastResultText;
+  document.getElementById('resultPhone').value = data.telefone || '';
+  wa.href   = waLink(data.telefone, ta.value);
+  ta.oninput = () => { wa.href = waLink(document.getElementById('resultPhone').value, ta.value); };
 
   // Fecha o modal de criação COMPLETAMENTE antes de abrir o de resultado.
   // Abrir o novo modal durante a animação de fechamento deixava um backdrop
@@ -231,7 +255,7 @@ function showResult(data) {
 }
 
 function copyResult(btnEl) {
-  universalCopy(lastResultText, btnEl);
+  universalCopy(document.getElementById('resultMsg').value, btnEl);
 }
 
 // pmCopy removed — universalCopy (defined in base.html) handles all cases including HTTP + modal focus-trap

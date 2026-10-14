@@ -271,6 +271,9 @@ body {
     </a>
     <a href="{{ url_for('tickets_list') }}" class="nav-link {% if 'ticket' in request.endpoint %}active{% endif %}">
       <i class="fas fa-life-ring"></i>Suporte
+      {% if current_user and current_user.role != 'admin' and informativos_nao_lidos %}
+      <span class="badge bg-danger ms-auto" id="navInfoBadge">{{ informativos_nao_lidos }}</span>
+      {% endif %}
     </a>
     <a href="{{ url_for('notes') }}" class="nav-link {% if request.endpoint == 'notes' %}active{% endif %}">
       <i class="fas fa-sticky-note"></i>Anotações

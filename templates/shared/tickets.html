@@ -4,6 +4,74 @@
 
 {% block content %}
 
+{# ── Informativos (admin publica; todas as revendas leem) ─────────────────── #}
+<div class="card mb-3 border-info">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span><i class="fas fa-bullhorn me-2 text-info"></i>Informativos
+      {% if is_admin %}<span class="badge bg-secondary ms-1">admin</span>{% endif %}
+    </span>
+    {% if is_admin %}
+    <button class="btn btn-sm btn-grad" data-bs-toggle="modal" data-bs-target="#informativoModal"
+            onclick="novoInformativo()">
+      <i class="fas fa-plus me-1"></i>Novo informativo
+    </button>
+    {% endif %}
+  </div>
+  <div class="card-body">
+    {% if not informativos %}
+      <p class="text-muted mb-0 small">
+        {% if is_admin %}Nenhum informativo publicado ainda.{% else %}Nenhum informativo por aqui.{% endif %}
+      </p>
+    {% else %}
+      {% for info in informativos %}
+      <div class="border rounded p-3 mb-2 {{ 'opacity-75' if not info['ativo'] }}"
+           id="info_{{ info['id'] }}" data-lido="{{ '1' if (not is_admin and info['read_at']) else '0' }}">
+        <div class="d-flex justify-content-between align-items-start gap-2">
+          <div class="flex-grow-1">
+            <h6 class="mb-1">
+              {% if not info['ativo'] %}<span class="badge bg-dark border me-1">inativo</span>{% endif %}
+              {{ info['titulo'] }}
+            </h6>
+            <div class="small text-muted mb-1">
+              por {{ info['autor'] or '—' }} • {{ info['created_at'] }}
+            </div>
+            <div class="small" style="white-space:pre-wrap">{{ info['conteudo'] }}</div>
+            {% if not is_admin and info['read_at'] %}
+            <div class="small text-success mt-2" id="lido_txt_{{ info['id'] }}">
+              <i class="fas fa-check-circle me-1"></i>Lido em {{ info['read_at'] }}
+            </div>
+            {% endif %}
+          </div>
+          <div class="text-end flex-shrink-0">
+            {% if is_admin %}
+              <span class="badge bg-info text-dark" style="cursor:pointer" onclick="verLeituras({{ info['id'] }})">
+                <i class="fas fa-users me-1"></i>{{ info['read_count'] }} leram
+              </span>
+              <div class="btn-group btn-group-sm mt-1 d-flex">
+                <button class="btn btn-outline-secondary" title="Editar"
+                        onclick="abrirEditarInformativo({{ info['id'] }})">
+                  <i class="fas fa-pen"></i>
+                </button>
+                <button class="btn btn-outline-danger" title="Excluir"
+                        onclick="excluirInformativo({{ info['id'] }})">
+                  <i class="fas fa-trash"></i>
+                </button>
+              </div>
+            {% else %}
+              {% if not info['read_at'] %}
+              <button class="btn btn-sm btn-info text-dark" onclick="marcarLido({{ info['id'] }})">
+                <i class="fas fa-check me-1"></i>Marcar como lido e fechar
+              </button>
+              {% endif %}
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    {% endif %}
+  </div>
+</div>
+
 {# ── Filtros ──────────────────────────────────────────────────────────────── #}
 <div class="card mb-3">
   <div class="card-body py-3">
@@ -158,10 +226,64 @@
   </div>
 </div>
 
+{% if is_admin %}
+{# ── Modal: novo/editar informativo ───────────────────────────────────────── #}
+<div class="modal fade" id="informativoModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="informativoModalTitle"><i class="fas fa-bullhorn me-2"></i>Novo informativo</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="info_id">
+        <div class="mb-3">
+          <label class="form-label">Título</label>
+          <input type="text" id="info_titulo" class="form-control" maxlength="160"
+                 placeholder="ex: Manutenção programada no servidor X">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Mensagem</label>
+          <textarea id="info_conteudo" class="form-control" rows="7"
+                    placeholder="escreva o aviso que todas as revendas vão ver"></textarea>
+        </div>
+        <div class="form-check form-switch">
+          <input class="form-check-input" type="checkbox" id="info_ativo" checked>
+          <label class="form-check-label" for="info_ativo">Ativo (visível às revendas)</label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" class="btn btn-grad" id="btnSalvarInfo" onclick="salvarInformativo()">Publicar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── Modal: quem leu ──────────────────────────────────────────────────────── #}
+<div class="modal fade" id="readsModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h6 class="modal-title"><i class="fas fa-users me-2"></i>Quem leu o informativo</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="readsBody">Carregando…</div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 {% endblock %}
 
 {% block extra_js %}
 <script>
+  const INFO_DATA = {
+    {%- for info in informativos %}
+    {{ info['id'] }}: {{ {'titulo': info['titulo'], 'conteudo': info['conteudo'], 'ativo': info['ativo']}|tojson }},
+    {%- endfor %}
+  };
+
   function submitTicket() {
     const subject = document.getElementById('tk_subject').value.trim();
     const body    = document.getElementById('tk_body').value.trim();
@@ -176,5 +298,88 @@
       if (d.success) setTimeout(() => location.href = '/tickets/' + d.ticket_id, 700);
     });
   }
+
+  // ── Revenda: marcar como lido e fechar ──
+  function marcarLido(id) {
+    apiPost('/informativos/read/' + id, {}, d => {
+      showToast(d.message, d.success ? 'success' : 'danger');
+      if (!d.success) return;
+      const el = document.getElementById('info_' + id);
+      if (el) { el.style.transition = 'opacity .3s'; el.style.opacity = '0';
+                setTimeout(() => el.remove(), 300); }
+      const badge = document.getElementById('navInfoBadge');
+      if (badge) {
+        const n = (typeof d.restante === 'number') ? d.restante : (parseInt(badge.textContent, 10) - 1);
+        if (n > 0) badge.textContent = n; else badge.remove();
+      }
+    });
+  }
+
+  {% if is_admin %}
+  // ── Admin: criar/editar/excluir ──
+  function novoInformativo() {
+    document.getElementById('informativoModalTitle').innerHTML = '<i class="fas fa-bullhorn me-2"></i>Novo informativo';
+    document.getElementById('info_id').value = '';
+    document.getElementById('info_titulo').value = '';
+    document.getElementById('info_conteudo').value = '';
+    document.getElementById('info_ativo').checked = true;
+    document.getElementById('btnSalvarInfo').textContent = 'Publicar';
+  }
+
+  function abrirEditarInformativo(id) {
+    const info = INFO_DATA[id] || {};
+    document.getElementById('informativoModalTitle').innerHTML = '<i class="fas fa-pen me-2"></i>Editar informativo';
+    document.getElementById('info_id').value = id;
+    document.getElementById('info_titulo').value = info.titulo || '';
+    document.getElementById('info_conteudo').value = info.conteudo || '';
+    document.getElementById('info_ativo').checked = !!info.ativo;
+    document.getElementById('btnSalvarInfo').textContent = 'Salvar';
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('informativoModal')).show();
+  }
+
+  function salvarInformativo() {
+    const id      = document.getElementById('info_id').value;
+    const titulo  = document.getElementById('info_titulo').value.trim();
+    const conteudo= document.getElementById('info_conteudo').value.trim();
+    const ativo   = document.getElementById('info_ativo').checked ? '1' : '0';
+    if (!titulo || !conteudo) { showToast('Preencha título e mensagem', 'danger'); return; }
+    const url = id ? ('/informativos/update/' + id) : '/informativos/create';
+    apiPost(url, { titulo, conteudo, ativo }, d => {
+      showToast(d.message, d.success ? 'success' : 'danger');
+      if (d.success) setTimeout(() => location.reload(), 600);
+    });
+  }
+
+  function excluirInformativo(id) {
+    if (!confirm('Excluir este informativo? As revendas deixam de vê-lo.')) return;
+    apiPost('/informativos/delete/' + id, {}, d => {
+      showToast(d.message, d.success ? 'success' : 'danger');
+      if (d.success) setTimeout(() => location.reload(), 500);
+    });
+  }
+
+  function verLeituras(id) {
+    const body = document.getElementById('readsBody');
+    body.innerHTML = 'Carregando…';
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('readsModal')).show();
+    fetch('/informativos/' + id + '/reads').then(r => r.json()).then(d => {
+      if (!d.success) { body.innerHTML = '<div class="text-danger">' + d.message + '</div>'; return; }
+      let html = '<div class="small text-muted mb-2">' + d.lidos.length + ' de ' + d.total +
+                 ' revendas leram</div>';
+      html += '<h6 class="small text-success"><i class="fas fa-check me-1"></i>Leram</h6>';
+      html += d.lidos.length
+        ? '<ul class="list-group list-group-sm mb-3">' + d.lidos.map(u =>
+            '<li class="list-group-item d-flex justify-content-between py-1">' +
+            '<span>' + u.username + '</span><small class="text-muted">' + u.read_at + '</small></li>').join('') + '</ul>'
+        : '<p class="text-muted small">Ninguém leu ainda.</p>';
+      html += '<h6 class="small text-danger"><i class="fas fa-clock me-1"></i>Não leram (' + d.nao_lidos.length + ')</h6>';
+      html += d.nao_lidos.length
+        ? '<ul class="list-group list-group-sm">' + d.nao_lidos.map(u =>
+            '<li class="list-group-item py-1">' + u + '</li>').join('') + '</ul>'
+        : '<p class="text-muted small">Todos leram. 🎉</p>';
+      body.innerHTML = html;
+    }).catch(() => { body.innerHTML = '<div class="text-danger">Falha ao carregar.</div>'; });
+  }
+  {% endif %}
 </script>
 {% endblock %}

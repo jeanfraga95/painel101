@@ -507,7 +507,7 @@ function viewCredentials(id) {
       let copyText = `👤 Usuário: ${d.username}
 🔐 Senha: ${d.password}
 📅 Validade: ${d.expires_at}
-🔢 Limite: ${d.connection_limit}${telLine}`;
+🔢 Limite: ${d.connection_limit} conexões${telLine}`;
       if (d.v2ray_uuid) copyText += `
 🆔 UUID: ${d.v2ray_uuid}`;
       if (appLink) copyText += `
@@ -521,8 +521,19 @@ function viewCredentials(id) {
           <tr><td class="text-muted">Limite</td><td>${d.connection_limit} conexões</td></tr>
           <tr><td class="text-muted">Telefone</td><td>${d.telefone ? d.telefone : '<span class="text-muted">—</span>'}</td></tr>
         </table>`
-        + uuidLine + appLine;
-      document.getElementById('credCopyBtn').onclick = () => universalCopy(copyText, document.getElementById('credCopyBtn'));
+        + uuidLine + appLine
+        + `<label class="form-label small text-muted mb-1 mt-2"><i class="fas fa-pen me-1"></i>Mensagem editável</label>
+           <textarea id="credMsg" class="form-control font-monospace" rows="8" spellcheck="false"></textarea>`;
+      const ta = document.getElementById('credMsg');
+      ta.value = copyText;
+      const waBtn = document.getElementById('credWaBtn');
+      if (waBtn) {
+        const wl = () => 'https://wa.me/' + (d.telefone || '').replace(/\\D/g, '')
+                      + '?text=' + encodeURIComponent(ta.value);
+        waBtn.href = wl();
+        ta.oninput = () => { waBtn.href = wl(); };
+      }
+      document.getElementById('credCopyBtn').onclick = () => universalCopy(ta.value, document.getElementById('credCopyBtn'));
       new bootstrap.Modal(document.getElementById('credModal')).show();
     });
 }
@@ -677,7 +688,7 @@ setInterval(loadOnlineUsers, 20000);
 
 <!-- Credentials Modal -->
 <div class="modal fade" id="credModal" tabindex="-1">
-  <div class="modal-dialog modal-sm">
+  <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header">
         <h6 class="modal-title"><i class="fas fa-key me-2"></i>Credenciais do Usuário</h6>
@@ -685,9 +696,14 @@ setInterval(loadOnlineUsers, 20000);
       </div>
       <div class="modal-body" id="credBody"></div>
       <div class="modal-footer">
-        <button type="button" class="btn btn-success w-100" id="credCopyBtn">
-          <i class="fas fa-copy me-2"></i>Copiar tudo
-        </button>
+        <div class="d-flex gap-2 w-100 mb-2">
+          <button type="button" class="btn btn-success flex-fill" id="credCopyBtn">
+            <i class="fas fa-copy me-2"></i>Copiar
+          </button>
+          <a class="btn btn-outline-success flex-fill" id="credWaBtn" href="#" target="_blank" rel="noopener">
+            <i class="fab fa-whatsapp me-2"></i>WhatsApp
+          </a>
+        </div>
         <button type="button" class="btn btn-secondary w-100" data-bs-dismiss="modal">Fechar</button>
       </div>
     </div>

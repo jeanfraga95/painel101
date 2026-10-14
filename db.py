@@ -177,6 +177,32 @@ CREATE TABLE IF NOT EXISTS anotacoes (
 
 CREATE INDEX IF NOT EXISTS idx_anotacoes_user ON anotacoes(user_id);
 
+CREATE TABLE IF NOT EXISTS informativos (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    titulo     TEXT    NOT NULL DEFAULT '',
+    conteudo   TEXT    NOT NULL DEFAULT '',
+    ativo      INTEGER NOT NULL DEFAULT 1,
+    created_by INTEGER,
+    created_at TEXT    DEFAULT (datetime('now')),
+    updated_at TEXT    DEFAULT (datetime('now')),
+    FOREIGN KEY (created_by) REFERENCES panel_users(id) ON DELETE SET NULL
+);
+
+-- Quem leu cada informativo (o admin enxerga o relatório de leitura).
+CREATE TABLE IF NOT EXISTS informativo_leituras (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    informativo_id INTEGER NOT NULL,
+    user_id        INTEGER NOT NULL,
+    read_at        TEXT    DEFAULT (datetime('now')),
+    UNIQUE(informativo_id, user_id),
+    FOREIGN KEY (informativo_id) REFERENCES informativos(id)  ON DELETE CASCADE,
+    FOREIGN KEY (user_id)        REFERENCES panel_users(id)   ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_informativos_ativo  ON informativos(ativo);
+CREATE INDEX IF NOT EXISTS idx_info_leitura_info   ON informativo_leituras(informativo_id);
+CREATE INDEX IF NOT EXISTS idx_info_leitura_user   ON informativo_leituras(user_id);
+
 CREATE INDEX IF NOT EXISTS idx_tickets_user    ON tickets(user_id);
 CREATE INDEX IF NOT EXISTS idx_tickets_status  ON tickets(status);
 CREATE INDEX IF NOT EXISTS idx_ticket_msg_tid  ON ticket_messages(ticket_id);
@@ -1065,6 +1091,37 @@ def migrate_schema_tickets():
     conn.close()
 
 
+def migrate_schema_informativos():
+    """Create the informativos tables on an existing database (live migration)."""
+    conn = get_db()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS informativos (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            titulo     TEXT    NOT NULL DEFAULT '',
+            conteudo   TEXT    NOT NULL DEFAULT '',
+            ativo      INTEGER NOT NULL DEFAULT 1,
+            created_by INTEGER,
+            created_at TEXT    DEFAULT (datetime('now')),
+            updated_at TEXT    DEFAULT (datetime('now')),
+            FOREIGN KEY (created_by) REFERENCES panel_users(id) ON DELETE SET NULL
+        );
+        CREATE TABLE IF NOT EXISTS informativo_leituras (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            informativo_id INTEGER NOT NULL,
+            user_id        INTEGER NOT NULL,
+            read_at        TEXT    DEFAULT (datetime('now')),
+            UNIQUE(informativo_id, user_id),
+            FOREIGN KEY (informativo_id) REFERENCES informativos(id) ON DELETE CASCADE,
+            FOREIGN KEY (user_id)        REFERENCES panel_users(id)  ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_informativos_ativo ON informativos(ativo);
+        CREATE INDEX IF NOT EXISTS idx_info_leitura_info  ON informativo_leituras(informativo_id);
+        CREATE INDEX IF NOT EXISTS idx_info_leitura_user  ON informativo_leituras(user_id);
+    """)
+    conn.commit()
+    conn.close()
+
+
 def create_ticket(user_id: int, subject: str, category: str, priority: str,
                   body: str) -> tuple:
     """Open a ticket with its first message. Returns (ok, message, ticket_id)."""
@@ -1277,3 +1334,139 @@ def delete_note(note_id: int, user_id: int) -> bool:
     ok = cur.rowcount > 0
     conn.close()
     return ok
+
+
+# ---------------------------------------------------------------------------
+# Informativos (avisos do admin visíveis para TODAS as revendas)
+# ---------------------------------------------------------------------------
+
+def get_informativos(only_active: bool = False, com_leitura: bool = True) -> list:
+    """Lista informativos (mais recentes primeiro).
+
+    com_leitura adiciona a contagem de leituras em cada linha (read_count),
+    usado no painel do admin.
+    """
+    conn = get_db()
+    where = 'WHERE i.ativo=1' if only_active else ''
+    if com_leitura:
+        rows = conn.execute(f"""
+            SELECT i.*, u.username AS autor,
+                   (SELECT COUNT(*) FROM informativo_leituras l
+                     WHERE l.informativo_id = i.id) AS read_count
+              FROM informativos i
+              LEFT JOIN panel_users u ON u.id = i.created_by
+              {where}
+             ORDER BY i.ativo DESC, i.created_at DESC, i.id DESC
+        """).fetchall()
+    else:
+        rows = conn.execute(f"""
+            SELECT i.*, u.username AS autor
+              FROM informativos i
+              LEFT JOIN panel_users u ON u.id = i.created_by
+              {where}
+             ORDER BY i.created_at DESC, i.id DESC
+        """).fetchall()
+    conn.close()
+    return rows
+
+
+def get_informativo(informativo_id: int):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM informativos WHERE id=?", (informativo_id,)).fetchone()
+    conn.close()
+    return row
+
+
+def create_informativo(created_by: int, titulo: str, conteudo: str) -> tuple:
+    titulo   = (titulo or '').strip()[:160]
+    conteudo = (conteudo or '').strip()
+    if not titulo or not conteudo:
+        return False, 'Preencha título e mensagem do informativo.', None
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO informativos (titulo, conteudo, ativo, created_by) VALUES (?,?,1,?)",
+        (titulo, conteudo, created_by),
+    )
+    new_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return True, 'Informativo publicado.', new_id
+
+
+def update_informativo(informativo_id: int, titulo: str, conteudo: str,
+                       ativo: int = 1) -> tuple:
+    titulo   = (titulo or '').strip()[:160]
+    conteudo = (conteudo or '').strip()
+    if not titulo or not conteudo:
+        return False, 'Preencha título e mensagem do informativo.'
+    conn = get_db()
+    cur = conn.execute(
+        "UPDATE informativos SET titulo=?, conteudo=?, ativo=?, updated_at=datetime('now') "
+        "WHERE id=?",
+        (titulo, conteudo, 1 if ativo else 0, informativo_id),
+    )
+    conn.commit()
+    ok = cur.rowcount > 0
+    conn.close()
+    return ok, 'Informativo atualizado.' if ok else 'Informativo não encontrado.'
+
+
+def delete_informativo(informativo_id: int) -> bool:
+    conn = get_db()
+    cur = conn.execute("DELETE FROM informativos WHERE id=?", (informativo_id,))
+    conn.commit()
+    ok = cur.rowcount > 0
+    conn.close()
+    return ok
+
+
+def mark_informativo_read(informativo_id: int, user_id: int) -> None:
+    """Marca como lido (idempotente). Não sobrescreve a data da 1ª leitura."""
+    conn = get_db()
+    conn.execute(
+        "INSERT OR IGNORE INTO informativo_leituras (informativo_id, user_id) VALUES (?,?)",
+        (informativo_id, user_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_informativo_reads(informativo_id: int) -> list:
+    """Quem já leu o informativo (username + data)."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT u.username, l.read_at FROM informativo_leituras l "
+        "JOIN panel_users u ON u.id = l.user_id "
+        "WHERE l.informativo_id=? ORDER BY l.read_at DESC",
+        (informativo_id,),
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def get_informativos_para_usuario(user_id: int) -> list:
+    """Informativos ativos com flag lido/nao lido para um usuário."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT i.*, "
+        "  (SELECT l.read_at FROM informativo_leituras l "
+        "    WHERE l.informativo_id=i.id AND l.user_id=?) AS read_at "
+        "FROM informativos i WHERE i.ativo=1 "
+        "ORDER BY i.created_at DESC, i.id DESC",
+        (user_id,),
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def count_informativos_nao_lidos(user_id: int) -> int:
+    conn = get_db()
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM informativos i "
+        "WHERE i.ativo=1 AND NOT EXISTS ("
+        "  SELECT 1 FROM informativo_leituras l "
+        "  WHERE l.informativo_id=i.id AND l.user_id=?)",
+        (user_id,),
+    ).fetchone()
+    conn.close()
+    return int(row['n']) if row else 0
