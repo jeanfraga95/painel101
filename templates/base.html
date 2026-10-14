@@ -26,10 +26,10 @@ body {
 
 /* ── Sidebar ──────────────────────────────────────────────────────── */
 .sidebar {
-  width: 240px; min-height: 100vh;
+  width: 240px; height: 100vh;
   background: {{ '#1b1e27' if panel_theme == 'dark' else '#f8f9fa' }};
   border-right: 1px solid {{ 'rgba(255,255,255,.08)' if panel_theme == 'dark' else '#dee2e6' }};
-  position: fixed; top: 0; left: 0; overflow-y: auto; z-index: 1050;
+  position: fixed; top: 0; left: 0; overflow: hidden; z-index: 1050;
 }
 .sidebar .brand {
   padding: 1.15rem 1.25rem;
@@ -71,6 +71,12 @@ body {
   content: ""; flex: 1; height: 1px;
   background: {{ 'rgba(255,255,255,.12)' if panel_theme == 'dark' else 'rgba(0,0,0,.08)' }};
 }
+/* A marca e o rodapé (Perfil/Sair) ficam fixos; só o miolo do menu rola.
+   Sem isso o menu do admin (com a seção "Admin") empurrava o rodapé para
+   fora da tela e o usuário precisava dar zoom-out para ver Perfil/Sair. */
+.sidebar .brand,
+.sidebar .sidebar-user { flex-shrink: 0; }
+.sidebar > nav { overflow-y: auto; min-height: 0; }
 .sidebar .sidebar-user {
   margin: .5rem .75rem .75rem;
   padding: .75rem;
