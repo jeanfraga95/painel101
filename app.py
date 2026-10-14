@@ -268,12 +268,18 @@ def get_settings():
 @app.context_processor
 def inject_globals():
     unread = 0
+    pendentes = []
     try:
         cu = get_current_user()
         if cu:
-            unread = db.count_informativos_nao_lidos(cu['id'])
+            if cu['role'] == 'admin':
+                unread = db.count_informativos_nao_lidos(cu['id'])
+            else:
+                pendentes = [i for i in db.get_informativos_para_usuario(cu['id']) if not i['read_at']]
+                unread = len(pendentes)
     except Exception:
         unread = 0
+        pendentes = []
     return dict(
         settings=get_settings(),
         current_user=get_current_user(),
@@ -281,6 +287,7 @@ def inject_globals():
         panel_color=db.get_setting('panel_color', '#0d6efd'),
         panel_theme=db.get_setting('panel_theme', 'dark'),
         informativos_nao_lidos=unread,
+        informativos_pendentes=pendentes,
     )
 
 
