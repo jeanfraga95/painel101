@@ -58,6 +58,7 @@ try:
     db.migrate_schema_tickets()
     db.migrate_schema_v4()
     db.migrate_schema_informativos()
+    db.migrate_schema_message_template()
 except Exception as _startup_err:
     import traceback as _tb
     print(f"[PMG STARTUP ERROR] DB init failed: {_startup_err}", flush=True)
@@ -269,6 +270,7 @@ def get_settings():
 def inject_globals():
     unread = 0
     pendentes = []
+    msg_template = ''
     try:
         cu = get_current_user()
         if cu:
@@ -277,9 +279,11 @@ def inject_globals():
             else:
                 pendentes = [i for i in db.get_informativos_para_usuario(cu['id']) if not i['read_at']]
                 unread = len(pendentes)
+            msg_template = db.get_message_template(cu['id'])
     except Exception:
         unread = 0
         pendentes = []
+        msg_template = ''
     return dict(
         settings=get_settings(),
         current_user=get_current_user(),
@@ -288,6 +292,7 @@ def inject_globals():
         panel_theme=db.get_setting('panel_theme', 'dark'),
         informativos_nao_lidos=unread,
         informativos_pendentes=pendentes,
+        msg_template=msg_template,
     )
 
 
@@ -2609,6 +2614,20 @@ def random_credentials():
         username=db.random_username('user'),
         password=db.random_password(5),   # 5 digits — easy to type, e.g. 12345
         uuid=db.random_uuid()
+    )
+
+
+@app.route('/users/message-template', methods=['POST'])
+@login_required
+def save_message_template():
+    current_user = get_current_user()
+    template = request.form.get('template', '')
+    db.set_message_template(current_user['id'], template)
+    restored = not template.strip()
+    return jsonify(
+        success=True,
+        template='' if restored else template,
+        message='Formato padrão restaurado.' if restored else 'Formato da mensagem salvo.',
     )
 
 

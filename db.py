@@ -1122,6 +1122,41 @@ def migrate_schema_informativos():
     conn.close()
 
 
+def migrate_schema_message_template():
+    """Add the msg_template column to panel_users (live migration)."""
+    conn = get_db()
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(panel_users)").fetchall()]
+    if 'msg_template' not in cols:
+        conn.execute("ALTER TABLE panel_users ADD COLUMN msg_template TEXT")
+        conn.commit()
+    conn.close()
+
+
+def get_message_template(user_id: int) -> str:
+    """Return the user's saved access-message template ('' = use default)."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT msg_template FROM panel_users WHERE id = ?", (user_id,)
+    ).fetchone()
+    conn.close()
+    if row and row['msg_template']:
+        return row['msg_template']
+    return ''
+
+
+def set_message_template(user_id: int, template: str) -> bool:
+    """Save (or clear, when empty) the user's access-message template."""
+    template = template or ''
+    conn = get_db()
+    conn.execute(
+        "UPDATE panel_users SET msg_template = ? WHERE id = ?",
+        (template if template.strip() else None, user_id),
+    )
+    conn.commit()
+    conn.close()
+    return True
+
+
 def create_ticket(user_id: int, subject: str, category: str, priority: str,
                   body: str) -> tuple:
     """Open a ticket with its first message. Returns (ok, message, ticket_id)."""

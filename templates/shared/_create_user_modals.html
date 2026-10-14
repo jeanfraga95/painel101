@@ -165,7 +165,43 @@
             <i class="fab fa-whatsapp me-2"></i>WhatsApp
           </a>
         </div>
-        <button type="button" class="btn btn-secondary w-100" data-bs-dismiss="modal">Fechar</button>
+        <div class="d-flex gap-2 w-100">
+          <button type="button" class="btn btn-outline-secondary flex-fill" onclick="openMsgTpl()">
+            <i class="fas fa-cog me-2"></i>Formato
+          </button>
+          <button type="button" class="btn btn-secondary flex-fill" data-bs-dismiss="modal">Fechar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Message Template Modal -->
+<div class="modal fade" id="msgTplModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h6 class="modal-title"><i class="fas fa-cog me-2"></i>Formato da mensagem</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="small text-muted mb-2">
+          Monte a mensagem do seu jeito. Os campos abaixo são substituídos pelos dados
+          reais na hora de gerar; <strong>linhas cujos campos ficarem vazios são removidas</strong>.
+        </p>
+        <div class="mb-2" id="tplChips"></div>
+        <textarea id="msgTplText" class="form-control font-monospace" rows="10" spellcheck="false"></textarea>
+      </div>
+      <div class="modal-footer justify-content-between">
+        <button type="button" class="btn btn-outline-warning" onclick="restoreMsgTpl()">
+          <i class="fas fa-rotate-left me-1"></i>Restaurar padrão
+        </button>
+        <div class="d-flex gap-2">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+          <button type="button" class="btn btn-grad" onclick="saveMsgTpl()">
+            <i class="fas fa-save me-1"></i>Salvar
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -173,6 +209,100 @@
 
 <script>
 let lastResultText = '';
+let lastResultVars = null;
+
+// ── Formato da mensagem (salvo por revenda) ────────────────────────────────
+const DEFAULT_MSG_TPL =
+`👤 Usuário: {usuario}
+🔐 Senha: {senha}
+⏱️ Duração: {duracao}h
+📅 Validade: {validade}
+📱 Telefone: {telefone}
+🔢 Limite: {limite} conexões
+🆔 UUID: {uuid}
+🔗 App: {app}`;
+
+let MSG_TPL = {{ (msg_template or '')|tojson }};
+const MSG_FIELDS = ['usuario', 'senha', 'duracao', 'validade', 'telefone', 'limite', 'uuid', 'app'];
+
+function effectiveTpl() { return (MSG_TPL && MSG_TPL.trim()) ? MSG_TPL : DEFAULT_MSG_TPL; }
+
+// Substitui os campos e remove linhas cujos campos ficaram vazios.
+function renderMsgTpl(vars) {
+  const EMPTY = '\u0000';
+  let s = effectiveTpl();
+  MSG_FIELDS.forEach(k => {
+    const v = vars[k];
+    const val = (v === undefined || v === null || v === '') ? EMPTY : String(v);
+    s = s.split('{' + k + '}').join(val);
+  });
+  s = s.split('\n').filter(line => line.indexOf(EMPTY) === -1).join('\n');
+  s = s.split(EMPTY).join('');
+  return s.trim();
+}
+
+function _insertAtCursor(ta, text) {
+  const s = ta.selectionStart, e = ta.selectionEnd;
+  ta.value = ta.value.slice(0, s) + text + ta.value.slice(e);
+  ta.selectionStart = ta.selectionEnd = s + text.length;
+  ta.focus();
+}
+
+function openMsgTpl() {
+  const chips = document.getElementById('tplChips');
+  if (chips && !chips.dataset.built) {
+    MSG_FIELDS.forEach(k => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'btn btn-sm btn-outline-info me-1 mb-1';
+      b.textContent = '{' + k + '}';
+      b.onclick = () => _insertAtCursor(document.getElementById('msgTplText'), '{' + k + '}');
+      chips.appendChild(b);
+    });
+    chips.dataset.built = '1';
+  }
+  document.getElementById('msgTplText').value = effectiveTpl();
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('msgTplModal')).show();
+}
+
+function saveMsgTpl() {
+  const tpl = document.getElementById('msgTplText').value;
+  apiPost('/users/message-template', { template: tpl }, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (!d.success) return;
+    MSG_TPL = d.template || '';
+    refreshResultMsg();
+    if (typeof refreshCredMsg === 'function') refreshCredMsg();
+    bootstrap.Modal.getInstance(document.getElementById('msgTplModal'))?.hide();
+  });
+}
+
+function restoreMsgTpl() {
+  if (!confirm('Voltar a mensagem para o formato padrão?')) return;
+  document.getElementById('msgTplText').value = DEFAULT_MSG_TPL;
+  apiPost('/users/message-template', { template: '' }, d => {
+    showToast(d.message, d.success ? 'success' : 'danger');
+    if (!d.success) return;
+    MSG_TPL = '';
+    refreshResultMsg();
+    if (typeof refreshCredMsg === 'function') refreshCredMsg();
+    bootstrap.Modal.getInstance(document.getElementById('msgTplModal'))?.hide();
+  });
+}
+
+function refreshResultMsg() {
+  const ta = document.getElementById('resultMsg');
+  if (!ta || !lastResultVars) return;
+  lastResultText = renderMsgTpl(lastResultVars);
+  ta.value = lastResultText;
+  const wa = document.getElementById('waResultBtn');
+  if (wa) {
+    const phone = document.getElementById('resultPhone').value || '';
+    const wl = () => waLink(phone, ta.value);
+    wa.href = wl();
+    ta.oninput = () => { wa.href = wl(); };
+  }
+}
 
 // Monta o link do WhatsApp (com o telefone do cliente, se houver) já com o
 // texto editado — assim o revendedor só revisa e aperta enviar.
@@ -208,26 +338,20 @@ function genTestCreds() {
 
 function showResult(data) {
   const appLink = data.app_link || '';
-  const lines = [
-    `👤 Usuário: ${data.username}`,
-    `🔐 Senha: ${data.password}`,
-  ];
-  if (data.hours) lines.push(`⏱️ Duração: ${data.hours}h`);
-  lines.push(`📅 Validade: ${data.expires_at}`);
-  if (data.telefone) lines.push(`📱 Telefone: ${data.telefone}`);
-  if (data.limit) lines.push(`🔢 Limite: ${data.limit} conexões`);
-  if (data.uuid) lines.push(`🆔 UUID: ${data.uuid}`);
-  if (appLink) lines.push(`🔗 App: ${appLink}`);
-  lastResultText = lines.join('\n');
+  // Dados reais deste usuário — viram os valores dos campos do formato.
+  lastResultVars = {
+    usuario:  data.username   || '',
+    senha:    data.password   || '',
+    duracao:  data.hours      || '',
+    validade: data.expires_at || '',
+    telefone: data.telefone   || '',
+    limite:   data.limit      || '',
+    uuid:     data.uuid       || '',
+    app:      appLink,
+  };
 
-  // Campo editável: o operador pode ajustar a mensagem (tom, dados, etc.)
-  // antes de copiar/enviar para o cliente.
-  const ta  = document.getElementById('resultMsg');
-  const wa  = document.getElementById('waResultBtn');
-  ta.value  = lastResultText;
   document.getElementById('resultPhone').value = data.telefone || '';
-  wa.href   = waLink(data.telefone, ta.value);
-  ta.oninput = () => { wa.href = waLink(document.getElementById('resultPhone').value, ta.value); };
+  refreshResultMsg();
 
   // Fecha o modal de criação COMPLETAMENTE antes de abrir o de resultado.
   // Abrir o novo modal durante a animação de fechamento deixava um backdrop

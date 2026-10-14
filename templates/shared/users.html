@@ -490,6 +490,21 @@ function editUser(id, currentLimit) {
   openEditModal(id, '(usuário)', currentLimit, '');
 }
 
+let lastCredVars = null;
+
+function refreshCredMsg() {
+  const ta = document.getElementById('credMsg');
+  if (!ta || !lastCredVars) return;
+  ta.value = renderMsgTpl(lastCredVars);
+  const waBtn = document.getElementById('credWaBtn');
+  if (waBtn) {
+    const phone = (lastCredVars.telefone || '').replace(/\D/g, '');
+    const wl = () => 'https://wa.me/' + phone + '?text=' + encodeURIComponent(ta.value);
+    waBtn.href = wl();
+    ta.oninput = () => { waBtn.href = wl(); };
+  }
+}
+
 function viewCredentials(id) {
   fetch(`/users/credentials/${id}`)
     .then(r => r.json())
@@ -501,17 +516,17 @@ function viewCredentials(id) {
            <code class="small text-info text-break">${d.v2ray_uuid}</code></div>` : '';
       const appLine = appLink
         ? `<div class="mt-2"><small class="text-muted">App:</small> <a href="${appLink}" target="_blank" class="small">${appLink}</a></div>` : '';
-      const telLine = d.telefone
-        ? `\n📱 Telefone: ${d.telefone}` : '';
 
-      let copyText = `👤 Usuário: ${d.username}
-🔐 Senha: ${d.password}
-📅 Validade: ${d.expires_at}
-🔢 Limite: ${d.connection_limit} conexões${telLine}`;
-      if (d.v2ray_uuid) copyText += `
-🆔 UUID: ${d.v2ray_uuid}`;
-      if (appLink) copyText += `
-🔗 App: ${appLink}`;
+      lastCredVars = {
+        usuario:  d.username || '',
+        senha:    d.password || '',
+        duracao:  '',
+        validade: d.expires_at || '',
+        telefone: d.telefone || '',
+        limite:   d.connection_limit || '',
+        uuid:     d.v2ray_uuid || '',
+        app:      appLink,
+      };
 
       document.getElementById('credBody').innerHTML = `
         <table class="table table-sm mb-2">
@@ -524,16 +539,8 @@ function viewCredentials(id) {
         + uuidLine + appLine
         + `<label class="form-label small text-muted mb-1 mt-2"><i class="fas fa-pen me-1"></i>Mensagem editável</label>
            <textarea id="credMsg" class="form-control font-monospace" rows="8" spellcheck="false"></textarea>`;
-      const ta = document.getElementById('credMsg');
-      ta.value = copyText;
-      const waBtn = document.getElementById('credWaBtn');
-      if (waBtn) {
-        const wl = () => 'https://wa.me/' + (d.telefone || '').replace(/\\D/g, '')
-                      + '?text=' + encodeURIComponent(ta.value);
-        waBtn.href = wl();
-        ta.oninput = () => { waBtn.href = wl(); };
-      }
-      document.getElementById('credCopyBtn').onclick = () => universalCopy(ta.value, document.getElementById('credCopyBtn'));
+      refreshCredMsg();
+      document.getElementById('credCopyBtn').onclick = () => universalCopy(document.getElementById('credMsg').value, document.getElementById('credCopyBtn'));
       new bootstrap.Modal(document.getElementById('credModal')).show();
     });
 }
@@ -704,7 +711,12 @@ setInterval(loadOnlineUsers, 20000);
             <i class="fab fa-whatsapp me-2"></i>WhatsApp
           </a>
         </div>
-        <button type="button" class="btn btn-secondary w-100" data-bs-dismiss="modal">Fechar</button>
+        <div class="d-flex gap-2 w-100">
+          <button type="button" class="btn btn-outline-secondary flex-fill" onclick="openMsgTpl()">
+            <i class="fas fa-cog me-2"></i>Formato
+          </button>
+          <button type="button" class="btn btn-secondary flex-fill" data-bs-dismiss="modal">Fechar</button>
+        </div>
       </div>
     </div>
   </div>
