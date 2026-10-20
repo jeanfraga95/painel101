@@ -159,7 +159,7 @@
                 <button class="btn btn-outline-warning" onclick="suspendUser({{ u.id }}, this)" title="Suspender/Ativar">
                   <i class="fas fa-ban"></i>
                 </button>
-                <button class="btn btn-outline-secondary" onclick="recreateOnServer({{ u.id }}, this)" title="Recriar no servidor (se não existir)">
+                <button class="btn btn-outline-secondary" onclick="recreateOnServer({{ u.id }}, this)" title="Sincronizar com o painel (data de vencimento + cria se faltar)">
                   <i class="fas fa-sync-alt"></i>
                 </button>
                 <button class="btn btn-outline-info" onclick="openEditModal({{ u.id }}, '{{ u.username }}', {{ u.connection_limit }}, '{{ u.expires_at[:10] if u.expires_at else '' }}', '{{ u.telefone or '' }}')" title="Editar / Servidores">
@@ -356,7 +356,7 @@ function suspendUser(id, btn) {
 }
 
 function recreateOnServer(id, btn) {
-  if (!confirm('Recriar este usuário nos servidores onde ele não existe?\nSe já existir, nada será alterado.')) return;
+  if (!confirm('Sincronizar este usuário com os servidores?\n• O vencimento da máquina passa a ser o do painel.\n• Se não existir, será criado.')) return;
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
   apiPost(`/users/recreate_on_server/${id}`, {}, d => {
     if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-sync-alt"></i>'; }

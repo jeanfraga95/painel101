@@ -1097,8 +1097,21 @@ def recreate_user_on_server(user_id):
             already_exists = ck_ok and 'EXISTS' in (ck_out or '')
 
         if already_exists:
-            results.append({'server': srv['name'], 'action': 'já existe', 'ok': True})
-            continue
+            # Já existe na máquina: só sincroniza a EXPIRAÇÃO com o painel.
+            # O usuário pode existir mas com data divergente (a máquina mostra
+            # "expirado" enquanto o painel ainda tem validade). O botão
+            # "Sincronizar" força a data da máquina a bater com a do painel.
+            exp_date = (u.get('expires_at') or '')[:10]
+            if exp_date:
+                ch_ok, ch_out = sc.send_command(
+                    srv['ip'], srv['module_port'], srv['auth_token'],
+                    f"chage -E {exp_date} {u['username']} 2>&1 && echo EXP_SYNC_OK || echo EXP_SYNC_FAIL"
+                )
+                if ch_ok and 'EXP_SYNC_OK' in (ch_out or ''):
+                    results.append({'server': srv['name'], 'action': f'expiração sincronizada p/ {exp_date}', 'ok': True})
+                    continue
+            # Sem data no painel, ou chage falhou (ex.: só existe no Xray,
+            # sem conta Linux) → recria embaixo para garantir.
 
         # ── Cria o usuário (ou adiciona UUID ao Xray se estiver faltando) ──
         c_ok, c_msg = sc.create_ssh_user_on_server(
@@ -1106,7 +1119,10 @@ def recreate_user_on_server(user_id):
             u['username'], u['password'], exp_days, u['connection_limit'],
             uuid=u['v2ray_uuid']
         )
-        results.append({'server': srv['name'], 'action': 'criado' if c_ok else f'erro: {c_msg}', 'ok': c_ok})
+        action = 'criado' if c_ok else f'erro: {c_msg}'
+        # Se o usuário já existia e só estávamos re-sincronizando a data,
+        # mantém a ação clara no resumo.
+        results.append({'server': srv['name'], 'action': action, 'ok': c_ok})
 
     any_ok = any(r['ok'] for r in results)
     summary = '; '.join(f"{r['server']}: {r['action']}" for r in results)
