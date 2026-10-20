@@ -1,19 +1,19 @@
 {% extends 'base.html' %}
 {% block title %}Suporte — {{ panel_name }}{% endblock %}
-{% block page_title %}<i class="fas fa-life-ring me-2"></i>Suporte{% endblock %}
+{% block page_title %}<i class="fas fa-life-ring me-2" aria-hidden="true"></i>Suporte{% endblock %}
 
 {% block content %}
 
 {# ── Informativos (admin publica; todas as revendas leem) ─────────────────── #}
 <div class="card mb-3 border-info">
   <div class="card-header d-flex justify-content-between align-items-center">
-    <span><i class="fas fa-bullhorn me-2 text-info"></i>Informativos
+    <span><i class="fas fa-bullhorn me-2 text-info" aria-hidden="true"></i>Informativos
       {% if is_admin %}<span class="badge bg-secondary ms-1">admin</span>{% endif %}
     </span>
     {% if is_admin %}
     <button class="btn btn-sm btn-grad" data-bs-toggle="modal" data-bs-target="#informativoModal"
             onclick="novoInformativo()">
-      <i class="fas fa-plus me-1"></i>Novo informativo
+      <i class="fas fa-plus me-1" aria-hidden="true"></i>Novo informativo
     </button>
     {% endif %}
   </div>
@@ -38,29 +38,29 @@
             <div class="small" style="white-space:pre-wrap">{{ info['conteudo'] }}</div>
             {% if not is_admin and info['read_at'] %}
             <div class="small text-success mt-2" id="lido_txt_{{ info['id'] }}">
-              <i class="fas fa-check-circle me-1"></i>Lido em {{ info['read_at'] }}
+              <i class="fas fa-check-circle me-1" aria-hidden="true"></i>Lido em {{ info['read_at'] }}
             </div>
             {% endif %}
           </div>
           <div class="text-end flex-shrink-0">
             {% if is_admin %}
               <span class="badge bg-info text-dark" style="cursor:pointer" onclick="verLeituras({{ info['id'] }})">
-                <i class="fas fa-users me-1"></i>{{ info['read_count'] }} leram
+                <i class="fas fa-users me-1" aria-hidden="true"></i>{{ info['read_count'] }} leram
               </span>
               <div class="btn-group btn-group-sm mt-1 d-flex">
                 <button class="btn btn-outline-secondary" title="Editar"
-                        onclick="abrirEditarInformativo({{ info['id'] }})">
-                  <i class="fas fa-pen"></i>
+                        onclick="abrirEditarInformativo({{ info['id'] }})" aria-label="Editar">
+                  <i class="fas fa-pen" aria-hidden="true"></i>
                 </button>
                 <button class="btn btn-outline-danger" title="Excluir"
-                        onclick="excluirInformativo({{ info['id'] }})">
-                  <i class="fas fa-trash"></i>
+                        onclick="excluirInformativo({{ info['id'] }})" aria-label="Excluir">
+                  <i class="fas fa-trash" aria-hidden="true"></i>
                 </button>
               </div>
             {% else %}
               {% if not info['read_at'] %}
               <button class="btn btn-sm btn-info text-dark" onclick="marcarLido({{ info['id'] }})">
-                <i class="fas fa-check me-1"></i>Marcar como lido e fechar
+                <i class="fas fa-check me-1" aria-hidden="true"></i>Marcar como lido e fechar
               </button>
               {% endif %}
             {% endif %}
@@ -78,16 +78,16 @@
 
     <div class="d-flex flex-wrap gap-2 mb-3">
       <a class="filter-chip {{ 'active' if f_status=='' }}" href="?status=">
-        <i class="fas fa-list-ul"></i>Todos <span class="chip-n">{{ counts.all }}</span>
+        <i class="fas fa-list-ul" aria-hidden="true"></i>Todos <span class="chip-n">{{ counts.all }}</span>
       </a>
       <a class="filter-chip {{ 'active' if f_status=='open' }}" href="?status=open">
-        <i class="fas fa-folder-open"></i>Abertos <span class="chip-n">{{ counts.open }}</span>
+        <i class="fas fa-folder-open" aria-hidden="true"></i>Abertos <span class="chip-n">{{ counts.open }}</span>
       </a>
       <a class="filter-chip {{ 'active' if f_status=='answered' }}" href="?status=answered">
-        <i class="fas fa-reply"></i>Respondidos <span class="chip-n">{{ counts.answered }}</span>
+        <i class="fas fa-reply" aria-hidden="true"></i>Respondidos <span class="chip-n">{{ counts.answered }}</span>
       </a>
       <a class="filter-chip {{ 'active' if f_status=='closed' }}" href="?status=closed">
-        <i class="fas fa-check-circle"></i>Fechados <span class="chip-n">{{ counts.closed }}</span>
+        <i class="fas fa-check-circle" aria-hidden="true"></i>Fechados <span class="chip-n">{{ counts.closed }}</span>
       </a>
     </div>
 
@@ -96,13 +96,13 @@
         <div class="col-auto">
           <button class="btn btn-grad" type="button"
                   data-bs-toggle="modal" data-bs-target="#newTicketModal">
-            <i class="fas fa-plus me-1"></i>Novo Ticket
+            <i class="fas fa-plus me-1" aria-hidden="true"></i>Novo Ticket
           </button>
         </div>
         <div class="col-sm-5">
           <label class="form-label small text-muted mb-1">Buscar por assunto</label>
           <div class="input-group input-group-sm">
-            <span class="input-group-text"><i class="fas fa-search"></i></span>
+            <span class="input-group-text"><i class="fas fa-search" aria-hidden="true"></i></span>
             <input type="text" name="q" value="{{ busca }}" class="form-control"
                    placeholder="palavra no assunto">
           </div>
@@ -185,7 +185,7 @@
   <div class="modal-dialog modal-lg">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title"><i class="fas fa-plus me-2"></i>Novo Ticket</h5>
+        <h5 class="modal-title"><i class="fas fa-plus me-2" aria-hidden="true"></i>Novo Ticket</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
@@ -232,7 +232,7 @@
   <div class="modal-dialog modal-lg">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title" id="informativoModalTitle"><i class="fas fa-bullhorn me-2"></i>Novo informativo</h5>
+        <h5 class="modal-title" id="informativoModalTitle"><i class="fas fa-bullhorn me-2" aria-hidden="true"></i>Novo informativo</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
@@ -265,7 +265,7 @@
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header">
-        <h6 class="modal-title"><i class="fas fa-users me-2"></i>Quem leu o informativo</h6>
+        <h6 class="modal-title"><i class="fas fa-users me-2" aria-hidden="true"></i>Quem leu o informativo</h6>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body" id="readsBody">Carregando…</div>
@@ -318,7 +318,7 @@
   {% if is_admin %}
   // ── Admin: criar/editar/excluir ──
   function novoInformativo() {
-    document.getElementById('informativoModalTitle').innerHTML = '<i class="fas fa-bullhorn me-2"></i>Novo informativo';
+    document.getElementById('informativoModalTitle').innerHTML = '<i class="fas fa-bullhorn me-2" aria-hidden="true"></i>Novo informativo';
     document.getElementById('info_id').value = '';
     document.getElementById('info_titulo').value = '';
     document.getElementById('info_conteudo').value = '';
@@ -328,7 +328,7 @@
 
   function abrirEditarInformativo(id) {
     const info = INFO_DATA[id] || {};
-    document.getElementById('informativoModalTitle').innerHTML = '<i class="fas fa-pen me-2"></i>Editar informativo';
+    document.getElementById('informativoModalTitle').innerHTML = '<i class="fas fa-pen me-2" aria-hidden="true"></i>Editar informativo';
     document.getElementById('info_id').value = id;
     document.getElementById('info_titulo').value = info.titulo || '';
     document.getElementById('info_conteudo').value = info.conteudo || '';
@@ -350,8 +350,8 @@
     });
   }
 
-  function excluirInformativo(id) {
-    if (!confirm('Excluir este informativo? As revendas deixam de vê-lo.')) return;
+  async function excluirInformativo(id) {
+    if (!await confirmDialog('Excluir este informativo? As revendas deixam de vê-lo.')) return;
     apiPost('/informativos/delete/' + id, {}, d => {
       showToast(d.message, d.success ? 'success' : 'danger');
       if (d.success) setTimeout(() => location.reload(), 500);
@@ -366,13 +366,13 @@
       if (!d.success) { body.innerHTML = '<div class="text-danger">' + d.message + '</div>'; return; }
       let html = '<div class="small text-muted mb-2">' + d.lidos.length + ' de ' + d.total +
                  ' revendas leram</div>';
-      html += '<h6 class="small text-success"><i class="fas fa-check me-1"></i>Leram</h6>';
+      html += '<h6 class="small text-success"><i class="fas fa-check me-1" aria-hidden="true"></i>Leram</h6>';
       html += d.lidos.length
         ? '<ul class="list-group list-group-sm mb-3">' + d.lidos.map(u =>
             '<li class="list-group-item d-flex justify-content-between py-1">' +
             '<span>' + u.username + '</span><small class="text-muted">' + u.read_at + '</small></li>').join('') + '</ul>'
         : '<p class="text-muted small">Ninguém leu ainda.</p>';
-      html += '<h6 class="small text-danger"><i class="fas fa-clock me-1"></i>Não leram (' + d.nao_lidos.length + ')</h6>';
+      html += '<h6 class="small text-danger"><i class="fas fa-clock me-1" aria-hidden="true"></i>Não leram (' + d.nao_lidos.length + ')</h6>';
       html += d.nao_lidos.length
         ? '<ul class="list-group list-group-sm">' + d.nao_lidos.map(u =>
             '<li class="list-group-item py-1">' + u + '</li>').join('') + '</ul>'

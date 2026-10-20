@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block title %}Servidores — {{ panel_name }}{% endblock %}
-{% block page_title %}<i class="fas fa-server me-2"></i>Servidores SSH{% endblock %}
+{% block page_title %}<i class="fas fa-server me-2" aria-hidden="true"></i>Servidores SSH{% endblock %}
 
 {% block content %}
 <div class="row g-3 mb-3">
@@ -8,25 +8,25 @@
   <div class="col-md-3">
     <div class="card">
       <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
-        <span><i class="fas fa-tags me-2"></i>Categorias</span>
+        <span><i class="fas fa-tags me-2" aria-hidden="true"></i>Categorias</span>
         <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#addCatModal">
-          <i class="fas fa-plus"></i>
+          <i class="fas fa-plus" aria-hidden="true"></i>
         </button>
       </div>
       <div class="list-group list-group-flush">
         <a href="{{ url_for('servers_list') }}" class="list-group-item list-group-item-action {% if not request.args.get('cat') %}active{% endif %}">
-          <i class="fas fa-layer-group me-2"></i>Todos os servidores
+          <i class="fas fa-layer-group me-2" aria-hidden="true"></i>Todos os servidores
           <span class="badge bg-secondary float-end">{{ servers|length }}</span>
         </a>
         {% for cat in categories %}
         <div class="list-group-item d-flex justify-content-between align-items-center py-2">
           <a href="{{ url_for('servers_list') }}?cat={{ cat.id }}" class="text-decoration-none flex-grow-1
              {{ 'fw-bold text-primary' if request.args.get('cat')|int == cat.id else '' }}">
-            <i class="fas fa-tag me-2"></i>{{ cat.name }}
+            <i class="fas fa-tag me-2" aria-hidden="true"></i>{{ cat.name }}
           </a>
           <button class="btn btn-xs btn-sm btn-outline-danger ms-1"
-                  onclick="deleteCategory({{ cat.id }}, '{{ cat.name }}')" title="Remover categoria">
-            <i class="fas fa-times"></i>
+                  onclick="deleteCategory({{ cat.id }}, '{{ cat.name }}')" title="Remover categoria" aria-label="Remover categoria">
+            <i class="fas fa-times" aria-hidden="true"></i>
           </button>
         </div>
         {% else %}
@@ -40,7 +40,7 @@
   <div class="col-md-9">
     <div class="d-flex gap-2 mb-3">
       <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addServerModal">
-        <i class="fas fa-plus me-2"></i>Adicionar Servidor
+        <i class="fas fa-plus me-2" aria-hidden="true"></i>Adicionar Servidor
       </button>
     </div>
 
@@ -52,7 +52,7 @@
         <div class="card h-100">
           <div class="card-header d-flex justify-content-between align-items-center">
             <div>
-              <strong><i class="fas fa-server me-2 text-primary"></i>{{ srv.name }}</strong>
+              <strong><i class="fas fa-server me-2 text-primary" aria-hidden="true"></i>{{ srv.name }}</strong>
               {% if srv.category_id and cat_map.get(srv.category_id) %}
               <span class="badge bg-info ms-1">{{ cat_map[srv.category_id] }}</span>
               {% endif %}
@@ -81,32 +81,32 @@
           </div>
           <div class="card-footer d-flex flex-wrap gap-1">
             <button class="btn btn-sm btn-outline-secondary" onclick="openEditServer({{ srv.id }}, '{{ srv.name }}', '{{ srv.ip }}', {{ srv.module_port }}, '{{ srv.root_user }}', {{ srv.category_id or 'null' }})">
-              <i class="fas fa-edit me-1"></i>Editar
+              <i class="fas fa-edit me-1" aria-hidden="true"></i>Editar
             </button>
             <button class="btn btn-sm btn-outline-primary" onclick="installModules({{ srv.id }})">
-              <i class="fas fa-upload me-1"></i>Módulos
+              <i class="fas fa-upload me-1" aria-hidden="true"></i>Módulos
             </button>
             <button class="btn btn-sm btn-outline-danger" onclick="diagnoseServer({{ srv.id }})">
-              <i class="fas fa-stethoscope me-1"></i>Diagnosticar
+              <i class="fas fa-stethoscope me-1" aria-hidden="true"></i>Diagnosticar
             </button>
             <button class="btn btn-sm btn-outline-success" onclick="syncServer({{ srv.id }})">
-              <i class="fas fa-sync me-1"></i>Sincronizar
+              <i class="fas fa-sync me-1" aria-hidden="true"></i>Sincronizar
             </button>
             <button class="btn btn-sm btn-success" onclick="syncServer({{ srv.id }}, true)" title="Envia TODOS os usuários ativos sem verificar duplicatas — ideal para servidor novo">
-              <i class="fas fa-sync me-1"></i>Sync Total
+              <i class="fas fa-sync me-1" aria-hidden="true"></i>Sync Total
             </button>
             <button class="btn btn-sm btn-outline-warning text-warning" data-bs-toggle="modal" data-bs-target="#cmdModal_{{ srv.id }}">
-              <i class="fas fa-terminal me-1"></i>Comando
+              <i class="fas fa-terminal me-1" aria-hidden="true"></i>Comando
             </button>
             <button class="btn btn-sm btn-outline-info text-info" id="vncName_{{ srv.id }}" data-vnc-install="{{ srv.id }}" title="Instala/configura VNC para recuperar a máquina quando o SSH não está disponível">
-              <i class="fas fa-download me-1"></i>VNC
+              <i class="fas fa-download me-1" aria-hidden="true"></i>VNC
             </button>
             <button class="btn btn-sm btn-outline-secondary" data-vnc-open="{{ srv.id }}"
                     title="Abrir o console do servidor no navegador">
-              <i class="fas fa-display me-1"></i>Console
+              <i class="fas fa-display me-1" aria-hidden="true"></i>Console
             </button>
             <button class="btn btn-sm btn-outline-danger" onclick="deleteServer({{ srv.id }}, '{{ srv.name }}')">
-              <i class="fas fa-trash"></i>
+              <i class="fas fa-trash" aria-hidden="true"></i>
             </button>
           </div>
         </div>
@@ -117,7 +117,7 @@
         <div class="modal-dialog">
           <div class="modal-content">
             <div class="modal-header">
-              <h6 class="modal-title"><i class="fas fa-terminal me-2"></i>{{ srv.name }}</h6>
+              <h6 class="modal-title"><i class="fas fa-terminal me-2" aria-hidden="true"></i>{{ srv.name }}</h6>
               <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
@@ -140,7 +140,7 @@
             </div>
             <div class="modal-footer">
               <button class="btn btn-warning text-dark" onclick="runCommand({{ srv.id }})">
-                <i class="fas fa-play me-2"></i>Executar
+                <i class="fas fa-play me-2" aria-hidden="true"></i>Executar
               </button>
             </div>
           </div>
@@ -172,13 +172,13 @@
         <div class="modal-dialog modal-xl modal-dialog-centered">
           <div class="modal-content">
             <div class="modal-header py-2">
-              <h6 class="modal-title"><i class="fas fa-desktop me-2"></i>Console — {{ srv.name }}</h6>
+              <h6 class="modal-title"><i class="fas fa-desktop me-2" aria-hidden="true"></i>Console — {{ srv.name }}</h6>
               <div class="ms-auto d-flex gap-1 align-items-center">
                 <span id="vncBadge_{{ srv.id }}" class="badge text-bg-secondary me-2"></span>
                 <button type="button" class="btn btn-sm btn-outline-secondary" id="vncFs_{{ srv.id }}" data-vnc-fs="{{ srv.id }}"
-                        title="Tela cheia"><i class="fas fa-expand"></i></button>
+                        title="Tela cheia" aria-label="Tela cheia"><i class="fas fa-expand" aria-hidden="true"></i></button>
                 <button type="button" class="btn btn-sm btn-outline-warning" id="vncCad_{{ srv.id }}" data-vnc-cad="{{ srv.id }}"
-                        title="Enviar Ctrl+Alt+Del"><i class="fas fa-power-off"></i></button>
+                        title="Enviar Ctrl+Alt+Del" aria-label="Enviar Ctrl+Alt+Del"><i class="fas fa-power-off" aria-hidden="true"></i></button>
                 <button type="button" class="btn btn-sm btn-close" data-bs-dismiss="modal"></button>
               </div>
             </div>
@@ -190,10 +190,10 @@
               <div class="small text-muted" id="vncFw_{{ srv.id }}"></div>
               <div class="d-flex gap-2">
                 <button type="button" class="btn btn-sm btn-outline-secondary" id="vncInstall_{{ srv.id }}" data-vnc-reinstall="{{ srv.id }}">
-                  <i class="fas fa-rotate me-1"></i>Reinstalar
+                  <i class="fas fa-rotate me-1" aria-hidden="true"></i>Reinstalar
                 </button>
                 <button type="button" class="btn btn-sm btn-outline-warning" id="vncToggle_{{ srv.id }}" data-vnc-toggle="{{ srv.id }}">
-                  <i class="fas fa-globe me-1"></i><span id="vncToggleTxt_{{ srv.id }}"></span>
+                  <i class="fas fa-globe me-1" aria-hidden="true"></i><span id="vncToggleTxt_{{ srv.id }}"></span>
                 </button>
               </div>
             </div>
@@ -203,7 +203,7 @@
       {% endif %}
       {% else %}
       <div class="col-12 text-center text-muted py-5">
-        <i class="fas fa-server fa-3x mb-3 opacity-25"></i>
+        <i class="fas fa-server fa-3x mb-3 opacity-25" aria-hidden="true"></i>
         <p>Nenhum servidor. Adicione um para começar.</p>
       </div>
       {% endfor %}
@@ -216,7 +216,7 @@
   <div class="modal-dialog modal-sm">
     <div class="modal-content">
       <div class="modal-header">
-        <h6 class="modal-title"><i class="fas fa-tag me-2"></i>Nova Categoria</h6>
+        <h6 class="modal-title"><i class="fas fa-tag me-2" aria-hidden="true"></i>Nova Categoria</h6>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
@@ -234,7 +234,7 @@
   <div class="modal-dialog modal-lg">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title"><i class="fas fa-plus me-2"></i>Adicionar Servidor</h5>
+        <h5 class="modal-title"><i class="fas fa-plus me-2" aria-hidden="true"></i>Adicionar Servidor</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
@@ -272,7 +272,7 @@
             <label class="form-label">Token de autenticação</label>
             <div class="input-group">
               <input type="text" id="as_token" class="form-control font-monospace">
-              <button class="btn btn-outline-secondary" onclick="genToken()"><i class="fas fa-random"></i></button>
+              <button class="btn btn-outline-secondary" onclick="genToken()"><i class="fas fa-random" aria-hidden="true"></i></button>
             </div>
           </div>
         </div>
@@ -280,7 +280,7 @@
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
         <button type="button" class="btn btn-primary" onclick="submitAddServer()">
-          <i class="fas fa-plus me-2"></i>Adicionar
+          <i class="fas fa-plus me-2" aria-hidden="true"></i>Adicionar
         </button>
       </div>
     </div>
@@ -292,7 +292,7 @@
   <div class="modal-dialog modal-lg">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title"><i class="fas fa-edit me-2"></i>Editar Servidor</h5>
+        <h5 class="modal-title"><i class="fas fa-edit me-2" aria-hidden="true"></i>Editar Servidor</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
@@ -331,7 +331,7 @@
             <label class="form-label">Token (deixe em branco para manter)</label>
             <div class="input-group">
               <input type="text" id="es_token" class="form-control font-monospace" placeholder="Manter atual">
-              <button class="btn btn-outline-secondary" onclick="genTokenEdit()"><i class="fas fa-random"></i></button>
+              <button class="btn btn-outline-secondary" onclick="genTokenEdit()"><i class="fas fa-random" aria-hidden="true"></i></button>
             </div>
           </div>
         </div>
@@ -339,7 +339,7 @@
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
         <button type="button" class="btn btn-primary" onclick="submitEditServer()">
-          <i class="fas fa-save me-2"></i>Salvar
+          <i class="fas fa-save me-2" aria-hidden="true"></i>Salvar
         </button>
       </div>
     </div>
@@ -351,7 +351,7 @@
   <div class="modal-dialog modal-lg">
     <div class="modal-content">
       <div class="modal-header">
-        <h6 class="modal-title"><i class="fas fa-stethoscope me-2"></i>Diagnóstico — <span id="diagSrvName">Servidor</span></h6>
+        <h6 class="modal-title"><i class="fas fa-stethoscope me-2" aria-hidden="true"></i>Diagnóstico — <span id="diagSrvName">Servidor</span></h6>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
@@ -366,13 +366,13 @@
         </div>
         <div class="d-flex gap-2">
           <button class="btn btn-outline-warning" id="diagCleanBtn" onclick="cleanupServer(window.__diagServerId)">
-            <i class="fas fa-broom me-1"></i>Liberar espaço
+            <i class="fas fa-broom me-1" aria-hidden="true"></i>Liberar espaço
           </button>
           <button class="btn btn-success" id="diagFixBtn" disabled>
-            <i class="fas fa-wrench me-1"></i>Corrigir automaticamente
+            <i class="fas fa-wrench me-1" aria-hidden="true"></i>Corrigir automaticamente
           </button>
           <button class="btn btn-outline-secondary" onclick="diagnoseServer(window.__diagServerId)">
-            <i class="fas fa-sync me-1"></i>Repetir
+            <i class="fas fa-sync me-1" aria-hidden="true"></i>Repetir
           </button>
         </div>
       </div>
@@ -395,7 +395,7 @@ function diagnoseServer(id) {
   apiPost(`/servers/diagnose/${id}`, {}, d => {
     if (!d.success) {
       document.getElementById('diagResults').innerHTML =
-        `<div class="alert alert-danger mb-0"><i class="fas fa-times-circle me-1"></i>${vncEsc(d.message)}</div>`;
+        `<div class="alert alert-danger mb-0"><i class="fas fa-times-circle me-1" aria-hidden="true"></i>${vncEsc(d.message)}</div>`;
       return;
     }
     renderDiag(id, d);
@@ -407,10 +407,10 @@ function renderDiag(id, d) {
   const summary = document.getElementById('diagSummary');
   if (d.healthy) {
     summary.innerHTML = '<div class="alert alert-' + (d.warned ? 'warning' : 'success') + ' mb-0"><i class="fas ' +
-      (d.warned ? 'fa-exclamation-triangle' : 'fa-check-circle') + ' me-1"></i>' +
+      (d.warned ? 'fa-exclamation-triangle' : 'fa-check-circle') + ' me-1" aria-hidden="true"></i>' +
       vncEsc(d.message) + ' — todas as verificações passaram.</div>';
   } else {
-    summary.innerHTML = `<div class="alert alert-danger mb-0"><i class="fas fa-exclamation-triangle me-1"></i>` +
+    summary.innerHTML = `<div class="alert alert-danger mb-0"><i class="fas fa-exclamation-triangle me-1" aria-hidden="true"></i>` +
       vncEsc(d.message) + '</div>';
   }
 
@@ -422,7 +422,7 @@ function renderDiag(id, d) {
     const label = isWarn ? 'Alerta' : (c.ok ? 'OK' : 'Falha');
     rows += `<div class="list-group-item d-flex justify-content-between align-items-start gap-2">
       <div>
-        <div class="fw-semibold"><i class="fas ${icon} me-2"></i>${vncEsc(c.name)}</div>
+        <div class="fw-semibold"><i class="fas ${icon} me-2" aria-hidden="true"></i>${vncEsc(c.name)}</div>
         <div class="small text-muted mt-1">${vncEsc(c.detail)}</div>
       </div>
       <span class="badge text-bg-${badge} mt-1">${label}</span>
@@ -440,7 +440,7 @@ document.getElementById('diagFixBtn').addEventListener('click', () => {
     '<div class="text-center text-secondary py-4"><div class="spinner-border spinner-border-sm me-2"></div>Corrigindo — reinstalando módulos e reiniciando o serviço…</div>';
   apiPost(`/servers/install_modules/${id}`, {}, d => {
     document.getElementById('diagResults').innerHTML =
-      `<div class="alert alert-${d.success ? 'success' : 'danger'} mb-0"><i class="fas ${d.success ? 'fa-check-circle' : 'fa-times-circle'} me-1"></i>` +
+      `<div class="alert alert-${d.success ? 'success' : 'danger'} mb-0"><i class="fas ${d.success ? 'fa-check-circle' : 'fa-times-circle'} me-1" aria-hidden="true"></i>` +
       vncEsc(d.message) + '</div>';
     document.getElementById('diagHint').style.display = 'none';
     document.getElementById('diagFixBtn').disabled = true;
@@ -448,9 +448,9 @@ document.getElementById('diagFixBtn').addEventListener('click', () => {
   });
 });
 
-function cleanupServer(id) {
+async function cleanupServer(id) {
   if (!id) return;
-  if (!confirm('Rodar limpeza segura no servidor?\n\n' +
+  if (!await confirmDialog('Rodar limpeza segura no servidor?\n\n' +
                '• apt-get clean / autoclean (cache de pacotes)\n' +
                '• journald limitado a 120M\n' +
                '• logs rotacionados antigos removidos\n' +
@@ -464,7 +464,7 @@ function cleanupServer(id) {
     document.getElementById('diagCleanBtn').disabled = false;
     if (!d.success) {
       document.getElementById('diagResults').innerHTML =
-        `<div class="alert alert-danger mb-0"><i class="fas fa-times-circle me-1"></i>${vncEsc(d.message)}</div>`;
+        `<div class="alert alert-danger mb-0"><i class="fas fa-times-circle me-1" aria-hidden="true"></i>${vncEsc(d.message)}</div>`;
       return;
     }
     let extra = '';
@@ -472,7 +472,7 @@ function cleanupServer(id) {
       extra = ` (antes: ${d.before_mb} MB livres → depois: ${d.after_mb} MB)`;
     }
     document.getElementById('diagResults').innerHTML =
-      `<div class="alert alert-success mb-0"><i class="fas fa-broom me-1"></i>${vncEsc(d.message)}</div>` +
+      `<div class="alert alert-success mb-0"><i class="fas fa-broom me-1" aria-hidden="true"></i>${vncEsc(d.message)}</div>` +
       (extra ? `<div class="small fw-semibold mt-2">${extra}</div>` : '') +
       (d.detail ? `<div class="small text-muted mt-2"><pre class="mb-0" style="white-space:pre-wrap">${vncEsc(d.detail)}</pre></div>` : '');
     document.getElementById('diagHint').style.display = 'none';
@@ -504,8 +504,8 @@ function submitAddCat() {
   });
 }
 
-function deleteCategory(id, name) {
-  if (!confirm(`Remover categoria "${name}"? Os servidores nela ficarão sem categoria.`)) return;
+async function deleteCategory(id, name) {
+  if (!await confirmDialog(`Remover categoria "${name}"? Os servidores nela ficarão sem categoria.`)) return;
   apiPost(`/categories/delete/${id}`, {}, d => {
     showToast(d.message, d.success ? 'success' : 'danger');
     if (d.success) setTimeout(() => location.reload(), 600);
@@ -559,25 +559,25 @@ function submitEditServer() {
   });
 }
 
-function deleteServer(id, name) {
-  if (!confirm(`Remover servidor "${name}"?`)) return;
+async function deleteServer(id, name) {
+  if (!await confirmDialog(`Remover servidor "${name}"?`)) return;
   apiPost(`/servers/delete/${id}`, {}, d => {
     showToast(d.message, d.success ? 'success' : 'danger');
     if (d.success) document.getElementById('scard_' + id)?.remove();
   });
 }
 
-function installModules(id) {
-  if (!confirm('Instalar/atualizar módulos Painel Master no servidor via SSH?')) return;
+async function installModules(id) {
+  if (!await confirmDialog('Instalar/atualizar módulos Painel Master no servidor via SSH?')) return;
   showToast('Instalando módulos (porta 7270)...', 'info');
   apiPost(`/servers/install_modules/${id}`, {}, d => {
     showToast(d.message, d.success ? 'success' : 'danger');
   });
 }
 
-function syncServer(id, force) {
+async function syncServer(id, force) {
   const label = force ? 'Sync Total (envia TODOS os usuários, ignora duplicatas)' : 'Sincronizar usuários ativos';
-  if (!confirm(label + '\n\nConfirmar para o servidor #' + id + '?')) return;
+  if (!await confirmDialog(label + '\n\nConfirmar para o servidor #' + id + '?')) return;
   showToast(force ? 'Sincronização forçada iniciada...' : 'Sincronizando...', 'info');
   apiPost(`/servers/sync/${id}`, {force: force ? 'true' : 'false'}, d => {
     showToast(`${d.message} (${d.users_count || 0} usuários)`, d.success ? 'success' : 'danger');
@@ -638,7 +638,7 @@ function vncStatusBox(id, html) {
 
 async function setupVnc(id) {
   const name = document.getElementById('vncName_' + id)?.textContent || 'o servidor';
-  if (!confirm('Instalar/configurar o console VNC em ' + name + ' via SSH?\n\n' +
+  if (!await confirmDialog('Instalar/configurar o console VNC em ' + name + ' via SSH?\n\n' +
                'A senha atual e preservada, entao reinstalar nao invalida o que voce ja tem.\n' +
                'O acesso ao console fica restrito a este painel.\n\nConfirmar?')) return;
 
@@ -650,7 +650,7 @@ async function setupVnc(id) {
   if (d.success) {
     vncConnect(id, d.vnc_pass, d);
   } else {
-    let html = '<div class="alert alert-danger mb-2"><i class="fas fa-times-circle me-1"></i>' +
+    let html = '<div class="alert alert-danger mb-2"><i class="fas fa-times-circle me-1" aria-hidden="true"></i>' +
                'Falha ao configurar o VNC.</div>';
     if (d.message) {
       html += '<pre class="small text-muted mb-2" style="white-space:pre-wrap">' +
@@ -668,7 +668,7 @@ async function vncRefresh(id) {
   const d = await vncPost(`/servers/vnc_status/${id}`, {});
   if (!d.installed) {
     vncStatusBox(id, '<div class="text-center text-secondary py-4">' +
-      '<i class="fas fa-desktop fa-2x mb-2 d-block"></i>' +
+      '<i class="fas fa-desktop fa-2x mb-2 d-block" aria-hidden="true"></i>' +
       'Console nao instalado neste servidor.</div>');
     return;
   }
@@ -795,7 +795,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const id = b.dataset.vncToggle;
       const mode = b.dataset.mode === 'open' ? 'restrict' : 'open';
       if (mode === 'open') {
-        const ok = confirm(
+        const ok = await confirmDialog(
           'Liberar o console VNC para a internet?\n\n' +
           'As portas 5900 e 6080 passam a aceitar qualquer origem.\n\n' +
           'O x11vnc usa autenticacao classica do VNC, que e DES de 56 bits, ' +

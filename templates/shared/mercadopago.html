@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block title %}Mercado Pago — {{ panel_name }}{% endblock %}
-{% block page_title %}<i class="fas fa-credit-card me-2"></i>Mercado Pago{% endblock %}
+{% block page_title %}<i class="fas fa-credit-card me-2" aria-hidden="true"></i>Mercado Pago{% endblock %}
 
 {% block content %}
 {% set n_approved = payments | selectattr('status','equalto','approved') | list | length %}
@@ -9,11 +9,11 @@
 <div class="row g-4">
   <div class="col-md-5">
     <div class="card">
-      <div class="card-header fw-semibold"><i class="fas fa-cog me-2"></i>Configuração</div>
+      <div class="card-header fw-semibold"><i class="fas fa-cog me-2" aria-hidden="true"></i>Configuração</div>
       <div class="card-body">
         <form method="POST">
           <div class="mb-3">
-            <label class="form-label fw-semibold"><i class="fas fa-key me-1 text-muted"></i>Access Token</label>
+            <label class="form-label fw-semibold"><i class="fas fa-key me-1 text-muted" aria-hidden="true"></i>Access Token</label>
             <input type="text" name="mp_token" class="form-control font-monospace"
                    value="{{ current_user.mercadopago_token or '' }}"
                    placeholder="APP_USR-xxxxxxxxxxxx">
@@ -22,7 +22,7 @@
             </small>
           </div>
           <div class="mb-4">
-            <label class="form-label fw-semibold"><i class="fas fa-tag me-1 text-muted"></i>Valor da renovação (R$)</label>
+            <label class="form-label fw-semibold"><i class="fas fa-tag me-1 text-muted" aria-hidden="true"></i>Valor da renovação (R$)</label>
             <div class="input-group">
               <span class="input-group-text">R$</span>
               <input type="number" name="mp_price" class="form-control"
@@ -32,17 +32,17 @@
             <small class="text-muted">Valor que seus clientes pagarão pela renovação de 30 dias</small>
           </div>
           <button type="submit" class="btn btn-grad w-100">
-            <i class="fas fa-save me-2"></i>Salvar configuração
+            <i class="fas fa-save me-2" aria-hidden="true"></i>Salvar configuração
           </button>
         </form>
       </div>
     </div>
 
     <div class="card mt-3">
-      <div class="card-header fw-semibold"><i class="fas fa-link me-2"></i>Webhook</div>
+      <div class="card-header fw-semibold"><i class="fas fa-link me-2" aria-hidden="true"></i>Webhook</div>
       <div class="card-body">
         <p class="text-muted small">
-          <i class="fas fa-info-circle me-1"></i>
+          <i class="fas fa-info-circle me-1" aria-hidden="true"></i>
           Configure este URL no painel do Mercado Pago como webhook de pagamentos:
         </p>
         <div class="input-group">
@@ -51,7 +51,7 @@
                  onclick="this.select()">
           <button class="btn btn-sm btn-outline-secondary" id="whCopyBtn"
                   onclick="universalCopy(document.getElementById('webhookUrl').value, this)">
-            <i class="fas fa-copy"></i>
+            <i class="fas fa-copy" aria-hidden="true"></i>
           </button>
         </div>
       </div>
@@ -62,13 +62,13 @@
     <div class="card">
       <div class="card-header fw-semibold">
         <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
-          <span><i class="fas fa-history me-2"></i>Histórico de Pagamentos</span>
+          <span><i class="fas fa-history me-2" aria-hidden="true"></i>Histórico de Pagamentos</span>
           <div class="d-flex gap-2">
             <span class="badge bg-success px-3 py-2">
-              <i class="fas fa-check-circle me-1"></i>{{ n_approved }} aprovado(s)
+              <i class="fas fa-check-circle me-1" aria-hidden="true"></i>{{ n_approved }} aprovado(s)
             </span>
             <span class="badge bg-warning text-dark px-3 py-2">
-              <i class="fas fa-hourglass-half me-1"></i>{{ n_pending }} pendente(s)
+              <i class="fas fa-hourglass-half me-1" aria-hidden="true"></i>{{ n_pending }} pendente(s)
             </span>
           </div>
         </div>
@@ -88,13 +88,13 @@
             <tbody>
               {% for p in payments %}
               <tr id="pay_row_{{ p.id }}">
-                <td><i class="fas fa-user me-1 text-muted"></i>{{ p.ssh_username or '—' }}</td>
+                <td><i class="fas fa-user me-1 text-muted" aria-hidden="true"></i>{{ p.ssh_username or '—' }}</td>
                 <td><span class="fw-semibold">R$ {{ '%.2f'|format(p.amount) }}</span></td>
                 <td>
                   {% if p.status=='approved' %}
-                  <span class="badge bg-success"><i class="fas fa-check-circle me-1"></i>Aprovado</span>
+                  <span class="badge bg-success"><i class="fas fa-check-circle me-1" aria-hidden="true"></i>Aprovado</span>
                   {% elif p.status=='pending' %}
-                  <span class="badge bg-warning text-dark"><i class="fas fa-hourglass-half me-1"></i>Pendente</span>
+                  <span class="badge bg-warning text-dark"><i class="fas fa-hourglass-half me-1" aria-hidden="true"></i>Pendente</span>
                   {% else %}
                   <span class="badge bg-secondary">{{ p.status }}</span>
                   {% endif %}
@@ -102,8 +102,8 @@
                 <td><small class="text-muted">{{ p.created_at[:16] }}</small></td>
                 <td class="text-end">
                   {% if p.status == 'pending' %}
-                  <button class="btn btn-sm btn-outline-danger" onclick="deletePayment({{ p.id }})" title="Excluir">
-                    <i class="fas fa-trash"></i>
+                  <button class="btn btn-sm btn-outline-danger" onclick="deletePayment({{ p.id }})" title="Excluir" aria-label="Excluir">
+                    <i class="fas fa-trash" aria-hidden="true"></i>
                   </button>
                   {% endif %}
                 </td>
@@ -111,7 +111,7 @@
               {% else %}
               <tr>
                 <td colspan="5" class="text-center text-muted py-5">
-                  <i class="fas fa-receipt fa-3x mb-3 opacity-25"></i>
+                  <i class="fas fa-receipt fa-3x mb-3 opacity-25" aria-hidden="true"></i>
                   <p class="mb-0">Nenhum pagamento registrado.</p>
                   <small>Quando seus clientes pagarem via PIX, o histórico aparece aqui.</small>
                 </td>
@@ -128,8 +128,8 @@
 
 {% block extra_js %}
 <script>
-function deletePayment(id) {
-  if (!confirm('Excluir este pagamento pendente?')) return;
+async function deletePayment(id) {
+  if (!await confirmDialog('Excluir este pagamento pendente?')) return;
   apiPost('/mercadopago/delete/' + id, {}, function(d) {
     showToast(d.message, d.success ? 'success' : 'danger');
     if (d.success) {

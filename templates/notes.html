@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block title %}Anotações — {{ panel_name }}{% endblock %}
-{% block page_title %}<i class="fas fa-sticky-note me-2"></i>Anotações{% endblock %}
+{% block page_title %}<i class="fas fa-sticky-note me-2" aria-hidden="true"></i>Anotações{% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
@@ -8,7 +8,7 @@
     {{ notas|length }} anotaç{{ 'ão' if notas|length == 1 else 'ões' }} — privadas da sua conta.
   </div>
   <button type="button" class="btn btn-grad" onclick="notaAbrir()">
-    <i class="fas fa-plus me-1"></i>Nova anotação
+    <i class="fas fa-plus me-1" aria-hidden="true"></i>Nova anotação
   </button>
 </div>
 
@@ -24,11 +24,11 @@
           {{ n['titulo'] or 'Sem título' }}
         </div>
         <div class="d-flex flex-shrink-0 gap-1">
-          <button type="button" class="btn btn-sm btn-light py-0 px-1" title="Editar" onclick="notaAbrirEdit(this)">
-            <i class="fas fa-edit"></i>
+          <button type="button" class="btn btn-sm btn-light py-0 px-1" title="Editar" onclick="notaAbrirEdit(this)" aria-label="Editar">
+            <i class="fas fa-edit" aria-hidden="true"></i>
           </button>
-          <button type="button" class="btn btn-sm btn-light py-0 px-1" title="Excluir" onclick="notaExcluir('{{ n['id'] }}')">
-            <i class="fas fa-trash text-danger"></i>
+          <button type="button" class="btn btn-sm btn-light py-0 px-1" title="Excluir" onclick="notaExcluir('{{ n['id'] }}')" aria-label="Excluir">
+            <i class="fas fa-trash text-danger" aria-hidden="true"></i>
           </button>
         </div>
       </div>
@@ -47,7 +47,7 @@
   </div>
   {% else %}
   <div class="col-12 text-center text-muted py-5">
-    <i class="fas fa-sticky-note fs-1 d-block mb-2"></i>
+    <i class="fas fa-sticky-note fs-1 d-block mb-2" aria-hidden="true"></i>
     Nenhuma anotação ainda.<br>Clique em <b>Nova anotação</b> para criar um lembrete.
   </div>
   {% endfor %}
@@ -57,7 +57,7 @@
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header py-2">
-        <h6 class="modal-title mb-0"><i class="fas fa-sticky-note me-2 text-info"></i>Nova anotação</h6>
+        <h6 class="modal-title mb-0"><i class="fas fa-sticky-note me-2 text-info" aria-hidden="true"></i>Nova anotação</h6>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
@@ -104,7 +104,7 @@ function notaAbrir(id, titulo, conteudo, cor) {
     b.classList.toggle('cor-ativo', b.dataset.cor === notaCor);
   });
   document.querySelector('#notaModal .modal-title').innerHTML =
-    '<i class="fas fa-sticky-note me-2 text-info"></i>' + (id ? 'Editar anotação' : 'Nova anotação');
+    '<i class="fas fa-sticky-note me-2 text-info" aria-hidden="true"></i>' + (id ? 'Editar anotação' : 'Nova anotação');
   notaModal.show();
 }
 
@@ -135,8 +135,8 @@ function notaSalvar() {
   });
 }
 
-function notaExcluir(id) {
-  if (!confirm('Excluir esta anotação?')) return;
+async function notaExcluir(id) {
+  if (!await confirmDialog('Excluir esta anotação?')) return;
   apiPost(`/notes/delete/${id}`, {}, d => {
     showToast(d.message, d.success ? 'success' : 'danger');
     if (d.success) setTimeout(() => location.reload(), 500);

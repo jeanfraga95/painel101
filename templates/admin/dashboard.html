@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block title %}Dashboard — {{ panel_name }}{% endblock %}
-{% block page_title %}<i class="fas fa-tachometer-alt me-2"></i>Dashboard{% endblock %}
+{% block page_title %}<i class="fas fa-tachometer-alt me-2" aria-hidden="true"></i>Dashboard{% endblock %}
 
 {% block extra_css %}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css">
@@ -15,7 +15,7 @@
   <div class="col-6 col-md-3">
     <div class="card stat-card h-100" style="animation-delay:.05s">
       <div class="card-body d-flex align-items-center gap-3">
-        <div class="stat-icon bg-grad-accent"><i class="fas fa-users"></i></div>
+        <div class="stat-icon bg-grad-accent"><i class="fas fa-users" aria-hidden="true"></i></div>
         <div>
           <div class="fs-3 fw-bold">{{ stats.total_ssh }}</div>
           <small class="text-muted">Usuários SSH</small>
@@ -26,7 +26,7 @@
   <div class="col-6 col-md-3">
     <div class="card stat-card h-100" style="animation-delay:.1s">
       <div class="card-body d-flex align-items-center gap-3">
-        <div class="stat-icon bg-grad-success"><i class="fas fa-user-tie"></i></div>
+        <div class="stat-icon bg-grad-success"><i class="fas fa-user-tie" aria-hidden="true"></i></div>
         <div>
           <div class="fs-3 fw-bold">{{ stats.total_resellers }}</div>
           <small class="text-muted">Revendas</small>
@@ -37,7 +37,7 @@
   <div class="col-6 col-md-3">
     <div class="card stat-card h-100" style="animation-delay:.15s">
       <div class="card-body d-flex align-items-center gap-3">
-        <div class="stat-icon bg-grad-info"><i class="fas fa-server"></i></div>
+        <div class="stat-icon bg-grad-info"><i class="fas fa-server" aria-hidden="true"></i></div>
         <div>
           <div class="fs-3 fw-bold">{{ stats.total_servers }}</div>
           <small class="text-muted">Servidores</small>
@@ -48,7 +48,7 @@
   <div class="col-6 col-md-3">
     <div class="card stat-card h-100" style="animation-delay:.2s">
       <div class="card-body d-flex align-items-center gap-3">
-        <div class="stat-icon bg-grad-danger"><i class="fas fa-exclamation-triangle"></i></div>
+        <div class="stat-icon bg-grad-danger"><i class="fas fa-exclamation-triangle" aria-hidden="true"></i></div>
         <div>
           <div class="fs-3 fw-bold">{{ stats.expiring_soon }}</div>
           <small class="text-muted">Vencendo (7d)</small>
@@ -60,22 +60,22 @@
 
 <div class="card mb-4">
   <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
-    <span class="fw-semibold"><i class="fas fa-calendar-alt me-2 text-info"></i>Calendário de vencimentos</span>
+    <span class="fw-semibold"><i class="fas fa-calendar-alt me-2 text-info" aria-hidden="true"></i>Calendário de vencimentos</span>
     <div class="d-flex align-items-center gap-3 small flex-wrap">
       <span class="d-inline-flex align-items-center gap-1" title="Vence em mais de 3 dias"><span class="badge" style="background:#198754">&nbsp;</span>&gt;3d</span>
       <span class="d-inline-flex align-items-center gap-1" title="Vence em 1 a 3 dias"><span class="badge" style="background:#ffc107">&nbsp;</span>1–3d</span>
       <span class="d-inline-flex align-items-center gap-1" title="Vence hoje"><span class="badge" style="background:#fd7e14">&nbsp;</span>hoje</span>
       <span class="d-inline-flex align-items-center gap-1" title="Já expirado"><span class="badge" style="background:#dc3545">&nbsp;</span>expirado</span>
       <a href="{{ url_for('users_list', filter='expiring') }}" class="btn btn-sm btn-outline-warning ms-1">
-        <i class="fas fa-clock me-1"></i>Vencendo em 7d ({{ stats.expiring_soon }})
+        <i class="fas fa-clock me-1" aria-hidden="true"></i>Vencendo em 7d ({{ stats.expiring_soon }})
       </a>
     </div>
   </div>
   <div class="card-body">
     <div id="expCal"></div>
     <div class="small text-muted mt-2 d-flex flex-wrap justify-content-between gap-2">
-      <span><i class="fas fa-mouse-pointer me-1"></i>Clique em um dia para listar quem vence nele; clique em um usuário para renovar (+30 dias).</span>
-      <span><i class="fas fa-filter me-1"></i>Eventos até 120 dias à frente.</span>
+      <span><i class="fas fa-mouse-pointer me-1" aria-hidden="true"></i>Clique em um dia para listar quem vence nele; clique em um usuário para renovar (+30 dias).</span>
+      <span><i class="fas fa-filter me-1" aria-hidden="true"></i>Eventos até 120 dias à frente.</span>
     </div>
   </div>
 </div>
@@ -84,13 +84,13 @@
   <div class="modal-dialog modal-dialog-scrollable modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header py-2">
-        <h6 class="modal-title mb-0"><i class="fas fa-calendar-day me-2 text-info"></i><span id="calDayTitle">Vencimentos</span></h6>
+        <h6 class="modal-title mb-0"><i class="fas fa-calendar-day me-2 text-info" aria-hidden="true"></i><span id="calDayTitle">Vencimentos</span></h6>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
       </div>
       <div class="modal-body p-3" id="calDayList"></div>
       <div class="modal-footer py-2 d-flex justify-content-between">
         <button type="button" class="btn btn-sm btn-outline-danger" id="calRenewAllBtn">
-          <i class="fas fa-redo me-1"></i>Renovar todos
+          <i class="fas fa-redo me-1" aria-hidden="true"></i>Renovar todos
         </button>
         <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Fechar</button>
       </div>
@@ -200,7 +200,7 @@
             <span class="badge text-bg-${dl.cls} ms-1">${dl.label}</span>
           </div>
           <button type="button" class="btn btn-sm btn-outline-success px-2 flex-shrink-0" data-cald-ren="${ev.id}">
-            <i class="fas fa-redo"></i>
+            <i class="fas fa-redo" aria-hidden="true"></i>
           </button>
         </div>`;
     }).join('') || '<p class="text-muted small mb-0">Sem eventos neste dia.</p>';
@@ -221,10 +221,10 @@
     });
   }
 
-  function renewAll() {
+  async function renewAll() {
     const ids = dayEvents.map(e => e.id);
     if (!ids.length) return;
-    if (!confirm(`Renovar os ${ids.length} usuário(s) listados (+30 dias)?`)) return;
+    if (!await confirmDialog(`Renovar os ${ids.length} usuário(s) listados (+30 dias)?`)) return;
     let done = 0;
     ids.forEach(id => apiPost(`/users/renew/${id}`, { days: 30 }, d => {
       if (!d.success) showToast(d.message, 'danger');
@@ -263,10 +263,10 @@
         const d = info.event.extendedProps.days;
         info.el.title = `${info.event.title} — ${d < 0 ? `expirado há ${-d}d` : (d === 0 ? 'vence hoje' : `vence em ${d}d`)}. Clique para renovar.`;
       },
-      eventClick: (info) => {
+      eventClick: async (info) => {
         const d = info.event.extendedProps.days;
         const dStr = d < 0 ? `expirado há ${-d}d` : (d === 0 ? 'vence hoje' : `vence em ${d}d`);
-        if (!confirm(`Renovar "${info.event.title}" (${dStr})?\n\nAdicionar 30 dias?`)) return;
+        if (!await confirmDialog(`Renovar "${info.event.title}" (${dStr})?\n\nAdicionar 30 dias?`)) return;
         renewById(info.event.id);
       },
       dateClick: (info) => {

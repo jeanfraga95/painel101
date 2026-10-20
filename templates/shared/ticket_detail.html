@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block title %}Ticket #{{ ticket.id }} — {{ panel_name }}{% endblock %}
-{% block page_title %}<i class="fas fa-life-ring me-2"></i>Ticket #{{ ticket.id }}{% endblock %}
+{% block page_title %}<i class="fas fa-life-ring me-2" aria-hidden="true"></i>Ticket #{{ ticket.id }}{% endblock %}
 
 {% block content %}
 
@@ -13,7 +13,7 @@
   </div>
   <div class="d-flex gap-2 align-items-center">
     <a href="{{ url_for('tickets_list') }}" class="btn btn-outline-secondary btn-sm">
-      <i class="fas fa-arrow-left me-1"></i>Voltar
+      <i class="fas fa-arrow-left me-1" aria-hidden="true"></i>Voltar
     </a>
 
     {# Só o admin mexe no estado. A revenda reabre automaticamente ao
@@ -26,7 +26,7 @@
       {% endfor %}
     </div>
     <button type="button" class="btn btn-outline-danger btn-sm" onclick="delTicket()">
-      <i class="fas fa-trash me-1"></i>Excluir
+      <i class="fas fa-trash me-1" aria-hidden="true"></i>Excluir
     </button>
     {% endif %}
   </div>
@@ -54,9 +54,9 @@
     <div class="d-flex mb-3 {{ 'flex-row-reverse' if m.is_staff }}">
       <div class="me-2 flex-shrink-0">
         {% if m.is_staff %}
-          <i class="fas fa-user-shield fa-fw fa-lg text-primary"></i>
+          <i class="fas fa-user-shield fa-fw fa-lg text-primary" aria-hidden="true"></i>
         {% else %}
-          <i class="fas fa-user fa-fw fa-lg text-muted"></i>
+          <i class="fas fa-user fa-fw fa-lg text-muted" aria-hidden="true"></i>
         {% endif %}
       </div>
       <div class="flex-grow-1" style="min-width:0">
@@ -85,7 +85,7 @@
     <textarea id="reply_body" class="form-control mb-2" rows="4"
               placeholder="{{ 'escreva a resposta que a revenda vai ler' if is_admin else 'adicione mais detalhes ao problema' }}"></textarea>
     <button type="button" class="btn btn-grad" onclick="sendReply()">
-      <i class="fas fa-paper-plane me-1"></i>Enviar
+      <i class="fas fa-paper-plane me-1" aria-hidden="true"></i>Enviar
     </button>
   </div>
 </div>
@@ -117,8 +117,8 @@
     });
   }
 
-  function delTicket() {
-    if (!confirm('Excluir este ticket e toda a conversa? A ação não pode ser desfeita.')) return;
+  async function delTicket() {
+    if (!await confirmDialog('Excluir este ticket e toda a conversa? A ação não pode ser desfeita.')) return;
     apiPost(`/tickets/${TICKET_ID}/delete`, {}, d => {
       showToast(d.message, d.success ? 'success' : 'danger');
       if (d.success) setTimeout(() => location.href = '/tickets', 700);

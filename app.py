@@ -882,22 +882,21 @@ def _days_left(u) -> int:
         return 30
 
 
-@app.route('/users/renew/<int:user_id>', methods=['POST'])
-@login_required
-def renew_user(user_id):
-    current_user = get_current_user()
+def _renew_one_core(user_id, current_user, days):
+    """
+    Lógica de renovação de UM usuário SSH. Usada por /users/renew (individual)
+    e por /users/bulk_renew (lote) — um único lugar com as regras de
+    reativação automática, conversão de teste e rollback em falha total da VPS.
+    Retorna um dict pronto para jsonify().
+    """
     u = db.get_ssh_user(user_id)
     if not u:
-        return jsonify(success=False, message='Usuário não encontrado')
+        return dict(success=False, message='Usuário não encontrado')
 
     if current_user['role'] != 'admin':
         tree_ids = [current_user['id']] + [s['id'] for s in db.get_all_resellers_under(current_user['id'])]
         if u['owner_id'] not in tree_ids:
-            return jsonify(success=False, message='Sem permissão')
-
-    days = int(request.form.get('days', 30))
-    if days < 1:
-        return jsonify(success=False, message='Informe quantos dias renovar')
+            return dict(success=False, message='Sem permissão')
 
     was_suspended = u['status'] == 'suspended'
     was_test      = bool(u['is_test'])
@@ -917,7 +916,7 @@ def renew_user(user_id):
     ok_count = sum(1 for _, ok, _ in srv_results if ok)
     fails = [(name, msg) for name, ok, msg in srv_results if not ok]
 
-    new_exp = updated['expires_at'][:10]
+    new_exp = (updated['expires_at'] or '')[:10]
     reativado  = ' e reativado' if was_suspended else ''
     convertido = ' (convertido de teste)' if was_test else ''
 
@@ -929,27 +928,98 @@ def renew_user(user_id):
         if was_test:
             db.update_ssh_user(user_id, is_test=1)
         fail_msg = '; '.join(f'{n}:{m}' for n, m in fails)
-        return jsonify(success=False,
-                       message='Renovação FALHOU no servidor. Nada foi alterado.',
-                       server_msg=fail_msg,
-                       new_expiry=u['expires_at'][:10] if u['expires_at'] else '',
-                       was_suspended=was_suspended)
+        return dict(success=False,
+                    message='Renovação FALHOU no servidor. Nada foi alterado.',
+                    server_msg=fail_msg,
+                    new_expiry=(u['expires_at'] or '')[:10],
+                    was_suspended=was_suspended)
 
     if fails:
         fds = ', '.join(n for n, _ in fails)
-        return jsonify(
-            success=True,
-            message=(f'Renovado{reativado}{convertido} +{days} dias '
-                     f'em {ok_count}/{len(srv_results)} servidor(es). '
-                     f'FALHOU na VPS: {fds}. Novo vencimento: {new_exp}'),
-            server_msg='; '.join(f'{n}:{m}' for n, m in fails),
-            new_expiry=new_exp, was_suspended=was_suspended)
+        return dict(success=True,
+                    message=(f'Renovado{reativado}{convertido} +{days} dias '
+                             f'em {ok_count}/{len(srv_results)} servidor(es). '
+                             f'FALHOU na VPS: {fds}. Novo vencimento: {new_exp}'),
+                    server_msg='; '.join(f'{n}:{m}' for n, m in fails),
+                    new_expiry=new_exp, was_suspended=was_suspended)
 
-    return jsonify(success=True,
-                   message=f'Renovado{reativado}{convertido} +{days} dias. Novo vencimento: {new_exp}',
-                   server_msg=''
-                   if not fails else '; '.join(f'{n}:{m}' for n, m in fails),
-                   new_expiry=new_exp, was_suspended=was_suspended)
+    return dict(success=True,
+                message=f'Renovado{reativado}{convertido} +{days} dias. Novo vencimento: {new_exp}',
+                server_msg='', new_expiry=new_exp, was_suspended=was_suspended)
+
+
+@app.route('/users/renew/<int:user_id>', methods=['POST'])
+@login_required
+def renew_user(user_id):
+    current_user = get_current_user()
+    days = int(request.form.get('days', 30))
+    if days < 1:
+        return jsonify(success=False, message='Informe quantos dias renovar')
+    return jsonify(**_renew_one_core(user_id, current_user, days))
+
+
+@app.route('/users/bulk_renew', methods=['POST'])
+@login_required
+def renew_users_bulk():
+    """Renova vários usuários de uma vez (lote).
+    Recebe `ids` como string separada por vírgula e `days`.
+    Devolve o resultado detalhado por usuário (renovado / falhou) para a
+    interface confirmar visualmente quem foi renovado."""
+    current_user = get_current_user()
+    raw = request.form.get('ids', '')
+    ids = []
+    for part in raw.replace(';', ',').split(','):
+        part = part.strip()
+        if part.isdigit() and int(part) not in ids:
+            ids.append(int(part))
+
+    if not ids:
+        return jsonify(success=False, message='Nenhum usuário selecionado')
+    if len(ids) > 50:
+        return jsonify(success=False, message='Máximo de 50 usuários por lote')
+    days = int(request.form.get('days', 30))
+    if days < 1:
+        return jsonify(success=False, message='Informe quantos dias renovar')
+
+    def _run(uid):
+        u = db.get_ssh_user(uid)
+        nome = u['username'] if u else f'#{uid}'
+        return uid, nome, _renew_one_core(uid, current_user, days)
+
+    renewed, failed = [], []
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futs = [pool.submit(_run, uid) for uid in ids]
+        try:
+            for f in as_completed(futs, timeout=120):
+                uid, nome, res = f.result()
+                if res.get('success'):
+                    renewed.append({'id': uid, 'user': nome, 'new_expiry': res.get('new_expiry', '')})
+                else:
+                    failed.append({'id': uid, 'user': nome, 'error': res.get('message', 'erro desconhecido')})
+        except Exception:
+            # Tempo esgotado: conta o que já terminou e marca o resto como falha
+            for f in futs:
+                if f.done() and not f.cancelled():
+                    try:
+                        uid, nome, res = f.result()
+                    except Exception:
+                        continue
+                    if res.get('success'):
+                        if not any(r['id'] == uid for r in renewed):
+                            renewed.append({'id': uid, 'user': nome, 'new_expiry': res.get('new_expiry', '')})
+                    elif not any(r['id'] == uid for r in failed):
+                        failed.append({'id': uid, 'user': nome, 'error': res.get('message', 'tempo esgotado')})
+                else:
+                    f.cancel()
+
+    renewed.sort(key=lambda r: r['user'].lower())
+    failed.sort(key=lambda r: r['user'].lower())
+
+    msg = f'{len(renewed)} usuário(s) renovado(s)'
+    if failed:
+        msg += f' · {len(failed)} falha(s)'
+    return jsonify(success=bool(renewed), message=msg, days=days,
+                   renewed=renewed, failed=failed)
 
 
 @app.route('/users/update/<int:user_id>', methods=['POST'])

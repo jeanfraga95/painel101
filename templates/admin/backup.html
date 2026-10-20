@@ -1,12 +1,12 @@
 {% extends 'base.html' %}
 {% block title %}Backup — {{ panel_name }}{% endblock %}
-{% block page_title %}<i class="fas fa-database me-2"></i>Backup & Restauração{% endblock %}
+{% block page_title %}<i class="fas fa-database me-2" aria-hidden="true"></i>Backup & Restauração{% endblock %}
 
 {% block content %}
 <div class="row g-4">
   <div class="col-md-6">
     <div class="card">
-      <div class="card-header fw-semibold"><i class="fab fa-telegram me-2 text-info"></i>Backup automático (Telegram)</div>
+      <div class="card-header fw-semibold"><i class="fab fa-telegram me-2 text-info" aria-hidden="true"></i>Backup automático (Telegram)</div>
       <div class="card-body">
         <form method="POST">
           <input type="hidden" name="action" value="save_config">
@@ -31,17 +31,17 @@
           </div>
           {% if cfg.last_backup %}
           <div class="alert alert-info py-2 small">
-            <i class="fas fa-check me-2"></i>Último backup: <strong>{{ cfg.last_backup }}</strong>
+            <i class="fas fa-check me-2" aria-hidden="true"></i>Último backup: <strong>{{ cfg.last_backup }}</strong>
           </div>
           {% endif %}
           <button type="submit" class="btn btn-primary">
-            <i class="fas fa-save me-2"></i>Salvar Configuração
+            <i class="fas fa-save me-2" aria-hidden="true"></i>Salvar Configuração
           </button>
         </form>
 
         <hr class="my-3">
         <p class="small text-muted mb-1">
-          <i class="fab fa-telegram me-1 text-info"></i>
+          <i class="fab fa-telegram me-1 text-info" aria-hidden="true"></i>
           <strong>Bot Admin via Telegram</strong>
         </p>
         <p class="small text-muted mb-2">
@@ -49,7 +49,7 @@
           Salve o token e o chat ID acima e clique em Iniciar Bot. Envie <code>/start</code> para o bot.
         </p>
         <button class="btn btn-info btn-sm w-100" id="setWebhookBtn" onclick="setWebhook()">
-          <i class="fas fa-robot me-2"></i>Iniciar Bot Telegram
+          <i class="fas fa-robot me-2" aria-hidden="true"></i>Iniciar Bot Telegram
         </button>
         <div id="webhookResult" class="mt-2 small"></div>
       </div>
@@ -58,34 +58,34 @@
 
   <div class="col-md-6">
     <div class="card mb-3">
-      <div class="card-header fw-semibold"><i class="fas fa-cloud-upload-alt me-2 text-success"></i>Fazer Backup Agora</div>
+      <div class="card-header fw-semibold"><i class="fas fa-cloud-upload-alt me-2 text-success" aria-hidden="true"></i>Fazer Backup Agora</div>
       <div class="card-body">
         <p class="text-muted small">Envia um backup completo do painel (banco de dados + configurações) para o Telegram configurado.</p>
         <form method="POST">
           <input type="hidden" name="action" value="backup_now">
           <button type="submit" class="btn btn-success">
-            <i class="fas fa-cloud-upload-alt me-2"></i>Enviar Backup Agora
+            <i class="fas fa-cloud-upload-alt me-2" aria-hidden="true"></i>Enviar Backup Agora
           </button>
         </form>
       </div>
     </div>
 
     <div class="card">
-      <div class="card-header fw-semibold"><i class="fas fa-cloud-download-alt me-2 text-warning"></i>Restaurar Backup</div>
+      <div class="card-header fw-semibold"><i class="fas fa-cloud-download-alt me-2 text-warning" aria-hidden="true"></i>Restaurar Backup</div>
       <div class="card-body">
         <div class="alert alert-warning py-2 small">
-          <i class="fas fa-exclamation-triangle me-2"></i>
+          <i class="fas fa-exclamation-triangle me-2" aria-hidden="true"></i>
           <strong>Atenção:</strong> A restauração irá substituir todos os dados atuais do painel. Esta ação não pode ser desfeita.
         </div>
-        <form method="POST" enctype="multipart/form-data">
+        <form method="POST" enctype="multipart/form-data"
+              onsubmit="return confirmSubmit(event, 'Tem certeza? Os dados atuais serão substituídos.', { title: 'Restaurar backup', okText: 'Restaurar' })">
           <input type="hidden" name="action" value="restore">
           <div class="mb-3">
             <label class="form-label">Arquivo de Backup (.tar.gz)</label>
             <input type="file" name="backup_file" class="form-control" accept=".tar.gz,.gz" required>
           </div>
-          <button type="submit" class="btn btn-warning text-dark"
-                  onclick="return confirm('Tem certeza? Os dados atuais serão substituídos.')">
-            <i class="fas fa-cloud-download-alt me-2"></i>Restaurar Backup
+          <button type="submit" class="btn btn-warning text-dark">
+            <i class="fas fa-cloud-download-alt me-2" aria-hidden="true"></i>Restaurar Backup
           </button>
         </form>
       </div>
@@ -100,15 +100,15 @@ function setWebhook() {
   const btn = document.getElementById('setWebhookBtn');
   const res = document.getElementById('webhookResult');
   btn.disabled = true;
-  btn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Iniciando...';
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin me-2" aria-hidden="true"></i>Iniciando...';
   res.innerHTML = '';
   apiPost('/telegram/set_webhook', {}, function(d) {
     btn.disabled = false;
-    btn.innerHTML = '<i class="fas fa-robot me-2"></i>Iniciar Bot Telegram';
+    btn.innerHTML = '<i class="fas fa-robot me-2" aria-hidden="true"></i>Iniciar Bot Telegram';
     if (d.success) {
-      res.innerHTML = '<span class="text-success"><i class="fas fa-check me-1"></i>' + d.message.replace(/\n/g,'<br>') + '</span>';
+      res.innerHTML = '<span class="text-success"><i class="fas fa-check me-1" aria-hidden="true"></i>' + d.message.replace(/\n/g,'<br>') + '</span>';
     } else {
-      res.innerHTML = '<span class="text-danger"><i class="fas fa-times me-1"></i>' + d.message + '</span>';
+      res.innerHTML = '<span class="text-danger"><i class="fas fa-times me-1" aria-hidden="true"></i>' + d.message + '</span>';
     }
   });
 }

@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block title %}Migração — {{ panel_name }}{% endblock %}
-{% block page_title %}<i class="fas fa-file-import me-2"></i>Migração de Painel{% endblock %}
+{% block page_title %}<i class="fas fa-file-import me-2" aria-hidden="true"></i>Migração de Painel{% endblock %}
 
 {% block content %}
 <div class="row g-4">
@@ -9,12 +9,12 @@
   <div class="col-lg-7">
     <div class="card">
       <div class="card-header fw-semibold">
-        <i class="fas fa-upload me-2 text-primary"></i>Importar banco de dados
+        <i class="fas fa-upload me-2 text-primary" aria-hidden="true"></i>Importar banco de dados
       </div>
       <div class="card-body">
 
         <div class="alert alert-info mb-3">
-          <i class="fas fa-magic me-2"></i>
+          <i class="fas fa-magic me-2" aria-hidden="true"></i>
           <strong>Detecção automática de painel</strong> — basta enviar o arquivo e o sistema
           identifica se é <strong>Dragon Core&nbsp;/&nbsp;Atlas</strong> ou <strong>GestorSSH</strong>.
           <ul class="mb-0 mt-2 small">
@@ -26,12 +26,13 @@
         </div>
 
         <div class="alert alert-warning py-2 mb-3">
-          <i class="fas fa-exclamation-triangle me-2"></i>
+          <i class="fas fa-exclamation-triangle me-2" aria-hidden="true"></i>
           <strong>Atenção:</strong> Execute a migração apenas <strong>uma vez</strong>.
           Rodar duas vezes pode causar duplicatas.
         </div>
 
-        <form method="POST" enctype="multipart/form-data">
+        <form method="POST" enctype="multipart/form-data"
+              onsubmit="return confirmSubmit(event, 'Confirma importação? Registros existentes serão ignorados.', { title: 'Iniciar migração', okText: 'Importar' })">
           <div class="mb-3">
             <label class="form-label fw-semibold">Arquivo de backup MySQL</label>
             <input type="file" name="sql_file" class="form-control"
@@ -41,9 +42,8 @@
               ou pelo GestorSSH (ex: <code>gestor-api_abc123.sql</code>)
             </small>
           </div>
-          <button type="submit" class="btn btn-primary fw-semibold"
-                  onclick="return confirm('Confirma importação? Registros existentes serão ignorados.')">
-            <i class="fas fa-file-import me-2"></i>Iniciar Migração
+          <button type="submit" class="btn btn-primary fw-semibold">
+            <i class="fas fa-file-import me-2" aria-hidden="true"></i>Iniciar Migração
           </button>
         </form>
       </div>
@@ -56,7 +56,7 @@
       <div class="col-md-6">
         <div class="card h-100">
           <div class="card-header fw-semibold">
-            <i class="fas fa-dragon me-2 text-warning"></i>Dragon Core / Atlas
+            <i class="fas fa-dragon me-2 text-warning" aria-hidden="true"></i>Dragon Core / Atlas
           </div>
           <div class="card-body p-0">
             <table class="table table-sm mb-0">
@@ -86,7 +86,7 @@
       <div class="col-md-6">
         <div class="card h-100">
           <div class="card-header fw-semibold">
-            <i class="fas fa-server me-2 text-info"></i>GestorSSH
+            <i class="fas fa-server me-2 text-info" aria-hidden="true"></i>GestorSSH
           </div>
           <div class="card-body p-0">
             <table class="table table-sm mb-0">
@@ -109,7 +109,7 @@
             </table>
           </div>
           <div class="card-footer text-muted small">
-            <i class="fas fa-info-circle me-1"></i>
+            <i class="fas fa-info-circle me-1" aria-hidden="true"></i>
             Servidores são importados com IP e credenciais SSH, mas a porta do módulo
             (<code>7270</code>) e o token de autenticação precisam ser configurados
             após a migração em <strong>Servidores → Editar</strong>.
@@ -124,7 +124,7 @@
   <div class="col-lg-5">
     <div class="card border-success">
       <div class="card-header fw-semibold text-success">
-        <i class="fas fa-tasks me-2"></i>O que fazer após qualquer migração
+        <i class="fas fa-tasks me-2" aria-hidden="true"></i>O que fazer após qualquer migração
       </div>
       <div class="card-body small">
 

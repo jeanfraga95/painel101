@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block title %}Revendas — {{ panel_name }}{% endblock %}
-{% block page_title %}<i class="fas fa-user-tie me-2"></i>Revendas{% endblock %}
+{% block page_title %}<i class="fas fa-user-tie me-2" aria-hidden="true"></i>Revendas{% endblock %}
 
 {% block content %}
 
@@ -10,16 +10,16 @@
 
     <div class="d-flex flex-wrap gap-2 mb-3">
       <a class="filter-chip {{ 'active' if f_type=='all' }}" href="?filter=all">
-        <i class="fas fa-list-ul"></i>Todas <span class="chip-n">{{ r_counts.all }}</span>
+        <i class="fas fa-list-ul" aria-hidden="true"></i>Todas <span class="chip-n">{{ r_counts.all }}</span>
       </a>
       <a class="filter-chip {{ 'active' if f_type=='mine' }}" href="?filter=mine">
-        <i class="fas fa-user-tie"></i>Diretas <span class="chip-n">{{ r_counts.mine }}</span>
+        <i class="fas fa-user-tie" aria-hidden="true"></i>Diretas <span class="chip-n">{{ r_counts.mine }}</span>
       </a>
       <a class="filter-chip {{ 'active' if f_type=='sub' }}" href="?filter=sub">
-        <i class="fas fa-sitemap"></i>De revenda
+        <i class="fas fa-sitemap" aria-hidden="true"></i>De revenda
       </a>
       <a class="filter-chip {{ 'active' if f_type=='expiring' }}" href="?filter=expiring">
-        <i class="fas fa-clock text-warning"></i>Vencendo 7d <span class="chip-n">{{ r_counts.expiring }}</span>
+        <i class="fas fa-clock text-warning" aria-hidden="true"></i>Vencendo 7d <span class="chip-n">{{ r_counts.expiring }}</span>
       </a>
     </div>
 
@@ -28,7 +28,7 @@
         <div class="col-auto">
           <button class="btn btn-grad" type="button"
                   data-bs-toggle="modal" data-bs-target="#createResellerModal">
-            <i class="fas fa-user-plus me-1"></i>Nova Revenda
+            <i class="fas fa-user-plus me-1" aria-hidden="true"></i>Nova Revenda
           </button>
         </div>
         {% if f_type == 'sub' %}
@@ -36,7 +36,7 @@
           <label class="form-label small text-muted mb-1">Revenda (dona dos sub-accounts)</label>
           <div class="input-group input-group-sm">
             <input type="hidden" name="filter" value="sub">
-            <span class="input-group-text"><i class="fas fa-sitemap"></i></span>
+            <span class="input-group-text"><i class="fas fa-sitemap" aria-hidden="true"></i></span>
             <select name="parent_id" class="form-select form-select-sm" onchange="this.form.submit()">
               <option value="">— Selecione a revenda —</option>
               {% for fr in filter_resellers %}
@@ -75,7 +75,7 @@
           {% set d = days_until(r.expires_at) if r.expires_at else 999 %}
           {% set u = usage_map[r.id] %}
           <tr id="rrow_{{ r.id }}">
-            <td><i class="fas fa-user-tie me-1 text-muted"></i><strong>{{ r.username }}</strong></td>
+            <td><i class="fas fa-user-tie me-1 text-muted" aria-hidden="true"></i><strong>{{ r.username }}</strong></td>
             <td>
               {% if r.parent_id %}
                 <small class="text-muted">↳ {{ parent_map.get(r.id, '?') }}</small>
@@ -114,38 +114,38 @@
             </td>
             <td>
               <span class="badge {{ 'bg-success' if r.status == 'active' else 'bg-danger' }}" id="rstatus_{{ r.id }}">
-                <i class="fas fa-circle me-1" style="font-size:.5rem;vertical-align:middle;"></i>
+                <i class="fas fa-circle me-1" style="font-size:.5rem;vertical-align:middle;" aria-hidden="true"></i>
                 {{ 'ativo' if r.status == 'active' else 'suspenso' }}
               </span>
             </td>
             <td class="text-end">
               <div class="btn-group btn-group-sm">
                 <button class="btn btn-outline-info" title="Alterar senha"
-                        onclick="openChangePw({{ r.id }}, '{{ r.username }}')">
-                  <i class="fas fa-key"></i>
+                        onclick="openChangePw({{ r.id }}, '{{ r.username }}')" aria-label="Alterar senha">
+                  <i class="fas fa-key" aria-hidden="true"></i>
                 </button>
                 <button class="btn btn-outline-secondary" title="Editar limite"
-                        onclick="openEditLimit({{ r.id }}, '{{ r.username }}', {{ r.account_limit or 0 }})">
-                  <i class="fas fa-edit"></i>
+                        onclick="openEditLimit({{ r.id }}, '{{ r.username }}', {{ r.account_limit or 0 }})" aria-label="Editar limite">
+                  <i class="fas fa-edit" aria-hidden="true"></i>
                 </button>
                 {% if current_user.role == 'admin' %}
                 <button class="btn btn-outline-secondary" title="Atribuir servidores"
-                        onclick="openServers({{ r.id }}, '{{ r.username }}', {{ server_assign_map.get(r.id, [])|tojson }}, {{ category_assign_map.get(r.id, [])|tojson }})">
-                  <i class="fas fa-server"></i>
+                        onclick="openServers({{ r.id }}, '{{ r.username }}', {{ server_assign_map.get(r.id, [])|tojson }}, {{ category_assign_map.get(r.id, [])|tojson }})" aria-label="Atribuir servidores">
+                  <i class="fas fa-server" aria-hidden="true"></i>
                 </button>
                 <button class="btn btn-outline-primary" title="Transferir revenda"
-                        onclick="openTransfer({{ r.id }}, '{{ r.username }}')">
-                  <i class="fas fa-exchange-alt"></i>
+                        onclick="openTransfer({{ r.id }}, '{{ r.username }}')" aria-label="Transferir revenda">
+                  <i class="fas fa-exchange-alt" aria-hidden="true"></i>
                 </button>
                 {% endif %}
-                <button class="btn btn-outline-success" onclick="renewReseller({{ r.id }})" title="Renovar painel">
-                  <i class="fas fa-redo"></i>
+                <button class="btn btn-outline-success" onclick="renewReseller({{ r.id }})" title="Renovar painel" aria-label="Renovar painel">
+                  <i class="fas fa-redo" aria-hidden="true"></i>
                 </button>
-                <button class="btn btn-outline-warning" onclick="suspendReseller({{ r.id }})" title="Suspender/Ativar">
-                  <i class="fas fa-ban"></i>
+                <button class="btn btn-outline-warning" onclick="suspendReseller({{ r.id }})" title="Suspender/Ativar" aria-label="Suspender/Ativar">
+                  <i class="fas fa-ban" aria-hidden="true"></i>
                 </button>
-                <button class="btn btn-outline-danger" onclick="deleteReseller({{ r.id }}, '{{ r.username }}')" title="Deletar">
-                  <i class="fas fa-trash"></i>
+                <button class="btn btn-outline-danger" onclick="deleteReseller({{ r.id }}, '{{ r.username }}')" title="Deletar" aria-label="Deletar">
+                  <i class="fas fa-trash" aria-hidden="true"></i>
                 </button>
               </div>
             </td>
@@ -164,7 +164,7 @@
   <div class="modal-dialog modal-lg">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title"><i class="fas fa-user-plus me-2"></i>Nova Revenda</h5>
+        <h5 class="modal-title"><i class="fas fa-user-plus me-2" aria-hidden="true"></i>Nova Revenda</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
@@ -173,7 +173,7 @@
             <label class="form-label">Usuário</label>
             <div class="input-group">
               <input type="text" id="cr_username" class="form-control" placeholder="revenda1" required>
-              <button class="btn btn-outline-secondary" onclick="genResCreds()"><i class="fas fa-random"></i></button>
+              <button class="btn btn-outline-secondary" onclick="genResCreds()"><i class="fas fa-random" aria-hidden="true"></i></button>
             </div>
           </div>
           <div class="col-6">
@@ -221,7 +221,7 @@
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
         <button type="button" class="btn btn-primary" onclick="submitCreateReseller()">
-          <i class="fas fa-plus me-2"></i>Criar Revenda
+          <i class="fas fa-plus me-2" aria-hidden="true"></i>Criar Revenda
         </button>
       </div>
     </div>
@@ -233,7 +233,7 @@
   <div class="modal-dialog modal-sm">
     <div class="modal-content">
       <div class="modal-header">
-        <h6 class="modal-title"><i class="fas fa-key me-2"></i>Alterar Senha — <span id="cpw_name"></span></h6>
+        <h6 class="modal-title"><i class="fas fa-key me-2" aria-hidden="true"></i>Alterar Senha — <span id="cpw_name"></span></h6>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
@@ -243,7 +243,7 @@
           <input type="text" id="cpw_pw" class="form-control" placeholder="Mínimo 4 caracteres">
         </div>
         <button class="btn btn-sm btn-outline-secondary" onclick="genPw()">
-          <i class="fas fa-random me-1"></i>Gerar senha
+          <i class="fas fa-random me-1" aria-hidden="true"></i>Gerar senha
         </button>
       </div>
       <div class="modal-footer">
@@ -259,7 +259,7 @@
   <div class="modal-dialog">
     <div class="modal-content">
       <div class="modal-header">
-        <h6 class="modal-title"><i class="fas fa-server me-2"></i>Acesso — <span id="srv_name"></span></h6>
+        <h6 class="modal-title"><i class="fas fa-server me-2" aria-hidden="true"></i>Acesso — <span id="srv_name"></span></h6>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
@@ -267,12 +267,12 @@
         <ul class="nav nav-tabs nav-sm mb-3" id="srvTabs">
           <li class="nav-item">
             <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab_servers">
-              <i class="fas fa-server me-1"></i>Servidores
+              <i class="fas fa-server me-1" aria-hidden="true"></i>Servidores
             </button>
           </li>
           <li class="nav-item">
             <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab_categories">
-              <i class="fas fa-layer-group me-1"></i>Categorias
+              <i class="fas fa-layer-group me-1" aria-hidden="true"></i>Categorias
             </button>
           </li>
         </ul>
@@ -308,7 +308,7 @@
                 <input class="form-check-input cat_cb" type="checkbox"
                        value="{{ cat.id }}" id="cat_chk_{{ cat.id }}">
                 <label class="form-check-label" for="cat_chk_{{ cat.id }}">
-                  <i class="fas fa-layer-group me-1 text-primary"></i>
+                  <i class="fas fa-layer-group me-1 text-primary" aria-hidden="true"></i>
                   <strong>{{ cat.name }}</strong>
                 </label>
               </div>
@@ -324,7 +324,7 @@
         <input type="hidden" id="srv_reseller_id">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
         <button type="button" class="btn btn-primary" onclick="submitServers()">
-          <i class="fas fa-save me-2"></i>Salvar
+          <i class="fas fa-save me-2" aria-hidden="true"></i>Salvar
         </button>
       </div>
     </div>
@@ -336,14 +336,14 @@
   <div class="modal-dialog modal-sm">
     <div class="modal-content">
       <div class="modal-header bg-success text-white">
-        <h6 class="modal-title"><i class="fas fa-check-circle me-2"></i>Revenda criada!</h6>
+        <h6 class="modal-title"><i class="fas fa-check-circle me-2" aria-hidden="true"></i>Revenda criada!</h6>
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body" id="resellerResultBody"></div>
       <div class="modal-footer flex-column gap-2">
         <button type="button" class="btn btn-success w-100" id="copyResellerBtn"
                 onclick="copyResellerResult(this)">
-          <i class="fas fa-copy me-2"></i>Copiar dados
+          <i class="fas fa-copy me-2" aria-hidden="true"></i>Copiar dados
         </button>
         <button type="button" class="btn btn-secondary w-100" data-bs-dismiss="modal">Fechar</button>
       </div>
@@ -469,21 +469,21 @@ function renewReseller(id) {
   });
 }
 
-function suspendReseller(id) {
-  if (!confirm('Suspender/ativar esta revenda?')) return;
+async function suspendReseller(id) {
+  if (!await confirmDialog('Suspender/ativar esta revenda?')) return;
   apiPost(`/resellers/suspend/${id}`, {}, d => {
     showToast(d.message || 'OK', d.success ? 'success' : 'danger');
     if (d.success) {
       const el = document.getElementById('rstatus_' + id);
       el.textContent = d.new_status === 'active' ? 'ativo' : 'suspenso';
-      el.innerHTML = `<i class="fas fa-circle me-1" style="font-size:.5rem;vertical-align:middle;"></i>${d.new_status === 'active' ? 'ativo' : 'suspenso'}`;
+      el.innerHTML = `<i class="fas fa-circle me-1" style="font-size:.5rem;vertical-align:middle;" aria-hidden="true"></i>${d.new_status === 'active' ? 'ativo' : 'suspenso'}`;
       el.className = 'badge ' + (d.new_status === 'active' ? 'bg-success' : 'bg-danger');
     }
   });
 }
 
-function deleteReseller(id, name) {
-  if (!confirm(`Deletar revenda "${name}"? Isso NÃO deleta os usuários SSH dela.`)) return;
+async function deleteReseller(id, name) {
+  if (!await confirmDialog(`Deletar revenda "${name}"? Isso NÃO deleta os usuários SSH dela.`)) return;
   apiPost(`/resellers/delete/${id}`, {}, d => {
     showToast(d.message, d.success ? 'success' : 'danger');
     if (d.success) document.getElementById('rrow_' + id)?.remove();
@@ -523,7 +523,7 @@ function doTransfer() {
   <div class="modal-dialog modal-sm">
     <div class="modal-content">
       <div class="modal-header">
-        <h6 class="modal-title" id="transferTitle"><i class="fas fa-exchange-alt me-2"></i>Transferir Revenda</h6>
+        <h6 class="modal-title" id="transferTitle"><i class="fas fa-exchange-alt me-2" aria-hidden="true"></i>Transferir Revenda</h6>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
@@ -538,7 +538,7 @@ function doTransfer() {
       </div>
       <div class="modal-footer">
         <button class="btn btn-primary w-100" onclick="doTransfer()">
-          <i class="fas fa-check me-2"></i>Transferir
+          <i class="fas fa-check me-2" aria-hidden="true"></i>Transferir
         </button>
       </div>
     </div>

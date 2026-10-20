@@ -3,7 +3,7 @@
   <div class="modal-dialog modal-lg">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title"><i class="fas fa-user-plus me-2"></i>Criar Usuário SSH</h5>
+        <h5 class="modal-title"><i class="fas fa-user-plus me-2" aria-hidden="true"></i>Criar Usuário SSH</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
@@ -12,8 +12,8 @@
             <label class="form-label">Usuário</label>
             <div class="input-group">
               <input type="text" id="cu_username" class="form-control" placeholder="usuario123" required>
-              <button class="btn btn-outline-secondary" onclick="genCreds()" title="Gerar aleatório">
-                <i class="fas fa-random"></i>
+              <button class="btn btn-outline-secondary" onclick="genCreds()" title="Gerar aleatório" aria-label="Gerar aleatório">
+                <i class="fas fa-random" aria-hidden="true"></i>
               </button>
             </div>
           </div>
@@ -55,7 +55,7 @@
             <label class="form-label">UUID V2Ray</label>
             <div class="input-group">
               <input type="text" id="cu_uuid" class="form-control font-monospace" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
-              <button class="btn btn-outline-secondary" onclick="genUUID()"><i class="fas fa-random"></i></button>
+              <button class="btn btn-outline-secondary" onclick="genUUID()" aria-label="Gerar UUID aleatório" title="Gerar UUID aleatório"><i class="fas fa-random" aria-hidden="true"></i></button>
             </div>
           </div>
         </div>
@@ -63,7 +63,7 @@
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
         <button type="button" id="btnCreateUser" class="btn btn-primary" onclick="submitCreateUser()">
-          <i class="fas fa-plus me-2"></i>Criar Usuário
+          <i class="fas fa-plus me-2" aria-hidden="true"></i>Criar Usuário
         </button>
       </div>
     </div>
@@ -75,7 +75,7 @@
   <div class="modal-dialog">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title"><i class="fas fa-clock me-2"></i>Criar Teste</h5>
+        <h5 class="modal-title"><i class="fas fa-clock me-2" aria-hidden="true"></i>Criar Teste</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
@@ -84,7 +84,7 @@
             <label class="form-label">Usuário</label>
             <div class="input-group">
               <input type="text" id="ct_username" class="form-control" placeholder="teste123" required>
-              <button class="btn btn-outline-secondary" onclick="genTestCreds()"><i class="fas fa-random"></i></button>
+              <button class="btn btn-outline-secondary" onclick="genTestCreds()" aria-label="Gerar usuário e senha de teste aleatórios" title="Gerar usuário e senha de teste aleatórios"><i class="fas fa-random" aria-hidden="true"></i></button>
             </div>
           </div>
           <div class="col-6">
@@ -133,7 +133,7 @@
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
         <button type="button" id="btnCreateTest" class="btn btn-warning text-dark" onclick="submitCreateTest()">
-          <i class="fas fa-plus me-2"></i>Criar Teste
+          <i class="fas fa-plus me-2" aria-hidden="true"></i>Criar Teste
         </button>
       </div>
     </div>
@@ -145,12 +145,12 @@
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header bg-success text-white">
-        <h6 class="modal-title"><i class="fas fa-check-circle me-2"></i>Criado com sucesso!</h6>
+        <h6 class="modal-title"><i class="fas fa-check-circle me-2" aria-hidden="true"></i>Criado com sucesso!</h6>
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
         <label class="form-label small text-muted mb-1">
-          <i class="fas fa-pen me-1"></i>Edite a mensagem antes de enviar ao cliente
+          <i class="fas fa-pen me-1" aria-hidden="true"></i>Edite a mensagem antes de enviar ao cliente
         </label>
         <textarea id="resultMsg" class="form-control font-monospace" rows="10" spellcheck="false"></textarea>
         <input type="hidden" id="resultPhone">
@@ -159,15 +159,15 @@
         <div class="d-flex gap-2 w-100 mb-2">
           <button type="button" class="btn btn-success flex-fill" id="copyResultBtn"
                   onclick="copyResult(this)">
-            <i class="fas fa-copy me-2"></i>Copiar
+            <i class="fas fa-copy me-2" aria-hidden="true"></i>Copiar
           </button>
           <a class="btn btn-outline-success flex-fill" id="waResultBtn" href="#" target="_blank" rel="noopener">
-            <i class="fab fa-whatsapp me-2"></i>WhatsApp
+            <i class="fab fa-whatsapp me-2" aria-hidden="true"></i>WhatsApp
           </a>
         </div>
         <div class="d-flex gap-2 w-100">
           <button type="button" class="btn btn-outline-secondary flex-fill" onclick="openMsgTpl()">
-            <i class="fas fa-cog me-2"></i>Formato
+            <i class="fas fa-cog me-2" aria-hidden="true"></i>Formato
           </button>
           <button type="button" class="btn btn-secondary flex-fill" data-bs-dismiss="modal">Fechar</button>
         </div>
@@ -181,7 +181,7 @@
   <div class="modal-dialog modal-lg modal-dialog-scrollable">
     <div class="modal-content">
       <div class="modal-header">
-        <h6 class="modal-title"><i class="fas fa-cog me-2"></i>Formato da mensagem</h6>
+        <h6 class="modal-title"><i class="fas fa-cog me-2" aria-hidden="true"></i>Formato da mensagem</h6>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
@@ -194,12 +194,12 @@
       </div>
       <div class="modal-footer justify-content-between">
         <button type="button" class="btn btn-outline-warning" onclick="restoreMsgTpl()">
-          <i class="fas fa-rotate-left me-1"></i>Restaurar padrão
+          <i class="fas fa-rotate-left me-1" aria-hidden="true"></i>Restaurar padrão
         </button>
         <div class="d-flex gap-2">
           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
           <button type="button" class="btn btn-grad" onclick="saveMsgTpl()">
-            <i class="fas fa-save me-1"></i>Salvar
+            <i class="fas fa-save me-1" aria-hidden="true"></i>Salvar
           </button>
         </div>
       </div>
@@ -277,8 +277,8 @@ function saveMsgTpl() {
   });
 }
 
-function restoreMsgTpl() {
-  if (!confirm('Voltar a mensagem para o formato padrão?')) return;
+async function restoreMsgTpl() {
+  if (!await confirmDialog('Voltar a mensagem para o formato padrão?')) return;
   document.getElementById('msgTplText').value = DEFAULT_MSG_TPL;
   apiPost('/users/message-template', { template: '' }, d => {
     showToast(d.message, d.success ? 'success' : 'danger');
