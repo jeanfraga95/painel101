@@ -167,6 +167,50 @@ check('variantes dark e light presentes',
       css.count('[data-bs-theme="dark"]') >= 8 and css.count('[data-bs-theme="light"]') >= 8,
       (css.count('[data-bs-theme="dark"]'), css.count('[data-bs-theme="light"]')))
 
+# ── 9. Cada preset muda LAYOUT (não só cor) ─────────────────────────────────
+# As variáveis de layout precisam estar definidas por preset e diferir entre
+# eles; senão os estilos seriam só recolorações.
+import re as _re2
+
+layout_vars = ['--pmg-radius', '--pmg-btn-radius', '--pmg-icon-radius']
+for var in layout_vars:
+    valores = {}
+    for p in a.STYLE_PRESETS:
+        if p['id'] == 'default':
+            continue
+        blk = _re2.search(r':root\[data-style="%s"\]\s*\{(.*?)\}' % p['id'], css, _re2.S)
+        if blk:
+            m = _re2.search(_re2.escape(var) + r':\s*([^;]+)', blk.group(1))
+            if m:
+                valores[p['id']] = m.group(1).strip()
+    unicos = set(valores.values())
+    check(f'{var} varia entre presets (layout != cor)', len(unicos) >= 3,
+          (len(unicos), valores))
+
+# Sidebar/topbar/galss com estrutura própria (não só variáveis)
+check('preset muda o fundo da sidebar (--pmg-sidebar-bg)',
+      '--pmg-sidebar-bg' in css)
+check('preset muda o fundo da topbar (--pmg-topbar-bg)',
+      '--pmg-topbar-bg' in css)
+check('preset muda o fundo da marca (--pmg-brand-bg)', '--pmg-brand-bg' in css)
+check('preset muda o item ativo (--pmg-nav-active-bg)', '--pmg-nav-active-bg' in css)
+check('densidade de tabela por preset (--pmg-table-pad-y)', '--pmg-table-pad-y' in css)
+check('glass com sidebar flutuante (border-radius na .sidebar)',
+      ':root[data-style="glass-night"] .sidebar' in css and 'border-radius: 20px' in css)
+check('responsivo reafirma margin-left:0 na gaveta',
+      'margin-left: 0 !important' in css)
+# Presets claramente distintos: nenhum par com bloco base idêntico
+blocos = {}
+for p in a.STYLE_PRESETS:
+    if p['id'] == 'default':
+        continue
+    m = _re2.search(r':root\[data-style="%s"\]\s*\{(.*?)\}' % p['id'], css, _re2.S)
+    if m:
+        blocos[p['id']] = _re2.sub(r'\s+', ' ', m.group(1)).strip()
+check('nenhum par de presets com layout base idêntico',
+      len(set(blocos.values())) == len(blocos),
+      [k for k in blocos])
+
 reset_appearance(admin_id)
 if rev:
     reset_appearance(rev_id)

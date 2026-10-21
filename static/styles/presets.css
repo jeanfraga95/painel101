@@ -5,18 +5,97 @@
    base.html, e as regras usam seletores mais específicos (:root[data-style=]),
    então sempre vencem o --accent vindo da configuração de cor do painel.
 
-   Cada preset redeclara as variáveis --pmg-* (tema claro/escuro) e --accent.
+   Cada preset NÃO é só um tema de cores: ele muda o LAYOUT.
+   Para isso cada bloco define variáveis de layout (--pmg-sidebar-*,
+   --pmg-topbar-*, --pmg-card-*, --pmg-radius, --pmg-shadow-*, --pmg-btn-*,
+   --pmg-density) e, quando precisa, regras estruturais próprias
+   (sidebar sólida x gradiente x translúcida, cards com borda lateral,
+   tabela listrada, botões quadrados/arredondados/pill, topbar fina/grossa).
+
    Os presets "Tailwind" e "Sass" são CSS puro que emula o visual dessas
    ferramentas: não carregamos o Tailwind CDN porque o preflight dele
    quebraria o layout do Bootstrap usado no resto do painel.
    =========================================================================== */
 
 /* ---------------------------------------------------------------------------
-   1. Bootstrap — Cosmo (verde-petróleo, cartões retos)
+   Camada base: consome as variáveis de layout que cada preset define.
+   Sem preset (default) as variáveis caem nos valores atuais do painel,
+   então o estilo "Padrão" continua idêntico ao que já existia.
    --------------------------------------------------------------------------- */
+.sidebar {
+  width: var(--pmg-sidebar-w, 240px);
+  background: var(--pmg-sidebar-bg, var(--pmg-surface));
+  border-right: var(--pmg-sidebar-border-w, 1px) solid var(--pmg-border);
+}
+.sidebar .brand {
+  background: var(--pmg-brand-bg, linear-gradient(135deg, var(--accent), var(--accent-dark)));
+  color: var(--pmg-brand-color, #fff);
+  box-shadow: var(--pmg-brand-shadow, 0 4px 18px color-mix(in srgb, var(--accent) 35%, transparent));
+  border-radius: var(--pmg-brand-radius, 0);
+  text-transform: var(--pmg-brand-transform, none);
+  letter-spacing: var(--pmg-brand-spacing, normal);
+}
+.sidebar .nav-link {
+  border-radius: var(--pmg-nav-radius, 8px);
+  margin: var(--pmg-nav-margin, 2px 10px);
+  border-left: var(--pmg-nav-border-left, 0) solid transparent;
+  font-size: var(--pmg-nav-size, 1rem);
+}
+.sidebar .nav-link.active {
+  background: var(--pmg-nav-active-bg, linear-gradient(135deg, var(--accent), var(--accent-dark)));
+  box-shadow: var(--pmg-nav-active-shadow, 0 5px 16px color-mix(in srgb, var(--accent) 40%, transparent));
+  border-left-color: var(--pmg-nav-border-active, transparent);
+}
+.main-content { margin-left: var(--pmg-sidebar-w, 240px); }
+
+.card, .stat-card {
+  border-radius: var(--pmg-radius, 14px);
+  border-width: var(--pmg-card-border-w, 1px);
+}
+.card { box-shadow: var(--pmg-shadow-card, 0 2px 12px var(--pmg-card-shadow)); }
+.card-header {
+  border-radius: var(--pmg-radius, 14px) var(--pmg-radius, 14px) 0 0;
+  text-transform: var(--pmg-card-title-transform, none);
+  letter-spacing: var(--pmg-card-title-spacing, normal);
+}
+.stat-icon { border-radius: var(--pmg-icon-radius, 13px); }
+.topbar {
+  background: var(--pmg-topbar-bg, var(--pmg-topbar));
+  border-bottom-width: var(--pmg-topbar-border-w, 1px);
+  border-top: var(--pmg-topbar-border-top, 0) solid var(--pmg-border);
+  padding: var(--pmg-topbar-pad, .8rem 1.5rem);
+  backdrop-filter: var(--pmg-topbar-blur, blur(10px));
+  -webkit-backdrop-filter: var(--pmg-topbar-blur, blur(10px));
+}
+.btn { border-radius: var(--pmg-btn-radius, .375rem); }
+.btn-grad {
+  border-radius: var(--pmg-btn-radius, .375rem);
+  background: var(--pmg-btn-grad-bg, linear-gradient(135deg, var(--accent), var(--accent-dark)));
+  box-shadow: var(--pmg-btn-shadow, 0 4px 14px color-mix(in srgb, var(--accent) 35%, transparent));
+}
+.filter-chip { border-radius: var(--pmg-chip-radius, 50rem); }
+
+/* Densidade: espaçamento de tabela e corpo dos cards por preset */
+.table > :not(caption) > * > * {
+  padding: var(--pmg-table-pad-y, .5rem) var(--pmg-table-pad-x, .5rem);
+  font-size: var(--pmg-table-size, 1rem);
+}
+.card-body { padding: var(--pmg-cardbody-pad, 1rem); }
+
+/* =========================================================================
+   FAMÍLIA BOOTSTRAP
+   ========================================================================= */
+
+/* ── 1. Cosmo — "cartões retos": cantos quase quadrados, topbar com faixa
+      de destaque, nav com marcador lateral. ─────────────────────────────── */
 :root[data-style="bootstrap-cosmo"] {
-  --accent: #26a69a;
-  --accent-dark: #00897b;
+  --accent: #26a69a; --accent-dark: #00897b;
+  --pmg-radius: 4px; --pmg-icon-radius: 4px; --pmg-btn-radius: .2rem;
+  --pmg-nav-radius: 0; --pmg-nav-margin: 0; --pmg-nav-border-left: 3px;
+  --pmg-brand-radius: 0; --pmg-chip-radius: .25rem;
+  --pmg-card-title-transform: uppercase; --pmg-card-title-spacing: .04em;
+  --pmg-topbar-border-top: 3px;
+  --pmg-cardbody-pad: .9rem;
 }
 :root[data-style="bootstrap-cosmo"][data-bs-theme="dark"] {
   --pmg-bg: #14181c; --pmg-text: #eceff1; --pmg-surface: #1c2126;
@@ -27,6 +106,10 @@
   --pmg-card-header: rgba(255,255,255,.03); --pmg-card-header-border: rgba(255,255,255,.05);
   --pmg-chip-border: rgba(255,255,255,.12); --pmg-chip-text: #cfd8dc; --pmg-chip-bg: rgba(255,255,255,.04);
   --pmg-chip-hover-text: #fff; --pmg-chip-n-bg: rgba(255,255,255,.14);
+  --pmg-sidebar-bg: #10151a; --pmg-brand-bg: #10151a;
+  --pmg-brand-shadow: none; --pmg-nav-active-bg: rgba(38,166,154,.16);
+  --pmg-nav-active-shadow: none; --pmg-nav-border-active: #26a69a;
+  --pmg-card-border-w: 1px;
 }
 :root[data-style="bootstrap-cosmo"][data-bs-theme="light"] {
   --pmg-bg: #f4f6f8; --pmg-text: #263238; --pmg-surface: #ffffff;
@@ -37,16 +120,21 @@
   --pmg-card-header: #f7f9fa; --pmg-card-header-border: rgba(0,0,0,.06);
   --pmg-chip-border: #e0e0e0; --pmg-chip-text: #546e7a; --pmg-chip-bg: #fff;
   --pmg-chip-hover-text: #000; --pmg-chip-n-bg: rgba(0,0,0,.1);
+  --pmg-sidebar-bg: #263238; --pmg-brand-bg: #263238;
+  --pmg-navlink: #cfd8dc; --pmg-nav-active-bg: rgba(38,166,154,.22);
 }
-:root[data-style="bootstrap-cosmo"] .card,
-:root[data-style="bootstrap-cosmo"] .stat-card { border-radius: 4px; }
+:root[data-style="bootstrap-cosmo"] .nav-link:hover { transform: none; }
 
-/* ---------------------------------------------------------------------------
-   2. Bootstrap — Flatly (verde-água sobre azul-noite)
-   --------------------------------------------------------------------------- */
+/* ── 2. Flatly — sidebar azul-noite sólida com gradiente no topo, topbar
+      branca/limpa, botões retangulares, nav com divisória. ──────────────── */
 :root[data-style="bootstrap-flatly"] {
-  --accent: #18bc9c;
-  --accent-dark: #16a085;
+  --accent: #18bc9c; --accent-dark: #16a085;
+  --pmg-radius: 6px; --pmg-icon-radius: 6px; --pmg-btn-radius: .3rem;
+  --pmg-nav-radius: 4px; --pmg-nav-margin: 3px 12px;
+  --pmg-brand-radius: 0; --pmg-chip-radius: .3rem;
+  --pmg-topbar-bg: var(--pmg-surface);
+  --pmg-topbar-blur: none;
+  --pmg-cardbody-pad: 1.1rem;
 }
 :root[data-style="bootstrap-flatly"][data-bs-theme="dark"] {
   --pmg-bg: #141e26; --pmg-text: #e8edf1; --pmg-surface: #1a2733;
@@ -57,6 +145,8 @@
   --pmg-card-header: rgba(255,255,255,.04); --pmg-card-header-border: rgba(255,255,255,.06);
   --pmg-chip-border: rgba(255,255,255,.13); --pmg-chip-text: #c5d3dc; --pmg-chip-bg: rgba(255,255,255,.05);
   --pmg-chip-hover-text: #fff; --pmg-chip-n-bg: rgba(255,255,255,.15);
+  --pmg-sidebar-bg: #0b141b; --pmg-brand-bg: linear-gradient(135deg,#18bc9c,#0e5f52);
+  --pmg-nav-active-bg: rgba(24,188,156,.18); --pmg-nav-active-shadow: none;
 }
 :root[data-style="bootstrap-flatly"][data-bs-theme="light"] {
   --pmg-bg: #f7fafb; --pmg-text: #21323b; --pmg-surface: #ffffff;
@@ -67,16 +157,28 @@
   --pmg-card-header: #f6f9fa; --pmg-card-header-border: rgba(0,0,0,.06);
   --pmg-chip-border: #dfe7ec; --pmg-chip-text: #48606e; --pmg-chip-bg: #fff;
   --pmg-chip-hover-text: #000; --pmg-chip-n-bg: rgba(0,0,0,.1);
+  --pmg-sidebar-bg: #2c3e50; --pmg-brand-bg: linear-gradient(135deg,#18bc9c,#0e5f52);
+  --pmg-navlink: #c8d2da; --pmg-nav-active-bg: rgba(24,188,156,.22);
 }
+:root[data-style="bootstrap-flatly"] .nav-link:hover { transform: none; }
 
-/* ---------------------------------------------------------------------------
-   3. Tailwind — Indigo (cantos bem arredondados, superfícies chapadas)
-   --------------------------------------------------------------------------- */
+/* =========================================================================
+   FAMÍLIA TAILWIND (emulação em CSS puro)
+   ========================================================================= */
+
+/* ── 3. Indigo — "app SaaS": superfícies chapadas, sem sombra, cantos
+      grandes, sidebar clara com item ativo em bloco cheio, topbar alta. ─── */
 :root[data-style="tailwind-indigo"] {
-  --accent: #4f46e5;
-  --accent-dark: #3730a3;
+  --accent: #4f46e5; --accent-dark: #3730a3;
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
                "Helvetica Neue", Arial, sans-serif;
+  --pmg-radius: 1rem; --pmg-icon-radius: .75rem; --pmg-btn-radius: .625rem;
+  --pmg-nav-radius: .6rem; --pmg-nav-margin: 2px 10px;
+  --pmg-shadow-card: none; --pmg-btn-shadow: none;
+  --pmg-brand-radius: 0; --pmg-chip-radius: .5rem;
+  --pmg-card-border-w: 1px;
+  --pmg-topbar-pad: .95rem 1.5rem;
+  --pmg-cardbody-pad: 1.15rem;
 }
 :root[data-style="tailwind-indigo"][data-bs-theme="dark"] {
   --pmg-bg: #0f172a; --pmg-text: #e2e8f0; --pmg-surface: #1e293b;
@@ -87,6 +189,8 @@
   --pmg-card-header: rgba(255,255,255,.04); --pmg-card-header-border: rgba(255,255,255,.06);
   --pmg-chip-border: rgba(255,255,255,.14); --pmg-chip-text: #cbd5e1; --pmg-chip-bg: rgba(255,255,255,.05);
   --pmg-chip-hover-text: #fff; --pmg-chip-n-bg: rgba(255,255,255,.16);
+  --pmg-sidebar-bg: #111c33; --pmg-brand-bg: #111c33; --pmg-brand-shadow: none;
+  --pmg-nav-active-bg: var(--accent); --pmg-nav-active-shadow: none;
 }
 :root[data-style="tailwind-indigo"][data-bs-theme="light"] {
   --pmg-bg: #f8fafc; --pmg-text: #0f172a; --pmg-surface: #ffffff;
@@ -97,31 +201,35 @@
   --pmg-card-header: #f8fafc; --pmg-card-header-border: #e2e8f0;
   --pmg-chip-border: #e2e8f0; --pmg-chip-text: #475569; --pmg-chip-bg: #fff;
   --pmg-chip-hover-text: #0f172a; --pmg-chip-n-bg: rgba(15,23,42,.08);
+  --pmg-navlink: #334155; --pmg-nav-active-bg: var(--accent); --pmg-nav-active-shadow: none;
 }
-:root[data-style="tailwind-indigo"] .card,
-:root[data-style="tailwind-indigo"] .stat-card { border-radius: 1rem; }
-:root[data-style="tailwind-indigo"] .btn-grad { border-radius: .625rem; box-shadow: none; }
-:root[data-style="tailwind-indigo"] .btn { border-radius: .625rem; }
-:root[data-style="tailwind-indigo"] .filter-chip { border-radius: .5rem; }
+:root[data-style="tailwind-indigo"] .nav-link:hover { transform: none; }
+:root[data-style="tailwind-indigo"] .stat-icon { box-shadow: none; }
 
-/* ---------------------------------------------------------------------------
-   4. Tailwind — Emerald (esmeralda, cantos suaves)
-   --------------------------------------------------------------------------- */
+/* ── 4. Emerald — mesma base "SaaS" mas sidebar escura fixa (contra o tema
+      claro), topbar fina e tabela compacta. ────────────────────────────── */
 :root[data-style="tailwind-emerald"] {
-  --accent: #059669;
-  --accent-dark: #047857;
+  --accent: #059669; --accent-dark: #047857;
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
                "Helvetica Neue", Arial, sans-serif;
+  --pmg-radius: .875rem; --pmg-icon-radius: .625rem; --pmg-btn-radius: .5rem;
+  --pmg-nav-radius: .5rem; --pmg-nav-margin: 1px 8px;
+  --pmg-shadow-card: none; --pmg-btn-shadow: none;
+  --pmg-brand-radius: 0; --pmg-chip-radius: .375rem;
+  --pmg-topbar-pad: .6rem 1.25rem;
+  --pmg-table-pad-y: .35rem; --pmg-table-size: .875rem;
+  --pmg-cardbody-pad: 1rem;
 }
 :root[data-style="tailwind-emerald"][data-bs-theme="dark"] {
   --pmg-bg: #022c22; --pmg-text: #d1fae5; --pmg-surface: #064e3b;
   --pmg-border: rgba(255,255,255,.09); --pmg-border-strong: rgba(255,255,255,.17);
-  --pmg-navlink: #9fcbb8; --pmg-section: #6ee7b7a6; --pmg-section-rule: rgba(255,255,255,.1);
+  --pmg-navlink: #9fcbb8; --pmg-section: #6ee7b7; --pmg-section-rule: rgba(255,255,255,.1);
   --pmg-sidebar-user: rgba(255,255,255,.05); --pmg-topbar: rgba(2,44,34,.88);
   --pmg-card-border: rgba(255,255,255,.09); --pmg-card-shadow: rgba(0,0,0,.35);
   --pmg-card-header: rgba(255,255,255,.05); --pmg-card-header-border: rgba(255,255,255,.07);
   --pmg-chip-border: rgba(255,255,255,.15); --pmg-chip-text: #b7e4d1; --pmg-chip-bg: rgba(255,255,255,.05);
   --pmg-chip-hover-text: #fff; --pmg-chip-n-bg: rgba(255,255,255,.16);
+  --pmg-sidebar-bg: #012018; --pmg-nav-active-bg: var(--accent); --pmg-nav-active-shadow: none;
 }
 :root[data-style="tailwind-emerald"][data-bs-theme="light"] {
   --pmg-bg: #f0fdf4; --pmg-text: #064e3b; --pmg-surface: #ffffff;
@@ -132,18 +240,30 @@
   --pmg-card-header: #f0fdf4; --pmg-card-header-border: #d1fae5;
   --pmg-chip-border: #d1fae5; --pmg-chip-text: #47715f; --pmg-chip-bg: #fff;
   --pmg-chip-hover-text: #064e3b; --pmg-chip-n-bg: rgba(6,78,59,.1);
+  /* sidebar escura fixa mesmo no claro */
+  --pmg-sidebar-bg: #064e3b; --pmg-navlink: #a7d3c1;
+  --pmg-nav-active-bg: var(--accent); --pmg-nav-active-shadow: none;
+  --pmg-brand-bg: #064e3b; --pmg-brand-shadow: none;
 }
-:root[data-style="tailwind-emerald"] .card,
-:root[data-style="tailwind-emerald"] .stat-card { border-radius: .875rem; }
-:root[data-style="tailwind-emerald"] .btn-grad { border-radius: .5rem; box-shadow: none; }
-:root[data-style="tailwind-emerald"] .btn { border-radius: .5rem; }
+:root[data-style="tailwind-emerald"] .nav-link:hover { transform: none; }
+:root[data-style="tailwind-emerald"] .stat-icon { box-shadow: none; }
 
-/* ---------------------------------------------------------------------------
-   5. CSS Puro — Slate (cinza-ardósia, minimalista, sem gradientes)
-   --------------------------------------------------------------------------- */
+/* =========================================================================
+   FAMÍLIA CSS PURO
+   ========================================================================= */
+
+/* ── 5. Slate — minimalista: tudo quadrado, sem sombra, sidebar com borda
+      direita grossa, ativo só com fundo cinza, tabela compacta. ────────── */
 :root[data-style="flat-slate"] {
-  --accent: #64748b;
-  --accent-dark: #475569;
+  --accent: #64748b; --accent-dark: #475569;
+  --pmg-radius: 2px; --pmg-icon-radius: 2px; --pmg-btn-radius: 2px;
+  --pmg-nav-radius: 0; --pmg-nav-margin: 0; --pmg-nav-border-left: 2px;
+  --pmg-shadow-card: none; --pmg-btn-shadow: none;
+  --pmg-brand-shadow: none; --pmg-brand-radius: 0; --pmg-chip-radius: 2px;
+  --pmg-nav-active-shadow: none;
+  --pmg-sidebar-border-w: 2px;
+  --pmg-table-pad-y: .35rem; --pmg-table-size: .875rem;
+  --pmg-cardbody-pad: .85rem;
 }
 :root[data-style="flat-slate"][data-bs-theme="dark"] {
   --pmg-bg: #0f172a; --pmg-text: #e5e7eb; --pmg-surface: #1e293b;
@@ -154,6 +274,8 @@
   --pmg-card-header: rgba(255,255,255,.03); --pmg-card-header-border: rgba(255,255,255,.05);
   --pmg-chip-border: rgba(255,255,255,.12); --pmg-chip-text: #b6c0cd; --pmg-chip-bg: rgba(255,255,255,.03);
   --pmg-chip-hover-text: #fff; --pmg-chip-n-bg: rgba(255,255,255,.13);
+  --pmg-sidebar-bg: #0b1220; --pmg-brand-bg: #0b1220;
+  --pmg-nav-active-bg: rgba(100,116,139,.28); --pmg-nav-border-active: #94a3b8;
 }
 :root[data-style="flat-slate"][data-bs-theme="light"] {
   --pmg-bg: #f1f5f9; --pmg-text: #1e293b; --pmg-surface: #ffffff;
@@ -164,18 +286,22 @@
   --pmg-card-header: #f8fafc; --pmg-card-header-border: #e2e8f0;
   --pmg-chip-border: #e2e8f0; --pmg-chip-text: #556275; --pmg-chip-bg: #fff;
   --pmg-chip-hover-text: #1e293b; --pmg-chip-n-bg: rgba(15,23,42,.08);
+  --pmg-nav-active-bg: rgba(100,116,139,.18); --pmg-nav-border-active: #64748b;
 }
-/* Minimalista: tira o brilho dos botões e ícones */
-:root[data-style="flat-slate"] .btn-grad { box-shadow: none; border-radius: 6px; }
-:root[data-style="flat-slate"] .sidebar .nav-link.active { box-shadow: none; }
+:root[data-style="flat-slate"] .nav-link:hover { transform: none; }
 :root[data-style="flat-slate"] .stat-card { animation: none; }
+:root[data-style="flat-slate"] .stat-card:hover { transform: none; box-shadow: none; }
 
-/* ---------------------------------------------------------------------------
-   6. CSS Puro — Glass (vidro fosco translúcido com desfoque)
-   --------------------------------------------------------------------------- */
+/* ── 6. Glass — superfícies translúcidas com desfoque, sidebar flutuante,
+      cards "vidro", botões pill e tabela arejada. ──────────────────────── */
 :root[data-style="glass-night"] {
-  --accent: #38bdf8;
-  --accent-dark: #0ea5e9;
+  --accent: #38bdf8; --accent-dark: #0ea5e9;
+  --pmg-radius: 18px; --pmg-icon-radius: 14px; --pmg-btn-radius: 999px;
+  --pmg-nav-radius: 12px; --pmg-nav-margin: 4px 12px;
+  --pmg-brand-radius: 0; --pmg-chip-radius: 999px;
+  --pmg-sidebar-w: 252px;
+  --pmg-cardbody-pad: 1.25rem;
+  --pmg-table-pad-y: .6rem;
 }
 :root[data-style="glass-night"][data-bs-theme="dark"] {
   --pmg-bg: #0b1020; --pmg-text: #e6f1ff; --pmg-surface: rgba(255,255,255,.06);
@@ -186,6 +312,7 @@
   --pmg-card-header: rgba(255,255,255,.05); --pmg-card-header-border: rgba(255,255,255,.1);
   --pmg-chip-border: rgba(255,255,255,.2); --pmg-chip-text: #cfe0f7; --pmg-chip-bg: rgba(255,255,255,.07);
   --pmg-chip-hover-text: #fff; --pmg-chip-n-bg: rgba(255,255,255,.18);
+  --pmg-sidebar-bg: rgba(255,255,255,.05); --pmg-brand-bg: linear-gradient(135deg,#38bdf8,#0ea5e9);
 }
 :root[data-style="glass-night"][data-bs-theme="light"] {
   --pmg-bg: #e8eef7; --pmg-text: #16324d; --pmg-surface: rgba(255,255,255,.65);
@@ -196,22 +323,44 @@
   --pmg-card-header: rgba(255,255,255,.45); --pmg-card-header-border: rgba(255,255,255,.8);
   --pmg-chip-border: rgba(255,255,255,.9); --pmg-chip-text: #44617f; --pmg-chip-bg: rgba(255,255,255,.6);
   --pmg-chip-hover-text: #16324d; --pmg-chip-n-bg: rgba(22,50,77,.1);
+  --pmg-sidebar-bg: rgba(255,255,255,.55); --pmg-brand-bg: linear-gradient(135deg,#38bdf8,#0ea5e9);
 }
+/* "vidro": aplica o desfoque nas superfícies que ficam translúcidas */
 :root[data-style="glass-night"] .card,
 :root[data-style="glass-night"] .stat-card,
-:root[data-style="glass-night"] .sidebar {
+:root[data-style="glass-night"] .sidebar,
+:root[data-style="glass-night"] .topbar,
+:root[data-style="glass-night"] .sidebar-user {
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
 }
-:root[data-style="glass-night"] .card { border-radius: 18px; }
-:root[data-style="glass-night"] .btn-grad { border-radius: 999px; }
+/* Sidebar flutuante: destaca-se do fundo com margem e cantos */
+:root[data-style="glass-night"] .sidebar {
+  top: 10px; left: 10px; height: calc(100vh - 20px);
+  border-radius: 20px; border: 1px solid var(--pmg-border);
+  box-shadow: 0 18px 50px rgba(0,0,0,.35);
+}
+:root[data-style="glass-night"] .sidebar .brand {
+  background: transparent; box-shadow: none;
+}
+:root[data-style="glass-night"] .main-content { margin-left: 272px; }
 
-/* ---------------------------------------------------------------------------
-   7. SCSS/Sass — Neon (preto com neon verde e brilho)
-   --------------------------------------------------------------------------- */
+/* =========================================================================
+   FAMÍLIA SCSS/SASS (emulação em CSS puro)
+   ========================================================================= */
+
+/* ── 7. Neon — fundo quase preto, sidebar escura com brilho, nav ativo
+      neon, botões com glow, cards com borda neon e tabela compacta. ────── */
 :root[data-style="sass-neon"] {
-  --accent: #a3e635;
-  --accent-dark: #65a30d;
+  --accent: #a3e635; --accent-dark: #65a30d;
+  --pmg-radius: 8px; --pmg-icon-radius: 8px; --pmg-btn-radius: 6px;
+  --pmg-nav-radius: 6px; --pmg-nav-margin: 2px 10px; --pmg-nav-border-left: 3px;
+  --pmg-brand-radius: 0; --pmg-chip-radius: 6px;
+  --pmg-nav-active-shadow: 0 0 14px color-mix(in srgb, var(--accent) 45%, transparent);
+  --pmg-btn-shadow: 0 0 16px color-mix(in srgb, var(--accent) 50%, transparent);
+  --pmg-card-title-transform: uppercase; --pmg-card-title-spacing: .08em;
+  --pmg-table-pad-y: .4rem;
+  --pmg-cardbody-pad: 1rem;
 }
 :root[data-style="sass-neon"][data-bs-theme="dark"] {
   --pmg-bg: #050706; --pmg-text: #eaffd8; --pmg-surface: #0b1008;
@@ -222,6 +371,9 @@
   --pmg-card-header: rgba(163,230,53,.05); --pmg-card-header-border: rgba(163,230,53,.18);
   --pmg-chip-border: rgba(163,230,53,.35); --pmg-chip-text: #cdeea0; --pmg-chip-bg: rgba(163,230,53,.06);
   --pmg-chip-hover-text: #050706; --pmg-chip-n-bg: rgba(163,230,53,.2);
+  --pmg-sidebar-bg: #070d05; --pmg-brand-bg: #070d05; --pmg-brand-shadow: none;
+  --pmg-brand-color: #a3e635; --pmg-nav-active-bg: rgba(163,230,53,.12);
+  --pmg-nav-border-active: #a3e635;
 }
 :root[data-style="sass-neon"][data-bs-theme="light"] {
   --pmg-bg: #f7ffe9; --pmg-text: #243b00; --pmg-surface: #ffffff;
@@ -232,23 +384,26 @@
   --pmg-card-header: #f7ffe9; --pmg-card-header-border: #d3f5a3;
   --pmg-chip-border: #d3f5a3; --pmg-chip-text: #4d6b1f; --pmg-chip-bg: #fff;
   --pmg-chip-hover-text: #243b00; --pmg-chip-n-bg: rgba(36,59,0,.1);
+  --pmg-nav-active-bg: rgba(163,230,53,.25); --pmg-nav-border-active: #65a30d;
 }
-:root[data-style="sass-neon"] .btn-grad {
-  box-shadow: 0 0 16px color-mix(in srgb, var(--accent) 50%, transparent);
-}
-:root[data-style="sass-neon"][data-bs-theme="dark"] .sidebar .nav-link.active {
-  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 45%, transparent);
-}
-:root[data-style="sass-neon"][data-bs-theme="dark"] .stat-icon {
+:root[data-style="sass-neon"] .nav-link:hover { transform: none; }
+:root[data-style="sass-neon"] .stat-icon {
   box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 35%, transparent);
 }
+:root[data-style="sass-neon"] .card,
+:root[data-style="sass-neon"] .stat-card { border-width: 1px; }
 
-/* ---------------------------------------------------------------------------
-   8. SCSS/Sass — Pastel (rosa-claro suave)
-   --------------------------------------------------------------------------- */
+/* ── 8. Pastel — suave e arredondado, sidebar clara, nav pill ativo em
+      gradiente rosa, cards bem arredondados, botões pill, tabela arejada. ─ */
 :root[data-style="sass-pastel"] {
-  --accent: #f472b6;
-  --accent-dark: #db2777;
+  --accent: #f472b6; --accent-dark: #db2777;
+  --pmg-radius: 16px; --pmg-icon-radius: 14px; --pmg-btn-radius: 999px;
+  --pmg-nav-radius: 999px; --pmg-nav-margin: 3px 12px;
+  --pmg-brand-radius: 0; --pmg-chip-radius: 999px;
+  --pmg-nav-active-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 35%, transparent);
+  --pmg-card-title-spacing: .01em;
+  --pmg-table-pad-y: .6rem;
+  --pmg-cardbody-pad: 1.2rem;
 }
 :root[data-style="sass-pastel"][data-bs-theme="dark"] {
   --pmg-bg: #2a1a24; --pmg-text: #fce7f3; --pmg-surface: #35222e;
@@ -259,6 +414,7 @@
   --pmg-card-header: rgba(255,255,255,.04); --pmg-card-header-border: rgba(255,255,255,.07);
   --pmg-chip-border: rgba(255,255,255,.16); --pmg-chip-text: #eccbdc; --pmg-chip-bg: rgba(255,255,255,.05);
   --pmg-chip-hover-text: #fff; --pmg-chip-n-bg: rgba(255,255,255,.16);
+  --pmg-sidebar-bg: #33202b; --pmg-brand-bg: linear-gradient(135deg,#f472b6,#db2777);
 }
 :root[data-style="sass-pastel"][data-bs-theme="light"] {
   --pmg-bg: #fdf2f8; --pmg-text: #5b1a3a; --pmg-surface: #ffffff;
@@ -269,8 +425,24 @@
   --pmg-card-header: #fdf2f8; --pmg-card-header-border: #fbcfe8;
   --pmg-chip-border: #fbcfe8; --pmg-chip-text: #8d5170; --pmg-chip-bg: #fff;
   --pmg-chip-hover-text: #5b1a3a; --pmg-chip-n-bg: rgba(91,26,58,.08);
+  --pmg-sidebar-bg: #fff0f7; --pmg-brand-bg: linear-gradient(135deg,#f472b6,#db2777);
 }
-:root[data-style="sass-pastel"] .card,
-:root[data-style="sass-pastel"] .stat-card { border-radius: 16px; }
-:root[data-style="sass-pastel"] .btn-grad { border-radius: 999px; }
-:root[data-style="sass-pastel"] .filter-chip { border-radius: 999px; }
+:root[data-style="sass-pastel"] .nav-link:hover { transform: none; }
+:root[data-style="sass-pastel"] .stat-icon { box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 30%, transparent); }
+
+/* =========================================================================
+   Ajustes responsivos: em telas pequenas a sidebar vira gaveta e o
+   main-content não deve manter a margem da largura custom da sidebar.
+   ========================================================================= */
+@media (max-width: 768px) {
+  .main-content { margin-left: 0 !important; }
+  /* a capa base acima vence o @media do base.html (carrega depois), então
+     precisamos reafirmar a largura de gaveta e a margem aqui. */
+  .sidebar {
+    width: 260px !important;
+    border-right: 0;
+  }
+  :root[data-style="glass-night"] .sidebar {
+    top: 0; left: 0; height: 100vh; border-radius: 0; border: 0;
+  }
+}
