@@ -1244,7 +1244,7 @@ fi
 # -b/-bw 0 remove as bordas internas e externas do xterm, que sozinhas ja
 # desenham um retangulo claro em volta do conteudo.
 # ATENCAO: a geometria do xterm e em CELULAS, nao em pixels. Um -geometry como
-# 1276x796 num Xvfb de 1280x800 faz o TUI (menus do vpnmanager, `opencode` etc.)
+# 1276x796 num Xvfb de 1280x800 faz o TUI (menus do vpnmanager etc.)
 # achar que tem 1276 colunas e desenhar o menu fora da area visivel — por isso o
 # menu "nao aparecia". Use uma grade que caiba na tela com a fonte de 13px:
 # ~150 colunas x 44 linhas. (correcao VNC fixa)
