@@ -59,6 +59,7 @@ try:
     db.migrate_schema_v4()
     db.migrate_schema_informativos()
     db.migrate_schema_message_template()
+    db.migrate_schema_appearance()
 except Exception as _startup_err:
     import traceback as _tb
     print(f"[PMG STARTUP ERROR] DB init failed: {_startup_err}", flush=True)
@@ -101,6 +102,29 @@ app.jinja_env.globals['is_expired'] = is_expired
 
 app.jinja_env.globals['days_until'] = days_until
 app.jinja_env.globals['now_br'] = now_br
+
+
+# ---------------------------------------------------------------------------
+# Estilos do painel (presets de aparência)
+# ---------------------------------------------------------------------------
+# Cada preset é um conjunto de variáveis CSS em static/styles/presets.css.
+# As famílias são só organizacionais na UI: os presets "Tailwind" e "Sass"
+# são CSS puro que emula o visual dessas ferramentas — NÃO carregamos o
+# Tailwind CDN junto com o Bootstrap (o preflight do Tailwind quebraria o
+# layout actual). O admin e cada revenda escolhem o próprio estilo.
+STYLE_PRESETS = [
+    {'id': 'default', 'name': 'Padrão', 'family': 'Bootstrap', 'desc': 'Visual atual do painel', 'dot': '#0d6efd'},
+    {'id': 'bootstrap-cosmo', 'name': 'Cosmo', 'family': 'Bootstrap', 'desc': 'Verde-petróleo, cartões retos', 'dot': '#26a69a'},
+    {'id': 'bootstrap-flatly', 'name': 'Flatly', 'family': 'Bootstrap', 'desc': 'Verde-água sobre azul-noite', 'dot': '#18bc9c'},
+    {'id': 'tailwind-indigo', 'name': 'Indigo', 'family': 'Tailwind', 'desc': 'Índigo vivo, cantos bem arredondados', 'dot': '#4f46e5'},
+    {'id': 'tailwind-emerald', 'name': 'Emerald', 'family': 'Tailwind', 'desc': 'Esmeralda, superfícies chapadas', 'dot': '#059669'},
+    {'id': 'flat-slate', 'name': 'Slate', 'family': 'CSS Puro', 'desc': 'Cinza-ardósia, minimalista', 'dot': '#64748b'},
+    {'id': 'glass-night', 'name': 'Glass', 'family': 'CSS Puro', 'desc': 'Vidro fosco translúcido', 'dot': '#38bdf8'},
+    {'id': 'sass-neon', 'name': 'Neon', 'family': 'SCSS/Sass', 'desc': 'Preto com neon verde', 'dot': '#a3e635'},
+    {'id': 'sass-pastel', 'name': 'Pastel', 'family': 'SCSS/Sass', 'desc': 'Rosa-claro suave', 'dot': '#f472b6'},
+]
+STYLE_PRESET_IDS = {p['id'] for p in STYLE_PRESETS}
+app.jinja_env.globals['STYLE_PRESETS'] = STYLE_PRESETS
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +295,7 @@ def inject_globals():
     unread = 0
     pendentes = []
     msg_template = ''
+    user_appearance = None
     try:
         cu = get_current_user()
         if cu:
@@ -280,10 +305,12 @@ def inject_globals():
                 pendentes = [i for i in db.get_informativos_para_usuario(cu['id']) if not i['read_at']]
                 unread = len(pendentes)
             msg_template = db.get_message_template(cu['id'])
+            user_appearance = db.get_appearance(cu['id'])
     except Exception:
         unread = 0
         pendentes = []
         msg_template = ''
+        user_appearance = None
     return dict(
         settings=get_settings(),
         current_user=get_current_user(),
@@ -293,6 +320,7 @@ def inject_globals():
         informativos_nao_lidos=unread,
         informativos_pendentes=pendentes,
         msg_template=msg_template,
+        user_appearance=user_appearance,
     )
 
 
@@ -2733,6 +2761,22 @@ def profile():
         else:
             flash('Senha muito curta (mínimo 4 caracteres).', 'danger')
     return render_template('shared/profile.html')
+
+
+@app.route('/profile/appearance', methods=['POST'])
+@login_required
+def save_appearance():
+    """Salva tema (dark/light) e estilo do painel na CONTA do usuário.
+    Admin e revenda cada um fica com a própria escolha."""
+    current_user = get_current_user()
+    theme = (request.form.get('theme') or '').strip()
+    style = (request.form.get('style') or '').strip()
+    if theme not in ('', 'dark', 'light'):
+        return jsonify(success=False, message='Tema inválido')
+    if style and style not in STYLE_PRESET_IDS:
+        return jsonify(success=False, message='Estilo inválido')
+    db.set_appearance(current_user['id'], theme=theme, style=style)
+    return jsonify(success=True)
 
 
 

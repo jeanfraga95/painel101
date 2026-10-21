@@ -1132,6 +1132,42 @@ def migrate_schema_message_template():
     conn.close()
 
 
+def migrate_schema_appearance():
+    """Colunas de aparência por usuário: tema (dark/light) e estilo do painel.
+    Admin e revenda guardam a própria escolha na própria conta."""
+    conn = get_db()
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(panel_users)").fetchall()]
+    if 'theme_mode' not in cols:
+        conn.execute("ALTER TABLE panel_users ADD COLUMN theme_mode TEXT DEFAULT ''")
+    if 'style_preset' not in cols:
+        conn.execute("ALTER TABLE panel_users ADD COLUMN style_preset TEXT DEFAULT ''")
+    conn.commit()
+    conn.close()
+
+
+def get_appearance(user_id: int) -> dict:
+    """Preferências de aparência do usuário. '' = usar o padrão do painel."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT theme_mode, style_preset FROM panel_users WHERE id = ?", (user_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return {'theme': '', 'style': ''}
+    return {'theme': row['theme_mode'] or '', 'style': row['style_preset'] or ''}
+
+
+def set_appearance(user_id: int, theme: str = '', style: str = '') -> None:
+    """Salva (ou limpa, com string vazia) tema e estilo da conta do usuário."""
+    conn = get_db()
+    conn.execute(
+        "UPDATE panel_users SET theme_mode = ?, style_preset = ? WHERE id = ?",
+        (theme or '', style or '', user_id)
+    )
+    conn.commit()
+    conn.close()
+
+
 def get_message_template(user_id: int) -> str:
     """Return the user's saved access-message template ('' = use default)."""
     conn = get_db()

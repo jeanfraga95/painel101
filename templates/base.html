@@ -1,22 +1,29 @@
 <!DOCTYPE html>
-<html lang="pt-BR" data-bs-theme="{{ panel_theme }}">
+<html lang="pt-BR" data-auth="{{ 1 if current_user else 0 }}"
+      data-bs-theme="{{ (user_appearance.theme if user_appearance and user_appearance.theme else panel_theme) }}"
+      data-style="{{ (user_appearance.style if user_appearance and user_appearance.style else 'default') }}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="csrf-token" content="{{ csrf_token() }}">
 <title>{% block title %}{{ panel_name }}{% endblock %}</title>
 <script>
-/* Tema escolhido pelo usuário no navegador (dark/light). Roda antes do CSS
-   ser aplicado para não piscar o tema errado no carregamento da página. */
+/* Só para visitante (login): o tema de quem está logado vem do servidor,
+   já salvo na conta — o localStorage aqui seria fonte de conflito.
+   Roda antes do CSS para não piscar o tema errado. */
 (function () {
+  if (document.documentElement.getAttribute('data-auth') === '1') return;
   try {
     var t = localStorage.getItem('pmg_theme');
     if (t === 'dark' || t === 'light') document.documentElement.setAttribute('data-bs-theme', t);
-  } catch (e) { /* localStorage bloqueado → mantém o tema do servidor */ }
+    var s = localStorage.getItem('pmg_style');
+    if (s) document.documentElement.setAttribute('data-style', s);
+  } catch (e) { /* localStorage bloqueado → mantém o tema padrão */ }
 })();
 </script>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
+<link href="{{ url_for('static', filename='styles/presets.css') }}" rel="stylesheet">
 <style>
 :root {
   --accent: {{ panel_color }};
@@ -305,6 +312,29 @@ body {
   .stat-icon { width: 46px; height: 46px; font-size: 1.1rem; }
 }
 
+/* ── Modal de aparência (tema + estilo) ────────────────────────────── */
+.appearance-style-btn {
+  border: 2px solid var(--pmg-border);
+  background: var(--pmg-surface);
+  color: var(--pmg-text);
+  border-radius: 10px;
+  transition: border-color .15s ease, box-shadow .15s ease, transform .1s ease;
+}
+.appearance-style-btn:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  transform: translateY(-1px);
+}
+.appearance-style-btn.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.appearance-dot {
+  width: 15px; height: 15px; border-radius: 50%;
+  display: inline-block; flex-shrink: 0;
+  border: 2px solid rgba(255,255,255,.35);
+  box-shadow: 0 0 0 1px rgba(0,0,0,.18);
+}
+
 /* ── Reduced motion ───────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   .stat-card { animation-duration: .01ms; }
@@ -410,6 +440,12 @@ body {
         <i class="fas fa-moon" id="themeToggleIcon" aria-hidden="true"></i>
         <span class="d-none d-lg-inline">Tema</span>
       </button>
+      <button type="button" class="btn btn-sm btn-outline-secondary d-flex align-items-center gap-1"
+              onclick="openAppearance()"
+              title="Trocar tema e estilo visual do painel" aria-label="Trocar tema e estilo do painel">
+        <i class="fas fa-palette" aria-hidden="true"></i>
+        <span class="d-none d-lg-inline">Estilo</span>
+      </button>
     </div>
   </div>
   {% endif %}
@@ -450,6 +486,83 @@ body {
     </div>
   </div>
 </div>
+
+{% if current_user %}
+<!-- ── Modal Aparência (tema + estilo do painel) ──────────────────────────
+     Admin e revenda cada um escolhe o próprio tema (claro/escuro) e o
+     próprio estilo visual. Tudo fica salvo na conta via
+     POST /profile/appearance e aplica na hora, sem recarregar. -->
+<div class="modal fade" id="appearanceModal" tabindex="-1" aria-labelledby="appearanceModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content border-0 shadow">
+
+      <div class="modal-header border-0 pb-0">
+        <h6 class="modal-title fw-semibold" id="appearanceModalLabel">
+          <i class="fas fa-palette me-2" aria-hidden="true"></i>Aparência do painel
+        </h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
+      </div>
+
+      <div class="modal-body pt-0">
+
+        <!-- Tema: claro / escuro -->
+        <div class="d-flex align-items-center justify-content-between mb-3">
+          <div>
+            <div class="fw-semibold small mb-0">Tema</div>
+            <div class="text-muted" style="font-size:.78rem">Fundo claro ou escuro do painel</div>
+          </div>
+          <div class="btn-group" role="group" aria-label="Escolher tema">
+            <input type="radio" class="btn-check" name="appearanceTheme" id="appearanceThemeDark"
+                   autocomplete="off" onchange="chooseTheme('dark')">
+            <label class="btn btn-sm btn-outline-secondary" for="appearanceThemeDark">
+              <i class="fas fa-moon me-1" aria-hidden="true"></i>Escuro
+            </label>
+            <input type="radio" class="btn-check" name="appearanceTheme" id="appearanceThemeLight"
+                   autocomplete="off" onchange="chooseTheme('light')">
+            <label class="btn btn-sm btn-outline-secondary" for="appearanceThemeLight">
+              <i class="fas fa-sun me-1" aria-hidden="true"></i>Claro
+            </label>
+          </div>
+        </div>
+
+        <hr class="my-3">
+
+        <!-- Estilos agrupados por família -->
+        <div class="fw-semibold small mb-2">Estilo do painel</div>
+        {% for fam in STYLE_PRESETS | groupby('family') %}
+        <div class="mb-3">
+          <div class="text-muted text-uppercase fw-bold mb-2" style="font-size:.66rem;letter-spacing:.06em">
+            {{ fam.grouper }}
+          </div>
+          <div class="row g-2">
+            {% for p in fam.list %}
+            <div class="col-6 col-md-4">
+              <button type="button" class="btn w-100 text-start p-2 d-flex align-items-center gap-2 appearance-style-btn"
+                      data-style-id="{{ p.id }}" onclick="chooseStyle('{{ p.id }}')"
+                      aria-label="Aplicar estilo {{ p.name }}">
+                <span class="appearance-dot" style="background:{{ p.dot }}" aria-hidden="true"></span>
+                <span class="text-truncate">
+                  <span class="d-block fw-semibold small">{{ p.name }}</span>
+                  <span class="d-block text-muted text-truncate" style="font-size:.7rem">{{ p.desc }}</span>
+                </span>
+              </button>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+
+        <p class="text-muted small mb-0">
+          <i class="fas fa-info-circle me-1" aria-hidden="true"></i>
+          A escolha fica salva na sua conta e acompanha você em qualquer navegador.
+        </p>
+
+      </div>
+    </div>
+  </div>
+</div>
+<!-- ───────────────────────────────────────────────────────────────────── -->
+{% endif %}
 
 {% if current_user and current_user.role != 'admin' and informativos_pendentes %}
 <!-- Comunicado: aparece ao acessar o painel; só some ao marcar como lido -->
@@ -582,25 +695,61 @@ function copyText(text)      { universalCopy(text); }
 function pmCopyGlobal(text)  { universalCopy(text); }
 function _legacyCopy(text)   { _execCommandCopy(text); }
 
-// ── Tema claro/escuro ────────────────────────────────────────────────────────
-// Os botões são puramente cosmeticos (todos os <i> sao decorativos): o
-// aria-label vem do atributo HTML e o ícone já está marcado com
-// aria-hidden="true" — leitor de tela anuncia só o rótulo.
+// ── Aparência: tema (claro/escuro) + estilo do painel ────────────────────────
+// A escolha é SALVA NA CONTA (POST /profile/appearance), não só no navegador:
+// admin e revenda ficam com o próprio visual em qualquer dispositivo.
+// O localStorage só é usado como cache do visitante (página de login).
+const PMG_STYLE_NAMES = {};{% for p in STYLE_PRESETS %}PMG_STYLE_NAMES['{{ p.id }}'] = '{{ p.name }}';{% endfor %}
+
 function currentTheme() {
   return document.documentElement.getAttribute('data-bs-theme') === 'light' ? 'light' : 'dark';
 }
-function applyTheme(theme) {
+function currentStyleId() {
+  return document.documentElement.getAttribute('data-style') || 'default';
+}
+
+function applyAppearance(theme, style, save) {
   document.documentElement.setAttribute('data-bs-theme', theme);
-  try { localStorage.setItem('pmg_theme', theme); } catch (e) {}
+  document.documentElement.setAttribute('data-style', style);
+  try { localStorage.setItem('pmg_theme', theme); localStorage.setItem('pmg_style', style); } catch (e) {}
+
+  // Ícone + rótulo do botão rápido da topbar
   const icon = document.getElementById('themeToggleIcon');
   if (icon) icon.className = theme === 'dark' ? 'fas fa-moon' : 'fas fa-sun';
   const btn = document.getElementById('themeToggleBtn');
   if (btn) btn.setAttribute('aria-label', theme === 'dark' ? 'Ativar tema claro' : 'Ativar tema escuro');
+
+  // Marca o tema/estilo ativos dentro do modal
+  const radio = document.getElementById(theme === 'dark' ? 'appearanceThemeDark' : 'appearanceThemeLight');
+  if (radio) radio.checked = true;
+  document.querySelectorAll('.appearance-style-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.styleId === style);
+    b.setAttribute('aria-pressed', b.dataset.styleId === style ? 'true' : 'false');
+  });
+
+  // Rótulos do card de aparência (dashboard)
+  const styleName = document.getElementById('appearanceStyleName');
+  if (styleName) styleName.textContent = PMG_STYLE_NAMES[style] || style;
+  const themeName = document.getElementById('appearanceThemeName');
+  if (themeName) themeName.textContent = theme === 'dark' ? 'Escuro' : 'Claro';
+
+  if (save) {
+    apiPost('/profile/appearance', { theme, style }, d => {
+      if (d && d.success === false) showToast(d.message || 'Não foi possível salvar a aparência.', 'danger');
+    });
+  }
 }
-function toggleTheme() { applyTheme(currentTheme() === 'dark' ? 'light' : 'dark'); }
-// Aplica o ícone/estado corretos ao carregar (o HTML inicial usa o tema do
-// servidor; se o navegador tiver outro salvo, o script do <head> já trocou).
-document.addEventListener('DOMContentLoaded', () => applyTheme(currentTheme()));
+
+function toggleTheme() { applyAppearance(currentTheme() === 'dark' ? 'light' : 'dark', currentStyleId(), true); }
+function chooseTheme(theme) { applyAppearance(theme, currentStyleId(), true); }
+function chooseStyle(style) { applyAppearance(currentTheme(), style, true); }
+function openAppearance() {
+  applyAppearance(currentTheme(), currentStyleId(), false);  // sincroniza estados do modal
+  const el = document.getElementById('appearanceModal');
+  if (el) bootstrap.Modal.getOrCreateInstance(el).show();
+}
+// Aplica o estado inicial (ícone da topbar, modal, card) ao carregar
+document.addEventListener('DOMContentLoaded', () => applyAppearance(currentTheme(), currentStyleId(), false));
 
 // ── Modal de confirmação (Promise) ───────────────────────────────────────────
 function confirmDialog(message, opts = {}) {

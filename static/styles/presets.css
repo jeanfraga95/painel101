@@ -1,0 +1,276 @@
+/* ===========================================================================
+   Estilos do painel — presets de aparência
+   ---------------------------------------------------------------------------
+   Ordem de aplicação: este arquivo é carregado DEPOIS do <style> inline do
+   base.html, e as regras usam seletores mais específicos (:root[data-style=]),
+   então sempre vencem o --accent vindo da configuração de cor do painel.
+
+   Cada preset redeclara as variáveis --pmg-* (tema claro/escuro) e --accent.
+   Os presets "Tailwind" e "Sass" são CSS puro que emula o visual dessas
+   ferramentas: não carregamos o Tailwind CDN porque o preflight dele
+   quebraria o layout do Bootstrap usado no resto do painel.
+   =========================================================================== */
+
+/* ---------------------------------------------------------------------------
+   1. Bootstrap — Cosmo (verde-petróleo, cartões retos)
+   --------------------------------------------------------------------------- */
+:root[data-style="bootstrap-cosmo"] {
+  --accent: #26a69a;
+  --accent-dark: #00897b;
+}
+:root[data-style="bootstrap-cosmo"][data-bs-theme="dark"] {
+  --pmg-bg: #14181c; --pmg-text: #eceff1; --pmg-surface: #1c2126;
+  --pmg-border: rgba(255,255,255,.07); --pmg-border-strong: rgba(255,255,255,.14);
+  --pmg-navlink: #b0bec5; --pmg-section: #78909c; --pmg-section-rule: rgba(255,255,255,.1);
+  --pmg-sidebar-user: rgba(255,255,255,.05); --pmg-topbar: rgba(20,24,28,.88);
+  --pmg-card-border: rgba(255,255,255,.06); --pmg-card-shadow: rgba(0,0,0,.3);
+  --pmg-card-header: rgba(255,255,255,.03); --pmg-card-header-border: rgba(255,255,255,.05);
+  --pmg-chip-border: rgba(255,255,255,.12); --pmg-chip-text: #cfd8dc; --pmg-chip-bg: rgba(255,255,255,.04);
+  --pmg-chip-hover-text: #fff; --pmg-chip-n-bg: rgba(255,255,255,.14);
+}
+:root[data-style="bootstrap-cosmo"][data-bs-theme="light"] {
+  --pmg-bg: #f4f6f8; --pmg-text: #263238; --pmg-surface: #ffffff;
+  --pmg-border: #e0e0e0; --pmg-border-strong: #d6d6d6;
+  --pmg-navlink: #546e7a; --pmg-section: #90a4ae; --pmg-section-rule: rgba(0,0,0,.07);
+  --pmg-sidebar-user: #eceff1; --pmg-topbar: rgba(255,255,255,.9);
+  --pmg-card-border: rgba(0,0,0,.07); --pmg-card-shadow: rgba(0,0,0,.05);
+  --pmg-card-header: #f7f9fa; --pmg-card-header-border: rgba(0,0,0,.06);
+  --pmg-chip-border: #e0e0e0; --pmg-chip-text: #546e7a; --pmg-chip-bg: #fff;
+  --pmg-chip-hover-text: #000; --pmg-chip-n-bg: rgba(0,0,0,.1);
+}
+:root[data-style="bootstrap-cosmo"] .card,
+:root[data-style="bootstrap-cosmo"] .stat-card { border-radius: 4px; }
+
+/* ---------------------------------------------------------------------------
+   2. Bootstrap — Flatly (verde-água sobre azul-noite)
+   --------------------------------------------------------------------------- */
+:root[data-style="bootstrap-flatly"] {
+  --accent: #18bc9c;
+  --accent-dark: #16a085;
+}
+:root[data-style="bootstrap-flatly"][data-bs-theme="dark"] {
+  --pmg-bg: #141e26; --pmg-text: #e8edf1; --pmg-surface: #1a2733;
+  --pmg-border: rgba(255,255,255,.08); --pmg-border-strong: rgba(255,255,255,.16);
+  --pmg-navlink: #a7b6c2; --pmg-section: #7f95a5; --pmg-section-rule: rgba(255,255,255,.1);
+  --pmg-sidebar-user: rgba(255,255,255,.05); --pmg-topbar: rgba(20,30,38,.9);
+  --pmg-card-border: rgba(255,255,255,.07); --pmg-card-shadow: rgba(0,0,0,.32);
+  --pmg-card-header: rgba(255,255,255,.04); --pmg-card-header-border: rgba(255,255,255,.06);
+  --pmg-chip-border: rgba(255,255,255,.13); --pmg-chip-text: #c5d3dc; --pmg-chip-bg: rgba(255,255,255,.05);
+  --pmg-chip-hover-text: #fff; --pmg-chip-n-bg: rgba(255,255,255,.15);
+}
+:root[data-style="bootstrap-flatly"][data-bs-theme="light"] {
+  --pmg-bg: #f7fafb; --pmg-text: #21323b; --pmg-surface: #ffffff;
+  --pmg-border: #dfe7ec; --pmg-border-strong: #d3dde4;
+  --pmg-navlink: #48606e; --pmg-section: #8ca1ad; --pmg-section-rule: rgba(0,0,0,.07);
+  --pmg-sidebar-user: #edf3f6; --pmg-topbar: rgba(255,255,255,.9);
+  --pmg-card-border: rgba(0,0,0,.07); --pmg-card-shadow: rgba(0,0,0,.05);
+  --pmg-card-header: #f6f9fa; --pmg-card-header-border: rgba(0,0,0,.06);
+  --pmg-chip-border: #dfe7ec; --pmg-chip-text: #48606e; --pmg-chip-bg: #fff;
+  --pmg-chip-hover-text: #000; --pmg-chip-n-bg: rgba(0,0,0,.1);
+}
+
+/* ---------------------------------------------------------------------------
+   3. Tailwind — Indigo (cantos bem arredondados, superfícies chapadas)
+   --------------------------------------------------------------------------- */
+:root[data-style="tailwind-indigo"] {
+  --accent: #4f46e5;
+  --accent-dark: #3730a3;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+               "Helvetica Neue", Arial, sans-serif;
+}
+:root[data-style="tailwind-indigo"][data-bs-theme="dark"] {
+  --pmg-bg: #0f172a; --pmg-text: #e2e8f0; --pmg-surface: #1e293b;
+  --pmg-border: rgba(255,255,255,.08); --pmg-border-strong: rgba(255,255,255,.16);
+  --pmg-navlink: #a3b0c4; --pmg-section: #7c8ba3; --pmg-section-rule: rgba(255,255,255,.1);
+  --pmg-sidebar-user: rgba(255,255,255,.05); --pmg-topbar: rgba(15,23,42,.88);
+  --pmg-card-border: rgba(255,255,255,.08); --pmg-card-shadow: rgba(0,0,0,.35);
+  --pmg-card-header: rgba(255,255,255,.04); --pmg-card-header-border: rgba(255,255,255,.06);
+  --pmg-chip-border: rgba(255,255,255,.14); --pmg-chip-text: #cbd5e1; --pmg-chip-bg: rgba(255,255,255,.05);
+  --pmg-chip-hover-text: #fff; --pmg-chip-n-bg: rgba(255,255,255,.16);
+}
+:root[data-style="tailwind-indigo"][data-bs-theme="light"] {
+  --pmg-bg: #f8fafc; --pmg-text: #0f172a; --pmg-surface: #ffffff;
+  --pmg-border: #e2e8f0; --pmg-border-strong: #d5dde7;
+  --pmg-navlink: #475569; --pmg-section: #94a3b8; --pmg-section-rule: rgba(15,23,42,.08);
+  --pmg-sidebar-user: #f1f5f9; --pmg-topbar: rgba(255,255,255,.9);
+  --pmg-card-border: #e2e8f0; --pmg-card-shadow: rgba(15,23,42,.06);
+  --pmg-card-header: #f8fafc; --pmg-card-header-border: #e2e8f0;
+  --pmg-chip-border: #e2e8f0; --pmg-chip-text: #475569; --pmg-chip-bg: #fff;
+  --pmg-chip-hover-text: #0f172a; --pmg-chip-n-bg: rgba(15,23,42,.08);
+}
+:root[data-style="tailwind-indigo"] .card,
+:root[data-style="tailwind-indigo"] .stat-card { border-radius: 1rem; }
+:root[data-style="tailwind-indigo"] .btn-grad { border-radius: .625rem; box-shadow: none; }
+:root[data-style="tailwind-indigo"] .btn { border-radius: .625rem; }
+:root[data-style="tailwind-indigo"] .filter-chip { border-radius: .5rem; }
+
+/* ---------------------------------------------------------------------------
+   4. Tailwind — Emerald (esmeralda, cantos suaves)
+   --------------------------------------------------------------------------- */
+:root[data-style="tailwind-emerald"] {
+  --accent: #059669;
+  --accent-dark: #047857;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+               "Helvetica Neue", Arial, sans-serif;
+}
+:root[data-style="tailwind-emerald"][data-bs-theme="dark"] {
+  --pmg-bg: #022c22; --pmg-text: #d1fae5; --pmg-surface: #064e3b;
+  --pmg-border: rgba(255,255,255,.09); --pmg-border-strong: rgba(255,255,255,.17);
+  --pmg-navlink: #9fcbb8; --pmg-section: #6ee7b7a6; --pmg-section-rule: rgba(255,255,255,.1);
+  --pmg-sidebar-user: rgba(255,255,255,.05); --pmg-topbar: rgba(2,44,34,.88);
+  --pmg-card-border: rgba(255,255,255,.09); --pmg-card-shadow: rgba(0,0,0,.35);
+  --pmg-card-header: rgba(255,255,255,.05); --pmg-card-header-border: rgba(255,255,255,.07);
+  --pmg-chip-border: rgba(255,255,255,.15); --pmg-chip-text: #b7e4d1; --pmg-chip-bg: rgba(255,255,255,.05);
+  --pmg-chip-hover-text: #fff; --pmg-chip-n-bg: rgba(255,255,255,.16);
+}
+:root[data-style="tailwind-emerald"][data-bs-theme="light"] {
+  --pmg-bg: #f0fdf4; --pmg-text: #064e3b; --pmg-surface: #ffffff;
+  --pmg-border: #d1fae5; --pmg-border-strong: #c2ecd7;
+  --pmg-navlink: #47715f; --pmg-section: #86b7a3; --pmg-section-rule: rgba(6,78,59,.09);
+  --pmg-sidebar-user: #ecfdf5; --pmg-topbar: rgba(255,255,255,.9);
+  --pmg-card-border: #d1fae5; --pmg-card-shadow: rgba(6,78,59,.06);
+  --pmg-card-header: #f0fdf4; --pmg-card-header-border: #d1fae5;
+  --pmg-chip-border: #d1fae5; --pmg-chip-text: #47715f; --pmg-chip-bg: #fff;
+  --pmg-chip-hover-text: #064e3b; --pmg-chip-n-bg: rgba(6,78,59,.1);
+}
+:root[data-style="tailwind-emerald"] .card,
+:root[data-style="tailwind-emerald"] .stat-card { border-radius: .875rem; }
+:root[data-style="tailwind-emerald"] .btn-grad { border-radius: .5rem; box-shadow: none; }
+:root[data-style="tailwind-emerald"] .btn { border-radius: .5rem; }
+
+/* ---------------------------------------------------------------------------
+   5. CSS Puro — Slate (cinza-ardósia, minimalista, sem gradientes)
+   --------------------------------------------------------------------------- */
+:root[data-style="flat-slate"] {
+  --accent: #64748b;
+  --accent-dark: #475569;
+}
+:root[data-style="flat-slate"][data-bs-theme="dark"] {
+  --pmg-bg: #0f172a; --pmg-text: #e5e7eb; --pmg-surface: #1e293b;
+  --pmg-border: rgba(255,255,255,.07); --pmg-border-strong: rgba(255,255,255,.14);
+  --pmg-navlink: #9aa7b8; --pmg-section: #77839a; --pmg-section-rule: rgba(255,255,255,.09);
+  --pmg-sidebar-user: rgba(255,255,255,.04); --pmg-topbar: rgba(15,23,42,.9);
+  --pmg-card-border: rgba(255,255,255,.06); --pmg-card-shadow: rgba(0,0,0,.3);
+  --pmg-card-header: rgba(255,255,255,.03); --pmg-card-header-border: rgba(255,255,255,.05);
+  --pmg-chip-border: rgba(255,255,255,.12); --pmg-chip-text: #b6c0cd; --pmg-chip-bg: rgba(255,255,255,.03);
+  --pmg-chip-hover-text: #fff; --pmg-chip-n-bg: rgba(255,255,255,.13);
+}
+:root[data-style="flat-slate"][data-bs-theme="light"] {
+  --pmg-bg: #f1f5f9; --pmg-text: #1e293b; --pmg-surface: #ffffff;
+  --pmg-border: #e2e8f0; --pmg-border-strong: #d8e0e9;
+  --pmg-navlink: #556275; --pmg-section: #94a3b8; --pmg-section-rule: rgba(15,23,42,.07);
+  --pmg-sidebar-user: #e9eef5; --pmg-topbar: rgba(255,255,255,.9);
+  --pmg-card-border: #e2e8f0; --pmg-card-shadow: rgba(15,23,42,.05);
+  --pmg-card-header: #f8fafc; --pmg-card-header-border: #e2e8f0;
+  --pmg-chip-border: #e2e8f0; --pmg-chip-text: #556275; --pmg-chip-bg: #fff;
+  --pmg-chip-hover-text: #1e293b; --pmg-chip-n-bg: rgba(15,23,42,.08);
+}
+/* Minimalista: tira o brilho dos botões e ícones */
+:root[data-style="flat-slate"] .btn-grad { box-shadow: none; border-radius: 6px; }
+:root[data-style="flat-slate"] .sidebar .nav-link.active { box-shadow: none; }
+:root[data-style="flat-slate"] .stat-card { animation: none; }
+
+/* ---------------------------------------------------------------------------
+   6. CSS Puro — Glass (vidro fosco translúcido com desfoque)
+   --------------------------------------------------------------------------- */
+:root[data-style="glass-night"] {
+  --accent: #38bdf8;
+  --accent-dark: #0ea5e9;
+}
+:root[data-style="glass-night"][data-bs-theme="dark"] {
+  --pmg-bg: #0b1020; --pmg-text: #e6f1ff; --pmg-surface: rgba(255,255,255,.06);
+  --pmg-border: rgba(255,255,255,.14); --pmg-border-strong: rgba(255,255,255,.22);
+  --pmg-navlink: #b9c9e4; --pmg-section: #8ba3c9; --pmg-section-rule: rgba(255,255,255,.14);
+  --pmg-sidebar-user: rgba(255,255,255,.07); --pmg-topbar: rgba(11,16,32,.7);
+  --pmg-card-border: rgba(255,255,255,.14); --pmg-card-shadow: rgba(0,0,0,.4);
+  --pmg-card-header: rgba(255,255,255,.05); --pmg-card-header-border: rgba(255,255,255,.1);
+  --pmg-chip-border: rgba(255,255,255,.2); --pmg-chip-text: #cfe0f7; --pmg-chip-bg: rgba(255,255,255,.07);
+  --pmg-chip-hover-text: #fff; --pmg-chip-n-bg: rgba(255,255,255,.18);
+}
+:root[data-style="glass-night"][data-bs-theme="light"] {
+  --pmg-bg: #e8eef7; --pmg-text: #16324d; --pmg-surface: rgba(255,255,255,.65);
+  --pmg-border: rgba(255,255,255,.9); --pmg-border-strong: rgba(255,255,255,1);
+  --pmg-navlink: #44617f; --pmg-section: #7c9ab8; --pmg-section-rule: rgba(22,50,77,.1);
+  --pmg-sidebar-user: rgba(255,255,255,.55); --pmg-topbar: rgba(255,255,255,.6);
+  --pmg-card-border: rgba(255,255,255,.85); --pmg-card-shadow: rgba(22,50,77,.1);
+  --pmg-card-header: rgba(255,255,255,.45); --pmg-card-header-border: rgba(255,255,255,.8);
+  --pmg-chip-border: rgba(255,255,255,.9); --pmg-chip-text: #44617f; --pmg-chip-bg: rgba(255,255,255,.6);
+  --pmg-chip-hover-text: #16324d; --pmg-chip-n-bg: rgba(22,50,77,.1);
+}
+:root[data-style="glass-night"] .card,
+:root[data-style="glass-night"] .stat-card,
+:root[data-style="glass-night"] .sidebar {
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+:root[data-style="glass-night"] .card { border-radius: 18px; }
+:root[data-style="glass-night"] .btn-grad { border-radius: 999px; }
+
+/* ---------------------------------------------------------------------------
+   7. SCSS/Sass — Neon (preto com neon verde e brilho)
+   --------------------------------------------------------------------------- */
+:root[data-style="sass-neon"] {
+  --accent: #a3e635;
+  --accent-dark: #65a30d;
+}
+:root[data-style="sass-neon"][data-bs-theme="dark"] {
+  --pmg-bg: #050706; --pmg-text: #eaffd8; --pmg-surface: #0b1008;
+  --pmg-border: rgba(163,230,53,.22); --pmg-border-strong: rgba(163,230,53,.4);
+  --pmg-navlink: #a9c77f; --pmg-section: #7f9a5a; --pmg-section-rule: rgba(163,230,53,.25);
+  --pmg-sidebar-user: rgba(163,230,53,.07); --pmg-topbar: rgba(5,7,6,.85);
+  --pmg-card-border: rgba(163,230,53,.2); --pmg-card-shadow: rgba(0,0,0,.55);
+  --pmg-card-header: rgba(163,230,53,.05); --pmg-card-header-border: rgba(163,230,53,.18);
+  --pmg-chip-border: rgba(163,230,53,.35); --pmg-chip-text: #cdeea0; --pmg-chip-bg: rgba(163,230,53,.06);
+  --pmg-chip-hover-text: #050706; --pmg-chip-n-bg: rgba(163,230,53,.2);
+}
+:root[data-style="sass-neon"][data-bs-theme="light"] {
+  --pmg-bg: #f7ffe9; --pmg-text: #243b00; --pmg-surface: #ffffff;
+  --pmg-border: #d3f5a3; --pmg-border-strong: #c4ee8d;
+  --pmg-navlink: #4d6b1f; --pmg-section: #7d9c4d; --pmg-section-rule: rgba(36,59,0,.1);
+  --pmg-sidebar-user: #eefbcf; --pmg-topbar: rgba(255,255,255,.92);
+  --pmg-card-border: #d3f5a3; --pmg-card-shadow: rgba(101,163,13,.1);
+  --pmg-card-header: #f7ffe9; --pmg-card-header-border: #d3f5a3;
+  --pmg-chip-border: #d3f5a3; --pmg-chip-text: #4d6b1f; --pmg-chip-bg: #fff;
+  --pmg-chip-hover-text: #243b00; --pmg-chip-n-bg: rgba(36,59,0,.1);
+}
+:root[data-style="sass-neon"] .btn-grad {
+  box-shadow: 0 0 16px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+:root[data-style="sass-neon"][data-bs-theme="dark"] .sidebar .nav-link.active {
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+:root[data-style="sass-neon"][data-bs-theme="dark"] .stat-icon {
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/* ---------------------------------------------------------------------------
+   8. SCSS/Sass — Pastel (rosa-claro suave)
+   --------------------------------------------------------------------------- */
+:root[data-style="sass-pastel"] {
+  --accent: #f472b6;
+  --accent-dark: #db2777;
+}
+:root[data-style="sass-pastel"][data-bs-theme="dark"] {
+  --pmg-bg: #2a1a24; --pmg-text: #fce7f3; --pmg-surface: #35222e;
+  --pmg-border: rgba(255,255,255,.1); --pmg-border-strong: rgba(255,255,255,.18);
+  --pmg-navlink: #d8b6c8; --pmg-section: #ab8a9d; --pmg-section-rule: rgba(255,255,255,.12);
+  --pmg-sidebar-user: rgba(255,255,255,.05); --pmg-topbar: rgba(42,26,36,.88);
+  --pmg-card-border: rgba(255,255,255,.09); --pmg-card-shadow: rgba(0,0,0,.35);
+  --pmg-card-header: rgba(255,255,255,.04); --pmg-card-header-border: rgba(255,255,255,.07);
+  --pmg-chip-border: rgba(255,255,255,.16); --pmg-chip-text: #eccbdc; --pmg-chip-bg: rgba(255,255,255,.05);
+  --pmg-chip-hover-text: #fff; --pmg-chip-n-bg: rgba(255,255,255,.16);
+}
+:root[data-style="sass-pastel"][data-bs-theme="light"] {
+  --pmg-bg: #fdf2f8; --pmg-text: #5b1a3a; --pmg-surface: #ffffff;
+  --pmg-border: #fbcfe8; --pmg-border-strong: #f6badb;
+  --pmg-navlink: #8d5170; --pmg-section: #b485a1; --pmg-section-rule: rgba(91,26,58,.08);
+  --pmg-sidebar-user: #fce7f3; --pmg-topbar: rgba(255,255,255,.9);
+  --pmg-card-border: #fbcfe8; --pmg-card-shadow: rgba(219,39,119,.07);
+  --pmg-card-header: #fdf2f8; --pmg-card-header-border: #fbcfe8;
+  --pmg-chip-border: #fbcfe8; --pmg-chip-text: #8d5170; --pmg-chip-bg: #fff;
+  --pmg-chip-hover-text: #5b1a3a; --pmg-chip-n-bg: rgba(91,26,58,.08);
+}
+:root[data-style="sass-pastel"] .card,
+:root[data-style="sass-pastel"] .stat-card { border-radius: 16px; }
+:root[data-style="sass-pastel"] .btn-grad { border-radius: 999px; }
+:root[data-style="sass-pastel"] .filter-chip { border-radius: 999px; }

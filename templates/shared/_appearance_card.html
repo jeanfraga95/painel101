@@ -1,0 +1,33 @@
+{# ── Card de aparência (dashboard do admin e da revenda) ───────────────────
+   Mostra o estilo/tema atuais e abre o modal de personalização
+   (#appearanceModal, definido no base.html). Usado nos dois dashboards. #}
+{% set _style_id = user_appearance.style if user_appearance and user_appearance.style else 'default' %}
+{% set _ns = namespace(style_name='Padrão') %}
+{% for _p in STYLE_PRESETS %}{% if _p.id == _style_id %}{% set _ns.style_name = _p.name %}{% endif %}{% endfor %}
+{% set _theme_name = (user_appearance.theme if user_appearance and user_appearance.theme else panel_theme) %}
+<div class="card mb-3">
+  <div class="card-body py-3 d-flex align-items-center justify-content-between flex-wrap gap-3">
+    <div class="d-flex align-items-center gap-3">
+      <div class="stat-icon bg-grad-accent" style="width:44px;height:44px;font-size:1.1rem;flex-shrink:0">
+        <i class="fas fa-palette" aria-hidden="true"></i>
+      </div>
+      <div>
+        <div class="fw-semibold mb-0">Aparência do painel</div>
+        <small class="text-muted">
+          Estilo: <strong id="appearanceStyleName">{{ _ns.style_name }}</strong>
+          &middot; Tema: <strong id="appearanceThemeName">{{ 'Escuro' if _theme_name == 'dark' else 'Claro' }}</strong>
+        </small>
+      </div>
+    </div>
+    <div class="d-flex gap-2">
+      <button type="button" class="btn btn-outline-secondary btn-sm" onclick="toggleTheme()"
+              aria-label="Alternar entre tema claro e escuro">
+        <i class="fas fa-exchange-alt me-1" aria-hidden="true"></i>Claro/Escuro
+      </button>
+      <button type="button" class="btn btn-grad btn-sm" onclick="openAppearance()"
+              aria-label="Trocar tema e estilo do painel">
+        <i class="fas fa-palette me-1" aria-hidden="true"></i>Trocar estilo
+      </button>
+    </div>
+  </div>
+</div>
