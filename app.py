@@ -8,6 +8,7 @@ import json
 import os
 import re
 import secrets
+import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
@@ -60,6 +61,7 @@ try:
     db.migrate_schema_informativos()
     db.migrate_schema_message_template()
     db.migrate_schema_appearance()
+    db.migrate_schema_panel_lock()
 except Exception as _startup_err:
     import traceback as _tb
     print(f"[PMG STARTUP ERROR] DB init failed: {_startup_err}", flush=True)
@@ -95,6 +97,58 @@ def days_until(date_str: str) -> int:
 def is_expired(date_str: str) -> bool:
     """True quando o último dia de uso já passou (venceu antes de hoje)."""
     return days_until(date_str) < 0
+
+
+# ---------------------------------------------------------------------------
+# Vencimento do PAINEL da revenda
+# ---------------------------------------------------------------------------
+# Regra combinada com o cliente:
+#   days_until(expires_at) >= -1  → painel ATIVO (o dia -1, "venceu ontem",
+#                                   ainda é tolerado)
+#   days_until(expires_at) <= -2  → painel TRAVADO: a revenda não cria
+#                                   usuário/teste, não renova, não edita e
+#                                   não gerencia sub-revendas; os usuários SSH
+#                                   dela são suspensos no servidor.
+# Ao voltar para dias positivos (renovação pelo admin), tudo é liberado e os
+# usuários SSH são reativados automaticamente.
+
+PANEL_LOCK_GRACE_DAYS = -1  # bloqueia quando days_until < este valor (<= -2)
+
+
+def panel_is_locked_for(expires_at) -> bool:
+    """True se, pela data de vencimento do painel, o acesso deve ser travado."""
+    if not expires_at:
+        return False  # sem data definida = não expira
+    return days_until(expires_at) <= PANEL_LOCK_GRACE_DAYS - 1
+
+
+def panel_lock_info(user) -> dict:
+    """Estado de travamento do painel para `user` (admin nunca trava).
+
+    Retorna dict com: locked (bool), days (int|None), expires (str|None),
+    contact (str) — nome do painel pai a quem a revenda deve pedir renovação.
+    """
+    if not user or user['role'] == 'admin':
+        return {'locked': False, 'days': None, 'expires': None, 'contact': ''}
+    exp = user['expires_at'] if 'expires_at' in user.keys() else None
+    days = days_until(exp) if exp else None
+    contact = ''
+    try:
+        parent_id = user['parent_id'] if 'parent_id' in user.keys() else None
+        if parent_id:
+            parent = db.get_panel_user(parent_id)
+            if parent:
+                contact = parent['username']
+        if not contact:
+            contact = db.get_setting('panel_name', 'seu fornecedor')
+    except Exception:
+        contact = db.get_setting('panel_name', 'seu fornecedor')
+    return {
+        'locked': panel_is_locked_for(exp),
+        'days': days,
+        'expires': exp,
+        'contact': contact,
+    }
 
 
 app.jinja_env.globals['is_expired'] = is_expired
@@ -226,6 +280,80 @@ def ua_protect():
     return None
 
 
+# Endpoints de ESCRITA que a revenda perde quando o painel dela está travado
+# por vencimento. Tudo relacionado a criar usuário/teste, renovar, editar,
+# suspender/deletar usuário e criar/gerenciar sub-revendas.
+PANEL_LOCK_BLOCKED_ENDPOINTS = frozenset({
+    # usuários (SSH)
+    'create_user', 'create_test',
+    'renew_user', 'renew_users_bulk', 'update_user', 'suspend_user',
+    'delete_user', 'bulk_delete_users', 'recreate_user_on_server',
+    'user_add_extra_server', 'user_remove_extra_server',
+    # revendas (sub-revendas)
+    'create_reseller', 'set_reseller_password', 'set_reseller_servers_route',
+    'set_reseller_categories_route', 'delete_reseller', 'suspend_reseller',
+    'renew_reseller', 'update_reseller', 'transfer_reseller',
+})
+
+_PANEL_LOCK_MSG = (
+    'Seu painel está vencido. As funções foram desativadas. '
+    'Contate quem forneceu o painel a você para renovar.'
+)
+
+
+def _sync_panel_lock_suspension(user):
+    """Suspende (ou reativa) no servidor os usuários SSH da revenda conforme o
+    estado de travamento do painel dela.
+
+    Usa a coluna panel_locked para agir só na TRANSIÇÃO (travar/destravar),
+    evitando repetir o broadcast a cada request. A suspensão real é feita em
+    background para não travar a navegação.
+    """
+    try:
+        locked_now = panel_is_locked_for(user['expires_at'] if 'expires_at' in user.keys() else None)
+        was_locked = db.get_panel_locked(user['id'])
+    except Exception:
+        return
+    if locked_now == was_locked:
+        return
+
+    # pega todos os usuários SSH da revenda (dela e de toda a árvore abaixo)
+    try:
+        tree = db.get_all_resellers_under(user['id'])
+        owner_ids = [user['id']] + [r['id'] for r in tree]
+        users = db.get_ssh_users_for_tree(owner_ids)
+    except Exception:
+        users = []
+    users = [dict(u) for u in users]
+
+    if locked_now:
+        # Marca o flag imediatamente para não reentrar em cada request. A
+        # suspensão no servidor roda em background; se algum servidor falhar,
+        # basta o admin renovar (que marca o flag de volta) e, ao travar de
+        # novo, o broadcast é reenviado.
+        db.set_panel_locked(user['id'], True)
+    else:
+        db.set_panel_locked(user['id'], False)
+
+    if not users:
+        return
+
+    def _apply():
+        for u in users:
+            try:
+                cmd = sc.build_block_cmd(u) if locked_now else sc.build_unblock_cmd(u)
+                sc.broadcast_command(u, cmd, db)
+                # marca no banco local para refletir na lista
+                db.update_ssh_user(u['id'], status='suspended' if locked_now else 'active')
+            except Exception:
+                pass
+
+    try:
+        threading.Thread(target=_apply, daemon=True).start()
+    except Exception:
+        pass
+
+
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -241,6 +369,20 @@ def login_required(f):
                 return jsonify(success=False, message='Conta suspensa. Contate o administrador.'), 403
             flash('Sua conta foi suspensa. Contate o administrador.', 'danger')
             return redirect(url_for('login'))
+
+        # Vencimento do painel da revenda: sincroniza suspensão dos usuários
+        # dela (na transição) e bloqueia endpoints de escrita enquanto travado.
+        if user['role'] != 'admin':
+            try:
+                _sync_panel_lock_suspension(user)
+            except Exception:
+                pass
+            if request.endpoint in PANEL_LOCK_BLOCKED_ENDPOINTS \
+                    and panel_is_locked_for(user['expires_at'] if 'expires_at' in user.keys() else None):
+                if request.method == 'POST':
+                    return jsonify(success=False, message=_PANEL_LOCK_MSG, panel_locked=True), 403
+                flash(_PANEL_LOCK_MSG, 'danger')
+                return redirect(url_for('dashboard'))
         return f(*args, **kwargs)
     return decorated
 
@@ -296,6 +438,7 @@ def inject_globals():
     pendentes = []
     msg_template = ''
     user_appearance = None
+    panel_lock = {'locked': False, 'days': None, 'expires': None, 'contact': ''}
     try:
         cu = get_current_user()
         if cu:
@@ -306,11 +449,13 @@ def inject_globals():
                 unread = len(pendentes)
             msg_template = db.get_message_template(cu['id'])
             user_appearance = db.get_appearance(cu['id'])
+            panel_lock = panel_lock_info(cu)
     except Exception:
         unread = 0
         pendentes = []
         msg_template = ''
         user_appearance = None
+        panel_lock = {'locked': False, 'days': None, 'expires': None, 'contact': ''}
     return dict(
         settings=get_settings(),
         current_user=get_current_user(),
@@ -321,6 +466,7 @@ def inject_globals():
         informativos_pendentes=pendentes,
         msg_template=msg_template,
         user_appearance=user_appearance,
+        panel_lock=panel_lock,
     )
 
 

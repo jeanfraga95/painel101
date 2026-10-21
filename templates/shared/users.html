@@ -78,17 +78,30 @@
 </div>
 
 <!-- Action buttons -->
+{% set panel_locked = panel_lock and panel_lock.locked %}
+{% if panel_locked %}
+<div class="alert alert-warning d-flex align-items-center gap-2 mb-3" role="alert">
+  <i class="fas fa-lock" aria-hidden="true"></i>
+  <span class="small">As ações estão desativadas porque seu painel está vencido. Contate
+  {% if panel_lock.contact %}<strong>{{ panel_lock.contact }}</strong>{% else %}quem forneceu o painel{% endif %}
+  para renovar.</span>
+</div>
+{% endif %}
 <div class="action-bar">
-  <button class="btn btn-grad" data-bs-toggle="modal" data-bs-target="#createUserModal">
+  <button class="btn btn-grad" data-bs-toggle="modal" data-bs-target="#createUserModal"
+          {% if panel_locked %}disabled{% endif %}>
     <i class="fas fa-user-plus me-2" aria-hidden="true"></i>Novo Usuário
   </button>
-  <button class="btn btn-warning text-dark" data-bs-toggle="modal" data-bs-target="#createTestModal">
+  <button class="btn btn-warning text-dark" data-bs-toggle="modal" data-bs-target="#createTestModal"
+          {% if panel_locked %}disabled{% endif %}>
     <i class="fas fa-flask me-2" aria-hidden="true"></i>Novo Teste
   </button>
-  <button class="btn btn-outline-success btn-sm d-none" id="bulkRenewBtn" onclick="bulkRenew()">
+  <button class="btn btn-outline-success btn-sm d-none" id="bulkRenewBtn" onclick="bulkRenew()"
+          {% if panel_locked %}disabled{% endif %}>
     <i class="fas fa-redo me-1" aria-hidden="true"></i>Renovar Selecionados (<span id="selCountRenew">0</span>)
   </button>
-  <button class="btn btn-outline-danger btn-sm d-none" id="bulkDeleteBtn" onclick="bulkDelete()">
+  <button class="btn btn-outline-danger btn-sm d-none" id="bulkDeleteBtn" onclick="bulkDelete()"
+          {% if panel_locked %}disabled{% endif %}>
     <i class="fas fa-trash me-1" aria-hidden="true"></i>Excluir Selecionados (<span id="selCount">0</span>)
   </button>
   <button class="btn btn-outline-secondary btn-sm d-none" id="selectExpiredBtn" onclick="selectExpired()">
@@ -162,19 +175,19 @@
                 <button class="btn btn-outline-primary" onclick="viewCredentials({{ u.id }})" title="Ver senha/UUID" aria-label="Ver senha/UUID">
                   <i class="fas fa-key" aria-hidden="true"></i>
                 </button>
-                <button class="btn btn-outline-success" onclick="renewUser({{ u.id }}, '{{ u.username }}')" title="Renovar" aria-label="Renovar">
+                <button class="btn btn-outline-success" onclick="renewUser({{ u.id }}, '{{ u.username }}')" title="Renovar" aria-label="Renovar" {% if panel_locked %}disabled{% endif %}>
                   <i class="fas fa-redo" aria-hidden="true"></i>
                 </button>
-                <button class="btn btn-outline-warning" onclick="suspendUser({{ u.id }}, this)" title="Suspender/Ativar" aria-label="Suspender/Ativar">
+                <button class="btn btn-outline-warning" onclick="suspendUser({{ u.id }}, this)" title="Suspender/Ativar" aria-label="Suspender/Ativar" {% if panel_locked %}disabled{% endif %}>
                   <i class="fas fa-ban" aria-hidden="true"></i>
                 </button>
-                <button class="btn btn-outline-secondary" onclick="recreateOnServer({{ u.id }}, this)" title="Sincronizar com o painel (data de vencimento + cria se faltar)" aria-label="Sincronizar com o painel (data de vencimento + cria se faltar)">
+                <button class="btn btn-outline-secondary" onclick="recreateOnServer({{ u.id }}, this)" title="Sincronizar com o painel (data de vencimento + cria se faltar)" aria-label="Sincronizar com o painel (data de vencimento + cria se faltar)" {% if panel_locked %}disabled{% endif %}>
                   <i class="fas fa-sync-alt" aria-hidden="true"></i>
                 </button>
-                <button class="btn btn-outline-info" onclick="openEditModal({{ u.id }}, '{{ u.username }}', {{ u.connection_limit }}, '{{ u.expires_at[:10] if u.expires_at else '' }}', '{{ u.telefone or '' }}')" title="Editar / Servidores" aria-label="Editar / Servidores">
+                <button class="btn btn-outline-info" onclick="openEditModal({{ u.id }}, '{{ u.username }}', {{ u.connection_limit }}, '{{ u.expires_at[:10] if u.expires_at else '' }}', '{{ u.telefone or '' }}')" title="Editar / Servidores" aria-label="Editar / Servidores" {% if panel_locked %}disabled{% endif %}>
                   <i class="fas fa-edit" aria-hidden="true"></i>
                 </button>
-                <button class="btn btn-outline-danger" onclick="deleteUser({{ u.id }}, '{{ u.username }}')" title="Deletar" aria-label="Deletar">
+                <button class="btn btn-outline-danger" onclick="deleteUser({{ u.id }}, '{{ u.username }}')" title="Deletar" aria-label="Deletar" {% if panel_locked %}disabled{% endif %}>
                   <i class="fas fa-trash" aria-hidden="true"></i>
                 </button>
               </div>

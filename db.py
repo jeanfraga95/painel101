@@ -1168,6 +1168,40 @@ def set_appearance(user_id: int, theme: str = '', style: str = '') -> None:
     conn.close()
 
 
+def migrate_schema_panel_lock():
+    """Coluna panel_locked em panel_users.
+
+    Guarda se, por causa do vencimento do painel da revenda, já suspendemos no
+    servidor os usuários SSH dela. Serve para suspender UMA vez ao travar e
+    reativar UMA vez ao destravar — sem repetir o broadcast a cada request.
+    """
+    conn = get_db()
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(panel_users)").fetchall()]
+    if 'panel_locked' not in cols:
+        conn.execute("ALTER TABLE panel_users ADD COLUMN panel_locked INTEGER DEFAULT 0")
+    conn.commit()
+    conn.close()
+
+
+def get_panel_locked(user_id: int) -> bool:
+    """True se o painel do usuário já está marcado como travado (usuários
+    dele já foram suspensos no servidor por causa do vencimento)."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT panel_locked FROM panel_users WHERE id = ?", (user_id,)
+    ).fetchone()
+    conn.close()
+    return bool(row and row['panel_locked'])
+
+
+def set_panel_locked(user_id: int, locked: bool) -> None:
+    conn = get_db()
+    conn.execute("UPDATE panel_users SET panel_locked = ? WHERE id = ?",
+                 (1 if locked else 0, user_id))
+    conn.commit()
+    conn.close()
+
+
 def get_message_template(user_id: int) -> str:
     """Return the user's saved access-message template ('' = use default)."""
     conn = get_db()
