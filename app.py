@@ -2771,16 +2771,27 @@ def user_login():
 
         u = db.get_ssh_user_by_username(username)
 
+        # A senha do cliente final é comparada via Fernet (barato), mas o
+        # caminho "usuário não existe" queima um PBKDF2. Sem queimar o PBKDF2
+        # nos DOIS caminhos o tempo de resposta revelaria quais usuários
+        # existem (existente ~40ms x inexistente ~590ms) — enumeração de
+        # usernames. Por isso o KDF falso roda sempre, exista o usuário ou não.
+        db.check_password(password, _DUMMY_HASH)
+
         if u and secrets.compare_digest(db.ssh_plain_password(u['password']), password):
             _login_register_success(username)
             user_data = dict(u)
+            # Sessão nova: o cliente final NÃO pode herdar poderes de uma
+            # sessão de admin/revenda anterior no mesmo navegador (computador
+            # compartilhado). Sem o session.clear() o login do cliente mantinha
+            # user_id/role da sessão anterior e o cliente virava admin.
+            _csrf = session.get('csrf_token')
+            session.clear()
+            if _csrf:
+                session['csrf_token'] = _csrf
             # Store in session so generate_pix can use it without re-auth
-            session.pop('pix_user_id', None)
             session['pix_user_id'] = u['id']
         else:
-            if not u:
-                # gasta o mesmo tempo de hash para não revelar se o usuário existe
-                db.check_password(password, _DUMMY_HASH)
             locked_now, dur = _login_register_fail(username)
             if locked_now:
                 app.logger.warning('Brute-force detectado em /user/login: bloqueio de %ss ip=%s user=%s',
