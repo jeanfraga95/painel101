@@ -471,6 +471,109 @@ def inject_globals():
 
 
 # ---------------------------------------------------------------------------
+# Proteção contra brute-force / rate-limit nos logins
+# ---------------------------------------------------------------------------
+# Janela deslizante em memória. O painel roda em processo único (atrás do
+# nginx), então o estado é compartilhado por todas as requisições.
+# Bloqueios:
+#   - (ip + usuário): após 5 falhas seguidas na janela
+#   - (ip):          após 25 falhas na janela (evita credential stuffing
+#                    trocando o usuário a cada tentativa)
+# O tempo de bloqueio dobra a cada reincidência (15min, 30min, 60min...).
+
+LOGIN_FAILS_MAX_KEY = 5
+LOGIN_FAILS_MAX_IP = 25
+LOGIN_WINDOW_SEC = 300
+LOGIN_LOCK_SEC = 900
+LOGIN_LOCK_MAX_SEC = 3600
+LOGIN_MAX_TRACKED = 5000
+
+_login_fails = {}     # chave -> [timestamps das falhas]
+_login_locks = {}     # chave -> timestamp em que libera
+_login_strikes = {}   # chave -> nº de bloqueios já aplicados
+_login_state_lock = threading.Lock()
+
+# Hash descartável: usado só para gastar o mesmo tempo de hash quando o
+# usuário não existe (evita enumeração de usuários por diferença de tempo).
+_DUMMY_HASH = db.hash_password(secrets.token_hex(16))
+
+
+def _client_ip() -> str:
+    """IP real do cliente (o ProxyFix já resolve o X-Forwarded-For do nginx)."""
+    ip = request.remote_addr
+    if not ip:
+        xf = request.headers.get('X-Forwarded-For', '') or ''
+        ip = xf.split(',')[0].strip()
+    return ip or 'unknown'
+
+
+def _login_keys(username: str):
+    ip = _client_ip()
+    user = (username or '').strip().lower()
+    return f"{ip}|{user}", ip
+
+
+def _prune_login_state(now: float):
+    """Descarta registros expirados para o estado não crescer sem limite."""
+    for key in [k for k, t in _login_locks.items() if t <= now]:
+        _login_locks.pop(key, None)
+    for key in [k for k, t in _login_strikes.items() if now - t > LOGIN_WINDOW_SEC * 4]:
+        _login_strikes.pop(key, None)
+    if len(_login_fails) > LOGIN_MAX_TRACKED:
+        for key in [k for k, v in _login_fails.items() if not v or now - v[-1] > LOGIN_WINDOW_SEC]:
+            _login_fails.pop(key, None)
+
+
+def _login_lock_state(username: str):
+    """Retorna (bloqueado, segundos_restantes)."""
+    now = time.time()
+    key, ip = _login_keys(username)
+    with _login_state_lock:
+        _prune_login_state(now)
+        for k in (key, ip):
+            until = _login_locks.get(k)
+            if until and until > now:
+                return True, int(until - now)
+    return False, 0
+
+
+def _login_register_fail(username: str):
+    """Registra uma tentativa inválida. Retorna (bloqueou_agora, segundos)."""
+    now = time.time()
+    key, ip = _login_keys(username)
+    with _login_state_lock:
+        _prune_login_state(now)
+        for k, limit in ((key, LOGIN_FAILS_MAX_KEY), (ip, LOGIN_FAILS_MAX_IP)):
+            fails = [t for t in _login_fails.get(k, []) if now - t < LOGIN_WINDOW_SEC]
+            fails.append(now)
+            _login_fails[k] = fails
+            if len(fails) >= limit:
+                strikes = _login_strikes.get(k, 0) + 1
+                _login_strikes[k] = strikes
+                dur = min(LOGIN_LOCK_SEC * (2 ** (strikes - 1)), LOGIN_LOCK_MAX_SEC)
+                _login_locks[k] = now + dur
+                _login_fails.pop(k, None)
+                return True, dur
+    return False, 0
+
+
+def _login_register_success(username: str):
+    """Zera os contadores no login bem-sucedido."""
+    key, ip = _login_keys(username)
+    with _login_state_lock:
+        _login_fails.pop(key, None)
+        _login_locks.pop(key, None)
+        _login_fails.pop(ip, None)
+        _login_locks.pop(ip, None)
+
+
+def _login_lock_message(seconds: int) -> str:
+    mins = max(1, int(seconds) // 60)
+    return ('Muitas tentativas inválidas. Acesso temporariamente bloqueado '
+            f'para proteger sua conta. Tente novamente em {mins} minuto(s).')
+
+
+# ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
 
@@ -484,16 +587,36 @@ def login():
             username = request.form.get('username', '').strip()
             password = request.form.get('password', '').strip()
 
+            blocked, remaining = _login_lock_state(username)
+            if blocked:
+                app.logger.warning('Login bloqueado (brute-force): ip=%s user=%s',
+                                   _client_ip(), username[:60])
+                flash(_login_lock_message(remaining), 'danger')
+                return redirect(url_for('login'))
+
             user = db.get_panel_user_by_username(username)
             if user and db.check_password(password, user['password_hash']):
                 if user['status'] == 'suspended':
                     flash('Conta suspensa. Contate o administrador.', 'danger')
                     return redirect(url_for('login'))
+                _login_register_success(username)
+                # sessão nova: evita carregar dados de sessão anteriores
+                session.clear()
                 session['user_id'] = int(user['id'])
                 session['role']    = str(user['role'])
                 session['username']= str(user['username'])
                 return redirect(url_for('dashboard'))
-            flash('Usuário ou senha inválidos.', 'danger')
+
+            if not user:
+                # gasta o mesmo tempo de hash para não revelar se o usuário existe
+                db.check_password(password, _DUMMY_HASH)
+            locked_now, dur = _login_register_fail(username)
+            if locked_now:
+                app.logger.warning('Brute-force detectado: bloqueio de %ss ip=%s user=%s',
+                                   dur, _client_ip(), username[:60])
+                flash(_login_lock_message(dur), 'danger')
+            else:
+                flash('Usuário ou senha inválidos.', 'danger')
         except Exception:
             app.logger.error('Erro no login:\n%s', traceback.format_exc())
             flash('Erro interno ao fazer login. Verifique os logs.', 'danger')
@@ -2553,13 +2676,32 @@ def user_login():
     if request.method == 'POST':
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '').strip()
+
+        blocked, remaining = _login_lock_state(username)
+        if blocked:
+            app.logger.warning('Login de usuario bloqueado (brute-force): ip=%s user=%s',
+                               _client_ip(), username[:60])
+            error = _login_lock_message(remaining)
+            return render_template('user_login.html', user_data=None, error=error), 429
+
         u = db.get_ssh_user_by_username(username)
 
         if u and u['password'] == password:
+            _login_register_success(username)
             user_data = dict(u)
             # Store in session so generate_pix can use it without re-auth
+            session.pop('pix_user_id', None)
             session['pix_user_id'] = u['id']
         else:
+            if not u:
+                # gasta o mesmo tempo de hash para não revelar se o usuário existe
+                db.check_password(password, _DUMMY_HASH)
+            locked_now, dur = _login_register_fail(username)
+            if locked_now:
+                app.logger.warning('Brute-force detectado em /user/login: bloqueio de %ss ip=%s user=%s',
+                                   dur, _client_ip(), username[:60])
+                error = _login_lock_message(dur)
+                return render_template('user_login.html', user_data=None, error=error), 429
             error = 'Usuário ou senha inválidos'
 
     return render_template('user_login.html', user_data=user_data, error=error)

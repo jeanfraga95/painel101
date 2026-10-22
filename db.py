@@ -242,7 +242,9 @@ def hash_password(pw: str) -> str:
 
 
 def check_password(pw: str, hashed: str) -> bool:
-    return hash_password(pw) == hashed
+    # comparação em tempo constante: não revela o tamanho/prefixo do hash
+    # correto por diferença de tempo de resposta
+    return secrets.compare_digest(hash_password(pw), hashed or '')
 
 
 def random_password(length: int = 10) -> str:
