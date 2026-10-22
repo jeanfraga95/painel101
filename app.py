@@ -40,7 +40,40 @@ app = Flask(
     static_folder=os.path.join(BASE_DIR, 'static'),
 )
 # Support Cloudflare / reverse-proxy: trust X-Forwarded-Proto, X-Forwarded-For
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+class _SecureCookieMiddleware:
+    """Marca o cookie de sessao como Secure quando a requisicao e HTTPS.
+
+    O painel atende tanto por http://IP quanto por https:// (Cloudflare ou SSL
+    local).  Sem o atributo Secure o cookie trafegaria em claro quando o
+    usuario entra pelo endereco http://, permitindo o roubo da sessao.
+
+    Precisa ser um middleware de WSGI (e nao um after_request) porque o Flask
+    so grava o cookie da sessao DEPOIS dos after_request.
+    """
+
+    def __init__(self, wsgi_app):
+        self.wsgi_app = wsgi_app
+
+    def __call__(self, environ, start_response):
+        proto = (environ.get('HTTP_X_FORWARDED_PROTO') or '').lower()
+        https = proto == 'https' or environ.get('wsgi.url_scheme') == 'https'
+        if not https:
+            return self.wsgi_app(environ, start_response)
+
+        def wrapper(status, headers, exc_info=None):
+            novos = []
+            for k, v in headers:
+                if (k.lower() == 'set-cookie' and v.startswith('session=')
+                        and 'secure' not in v.lower()):
+                    v = v + '; Secure'
+                novos.append((k, v))
+            return start_response(status, novos, exc_info)
+
+        return self.wsgi_app(environ, wrapper)
+
+
+app.wsgi_app = ProxyFix(_SecureCookieMiddleware(app.wsgi_app),
+                        x_for=1, x_proto=1, x_host=1)
 
 app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100 MB for restore
@@ -218,6 +251,9 @@ def csrf_protect():
 @app.context_processor
 def inject_csrf():
     return {'csrf_token': get_csrf_token}
+
+
+
 
 
 # ---------------------------------------------------------------------------

@@ -262,11 +262,31 @@ def _is_legacy_sha256(hashed: str) -> bool:
     return bool(hashed) and len(hashed) == 64 and all(c in '0123456789abcdef' for c in hashed.lower())
 
 
+_DUMMY_PBKDF2 = None
+
+
+def _dummy_pbkdf2() -> str:
+    """Hash descartavel, so para igualar o custo de CPU entre os formatos."""
+    global _DUMMY_PBKDF2
+    if _DUMMY_PBKDF2 is None:
+        _DUMMY_PBKDF2 = generate_password_hash(secrets.token_urlsafe(24),
+                                                method=PASSWORD_HASH_METHOD)
+    return _DUMMY_PBKDF2
+
+
 def check_password(pw: str, hashed: str) -> bool:
     """Compara a senha com o hash guardado (aceita formato novo e legado)."""
     if not hashed:
         return False
     if _is_legacy_sha256(hashed):
+        # O hash legado (sha256) e muito mais barato que o PBKDF2: sem esta
+        # etapa o tempo de resposta revelaria QUAIS contas ainda usam o
+        # formato antigo (e quais usuarios existem).  Fazemos o mesmo
+        # trabalho do PBKDF2 antes de comparar.
+        try:
+            check_password_hash(_dummy_pbkdf2(), pw)
+        except Exception:
+            pass
         # comparação em tempo constante: não revela o tamanho/prefixo do hash
         # correto por diferença de tempo de resposta
         return secrets.compare_digest(hashlib.sha256(pw.encode()).hexdigest(), hashed.lower())
