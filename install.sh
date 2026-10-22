@@ -320,8 +320,13 @@ copy_files() {
     if [ -d "$INSTALL_DIR/.git" ]; then
         banner "Repositorio local detectado — forcando alinhamento com GitHub..."
         cd "$INSTALL_DIR" || true
-        git remote set-url origin "$REPO_URL" 2>/dev/null || \
+        # Tenta primeiro o remote que ja existe (pode estar por SSH com uma
+        # chave do cliente, ou por HTTPS com token salvo no credential
+        # helper). So substitui pelo REPO_URL se o fetch com ele falhar.
+        if ! git_auth fetch --all --prune 2>/dev/null && ! git_auth fetch origin 2>/dev/null; then
+            git remote set-url origin "$REPO_URL" 2>/dev/null || \
             git remote add origin "$REPO_URL" 2>/dev/null || true
+        fi
         # Busca tudo incluindo rewrites causados por push --force
         if ! git_auth fetch --all --prune 2>/dev/null && ! git_auth fetch origin 2>/dev/null; then
             warn "Nao foi possivel baixar do GitHub (repositorio privado sem token?)."
@@ -567,6 +572,15 @@ ${cf_ips}
     # Cliente via Cloudflare em http:// -> https:// (senha de login em claro).
     if (\$painel_https_target) {
         return 301 \$painel_https_target;
+    }
+
+    # Instalador distribuido pelo proprio painel: funciona mesmo com o
+    # codigo-fonte em repositorio privado (o raw.githubusercontent nao
+    # serviria mais).
+    #   curl -sSL https://SEU-DOMINIO/install.sh | bash
+    location = /install.sh {
+        alias /opt/painel-master/install.sh;
+        default_type application/x-shellscript;
     }
 
     include /etc/nginx/snippets/painel-security.conf;
@@ -874,6 +888,15 @@ server {
     server_name _;
 ${cf_ips}
 
+    # Instalador distribuido pelo proprio painel: funciona mesmo com o
+    # codigo-fonte em repositorio privado (o raw.githubusercontent nao
+    # serviria mais).
+    #   curl -sSL https://SEU-DOMINIO/install.sh | bash
+    location = /install.sh {
+        alias /opt/painel-master/install.sh;
+        default_type application/x-shellscript;
+    }
+
     include /etc/nginx/snippets/painel-security.conf;
     include /etc/nginx/snippets/vnc-location.conf;
 
@@ -935,6 +958,15 @@ server {
     ssl_certificate_key /etc/nginx/ssl/painel-selfsigned.key;
     ssl_protocols       TLSv1.2 TLSv1.3;
 ${cf_ips}
+
+    # Instalador distribuido pelo proprio painel: funciona mesmo com o
+    # codigo-fonte em repositorio privado (o raw.githubusercontent nao
+    # serviria mais).
+    #   curl -sSL https://SEU-DOMINIO/install.sh | bash
+    location = /install.sh {
+        alias /opt/painel-master/install.sh;
+        default_type application/x-shellscript;
+    }
 
     include /etc/nginx/snippets/painel-security.conf;
     include /etc/nginx/snippets/vnc-location.conf;
