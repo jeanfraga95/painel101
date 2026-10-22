@@ -5,12 +5,17 @@ Database module — SQLite3 helpers for Painel Master
 """
 
 import sqlite3
+import base64
 import hashlib
 import os
 import secrets
 import string
 from datetime import datetime, timedelta
 import pytz
+from cryptography.fernet import Fernet
+from werkzeug.security import check_password_hash, generate_password_hash
+
+_FERNET = None
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'painel.db')
 TZ = pytz.timezone('America/Sao_Paulo')
@@ -236,21 +241,124 @@ def init_db():
 # ---------------------------------------------------------------------------
 # Password
 # ---------------------------------------------------------------------------
+# Hashes de senha do painel: PBKDF2-HMAC-SHA256 (werkzeug) com salt por
+# usuário. O formato antigo (sha256 puro, sem salt) continua sendo ACEITO
+# na verificação para não travar quem já tem senha no formato legado, mas
+# todo login bem-sucedido re-hasha a senha no formato novo.
+#
+# Senhas dos usuários SSH NÃO podem ser só hash (o painel precisa mostrar e
+# recriar a senha no servidor), então ficam CIFRADAS em repouso (Fernet/AES)
+# e só são decifradas quando realmente necessárias.
+
+PASSWORD_HASH_METHOD = 'pbkdf2:sha256:600000'
+_SSH_ENC_PREFIX = 'enc:v1:'
+
 
 def hash_password(pw: str) -> str:
-    return hashlib.sha256(pw.encode()).hexdigest()
+    return generate_password_hash(pw, method=PASSWORD_HASH_METHOD)
+
+
+def _is_legacy_sha256(hashed: str) -> bool:
+    return bool(hashed) and len(hashed) == 64 and all(c in '0123456789abcdef' for c in hashed.lower())
 
 
 def check_password(pw: str, hashed: str) -> bool:
-    # comparação em tempo constante: não revela o tamanho/prefixo do hash
-    # correto por diferença de tempo de resposta
-    return secrets.compare_digest(hash_password(pw), hashed or '')
+    """Compara a senha com o hash guardado (aceita formato novo e legado)."""
+    if not hashed:
+        return False
+    if _is_legacy_sha256(hashed):
+        # comparação em tempo constante: não revela o tamanho/prefixo do hash
+        # correto por diferença de tempo de resposta
+        return secrets.compare_digest(hashlib.sha256(pw.encode()).hexdigest(), hashed.lower())
+    try:
+        return check_password_hash(hashed, pw)
+    except Exception:
+        return False
+
+
+def password_needs_upgrade(hashed: str) -> bool:
+    """True se o hash está no formato legado (sha256 sem salt)."""
+    return _is_legacy_sha256(hashed or '')
+
+
+def password_policy_error(pw: str, username: str = '') -> str:
+    """Valida a força da senha. Retorna '' se estiver OK, ou o motivo."""
+    pw = pw or ''
+    if len(pw) < 8:
+        return 'A senha deve ter no mínimo 8 caracteres.'
+    if not any(c.isalpha() for c in pw):
+        return 'A senha deve conter pelo menos uma letra.'
+    if not any(c.isdigit() for c in pw):
+        return 'A senha deve conter pelo menos um número.'
+    if username and pw.lower() == (username or '').lower():
+        return 'A senha não pode ser igual ao usuário.'
+    if username and username.lower() in pw.lower():
+        return 'A senha não pode conter o nome do usuário.'
+    return ''
+
+
+# --- Cifragem das senhas dos usuários SSH -----------------------------------
+
+def _encryption_key() -> bytes:
+    """Chave do Fernet derivada de um arquivo dedicado (não do SECRET_KEY da
+    sessão), para que trocar o segredo da sessão não quebre a decifragem."""
+    key_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.secret_key')
+    try:
+        with open(key_path, 'rb') as f:
+            raw = f.read().strip()
+        if raw:
+            return base64.urlsafe_b64encode(hashlib.sha256(b'pmg-enc-v1:' + raw).digest())
+    except FileNotFoundError:
+        pass
+    raw = secrets.token_bytes(32)
+    try:
+        fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'wb') as f:
+            f.write(raw)
+    except Exception as e:
+        # Sem chave persistente a decifragem das senhas SSH seria perdida a
+        # cada restart — melhor o app não subir do que quebrar os usuários.
+        raise RuntimeError(f'Não foi possível criar a chave de cifragem {key_path}: {e}')
+    return base64.urlsafe_b64encode(hashlib.sha256(b'pmg-enc-v1:' + raw).digest())
+
+
+def _fernet():
+    global _FERNET
+    if _FERNET is None:
+        _FERNET = Fernet(_encryption_key())
+    return _FERNET
+
+
+def encrypt_ssh_password(plain: str) -> str:
+    """Cifra a senha do usuário SSH para guardar no banco."""
+    if not plain:
+        return plain
+    if plain.startswith(_SSH_ENC_PREFIX):
+        return plain
+    token = _fernet().encrypt(plain.encode()).decode()
+    return _SSH_ENC_PREFIX + token
+
+
+def ssh_plain_password(stored: str) -> str:
+    """Devolve a senha em texto puro (decifra se estiver cifrada)."""
+    if not stored:
+        return ''
+    if not stored.startswith(_SSH_ENC_PREFIX):
+        return stored
+    try:
+        return _fernet().decrypt(stored[len(_SSH_ENC_PREFIX):].encode()).decode()
+    except Exception:
+        return ''
+
+
+def is_encrypted_password(stored: str) -> bool:
+    return bool(stored) and stored.startswith(_SSH_ENC_PREFIX)
 
 
 def random_password(length: int = 10) -> str:
-    """Generate an easy-to-type numeric password, e.g. 12321 style."""
-    # Use only digits so the user can type it easily on any keyboard/app
-    return ''.join(secrets.choice(string.digits) for _ in range(length))
+    """Gera senha forte e fácil de digitar (alfanumérica, sem 0/O/1/l)."""
+    charset = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+    return ''.join(secrets.choice(charset) for _ in range(length))
 
 
 def random_username(prefix: str = 'user', length: int = 3) -> str:
@@ -344,11 +452,12 @@ def create_panel_user(username: str, password: str, role: str, parent_id: int,
 
     conn = get_db()
     try:
+        # a senha NUNCA é guardada em texto puro (só o hash PBKDF2)
         cur = conn.execute(
             """INSERT INTO panel_users 
                (username, password_hash, password_plain, role, parent_id, expires_at, account_limit)
                VALUES (?,?,?,?,?,?,?)""",
-            (username.lower(), hash_password(password), password, role, parent_id, expires_at, account_limit)
+            (username.lower(), hash_password(password), '', role, parent_id, expires_at, account_limit)
         )
         new_id = cur.lastrowid
         # Deduct granted slots from parent's pool.
@@ -402,6 +511,9 @@ def renew_panel_user(user_id: int, days: int):
 def update_panel_user(user_id: int, **kwargs):
     if not kwargs:
         return
+    # a coluna password_plain nunca é gravada (legado do banco antigo)
+    if 'password_plain' in kwargs:
+        kwargs['password_plain'] = ''
     parts = ', '.join(f"{k}=?" for k in kwargs)
     vals = list(kwargs.values()) + [user_id]
     conn = get_db()
@@ -462,7 +574,7 @@ def create_ssh_user(username: str, password: str, owner_id: int, server_id: int,
                (username, password, owner_id, server_id, expires_at,
                 connection_limit, v2ray_uuid, is_test, telefone)
                VALUES (?,?,?,?,?,?,?,?,?)""",
-            (username.lower(), password, owner_id, server_id, expires_at,
+            (username.lower(), encrypt_ssh_password(password), owner_id, server_id, expires_at,
              connection_limit, v2ray_uuid, is_test, (telefone or '').strip())
         )
         new_id = cur.lastrowid
@@ -1200,6 +1312,84 @@ def set_panel_locked(user_id: int, locked: bool) -> None:
     conn = get_db()
     conn.execute("UPDATE panel_users SET panel_locked = ? WHERE id = ?",
                  (1 if locked else 0, user_id))
+    conn.commit()
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Migração de segurança
+# ---------------------------------------------------------------------------
+
+def migrate_schema_security():
+    """Endurece o armazenamento de senhas (roda uma vez, idempotente).
+
+    1) Cria a coluna must_change_password em panel_users.
+    2) Converte o hash do painel de sha256-sem-salt para PBKDF2 sempre que
+       ainda exista a senha em texto puro (password_plain) — a senha em si
+       NÃO muda, apenas o formato de armazenamento.
+    3) Apaga a coluna password_plain (a senha em texto puro deixa de existir).
+    4) Cifra (Fernet) as senhas dos usuários SSH, que precisam ser legíveis
+       para o painel, mas não devem ficar em texto puro no banco.
+    5) Garante que nenhuma conta fique marcada para troca obrigatória
+       (a troca continua opcional para o usuário).
+    """
+    conn = get_db()
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(panel_users)").fetchall()]
+        if 'must_change_password' not in cols:
+            conn.execute("ALTER TABLE panel_users ADD COLUMN must_change_password INTEGER DEFAULT 0")
+
+        # 2) re-hash das contas cuja senha em texto puro ainda existe
+        #    (a senha NUNCA muda — só o formato do hash, que passa a PBKDF2)
+        rows = conn.execute(
+            "SELECT id, username, password_hash, password_plain, role FROM panel_users"
+        ).fetchall()
+        for r in rows:
+            plain = (r['password_plain'] or '').strip()
+            hashed = r['password_hash'] or ''
+            if not plain:
+                continue
+            if _is_legacy_sha256(hashed) and \
+                    secrets.compare_digest(hashlib.sha256(plain.encode()).hexdigest(), hashed.lower()):
+                conn.execute("UPDATE panel_users SET password_hash=? WHERE id=?",
+                             (hash_password(plain), r['id']))
+
+        # 3) apaga a senha em texto puro
+        conn.execute("UPDATE panel_users SET password_plain='' WHERE password_plain IS NOT NULL AND password_plain<>''")
+
+        # 4) cifra as senhas dos usuários SSH que ainda estão em texto puro
+        srows = conn.execute("SELECT id, password FROM ssh_users").fetchall()
+        for r in srows:
+            pw = r['password'] or ''
+            if pw and not pw.startswith(_SSH_ENC_PREFIX):
+                try:
+                    conn.execute("UPDATE ssh_users SET password=? WHERE id=?",
+                                 (encrypt_ssh_password(pw), r['id']))
+                except Exception as e:
+                    print(f'[migrate_schema_security] falha ao cifrar ssh_user {r["id"]}: {e}',
+                          flush=True)
+
+        # 5) ninguém é obrigado a trocar a senha: a flag fica sempre zerada.
+        #    O hash legado (sha256 sem salt) é atualizado sozinho no próximo
+        #    login bem-sucedido, sem alterar a senha do usuário.
+        conn.execute("UPDATE panel_users SET must_change_password=0")
+
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_must_change_password(user_id: int) -> bool:
+    conn = get_db()
+    row = conn.execute("SELECT must_change_password FROM panel_users WHERE id=?", (user_id,)).fetchone()
+    conn.close()
+    return bool(row and row['must_change_password'])
+
+
+def set_must_change_password(user_id: int, flag: bool) -> None:
+    conn = get_db()
+    conn.execute("UPDATE panel_users SET must_change_password=? WHERE id=?",
+                 (1 if flag else 0, user_id))
     conn.commit()
     conn.close()
 

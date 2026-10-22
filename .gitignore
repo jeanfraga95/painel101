@@ -17,3 +17,6 @@ instance/
 
 *.bak
 *.bak-*
+
+# chave de cifragem das senhas SSH (fora do Git)
+.secret_key

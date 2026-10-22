@@ -34,8 +34,14 @@
         <h6 class="fw-semibold mb-3">Alterar Senha</h6>
         <form method="POST">
           <div class="mb-3">
+            <label class="form-label">Senha Atual</label>
+            <input type="password" name="current_password" class="form-control" placeholder="Informe a senha atual" autocomplete="current-password">
+            <div class="form-text">Opcional — preencha para confirmar a troca.</div>
+          </div>
+          <div class="mb-3">
             <label class="form-label">Nova Senha</label>
-            <input type="password" name="new_password" class="form-control" placeholder="Mínimo 4 caracteres" minlength="4" required>
+            <input type="password" name="new_password" class="form-control" placeholder="Mínimo 8 caracteres, com letra e número" minlength="8" required autocomplete="new-password">
+            <div class="form-text">Use no mínimo 8 caracteres, com pelo menos uma letra e um número.</div>
           </div>
           <button type="submit" class="btn btn-primary">
             <i class="fas fa-key me-2"></i>Alterar Senha

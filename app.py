@@ -62,6 +62,7 @@ try:
     db.migrate_schema_message_template()
     db.migrate_schema_appearance()
     db.migrate_schema_panel_lock()
+    db.migrate_schema_security()
 except Exception as _startup_err:
     import traceback as _tb
     print(f"[PMG STARTUP ERROR] DB init failed: {_startup_err}", flush=True)
@@ -488,6 +489,18 @@ LOGIN_LOCK_SEC = 900
 LOGIN_LOCK_MAX_SEC = 3600
 LOGIN_MAX_TRACKED = 5000
 
+# Só estes IPs podem mandar X-Forwarded-For (o nginx local). Qualquer outro
+# acesso usa o IP real da conexão.
+TRUSTED_PROXY_IPS = {'127.0.0.1', '::1'}
+
+# Token opcional para o endpoint /checkuser (usado pelos apps de VPN).
+# Definido em CHECKUSER_TOKEN (env) para não ficar no código.
+CHECKUSER_TOKEN = os.environ.get('CHECKUSER_TOKEN', '').strip()
+
+# Limite de consultas no /checkuser (evita enumerar usuários em massa).
+CHECKUSER_MAX_PER_MIN = 60
+_checkuser_hits = {}
+
 _login_fails = {}     # chave -> [timestamps das falhas]
 _login_locks = {}     # chave -> timestamp em que libera
 _login_strikes = {}   # chave -> nº de bloqueios já aplicados
@@ -499,12 +512,22 @@ _DUMMY_HASH = db.hash_password(secrets.token_hex(16))
 
 
 def _client_ip() -> str:
-    """IP real do cliente (o ProxyFix já resolve o X-Forwarded-For do nginx)."""
-    ip = request.remote_addr
-    if not ip:
-        xf = request.headers.get('X-Forwarded-For', '') or ''
-        ip = xf.split(',')[0].strip()
-    return ip or 'unknown'
+    """IP real do cliente.
+
+    Só confia no X-Forwarded-For quando a conexão vem do proxy local (nginx).
+    Sem isso, quem alcança a porta do app direto forja o header e escapa do
+    rate-limit trocando o IP a cada tentativa.
+    """
+    orig = request.environ.get('werkzeug.proxy_fix.orig') or {}
+    peer = orig.get('REMOTE_ADDR') or request.environ.get('REMOTE_ADDR') or ''
+    if peer in TRUSTED_PROXY_IPS:
+        xff = request.headers.get('X-Forwarded-For', '') or ''
+        if xff:
+            # o nginx sempre APPENDA o IP real no fim da lista
+            ip = xff.split(',')[-1].strip()
+            if ip:
+                return ip
+    return peer or 'unknown'
 
 
 def _login_keys(username: str):
@@ -600,6 +623,13 @@ def login():
                     flash('Conta suspensa. Contate o administrador.', 'danger')
                     return redirect(url_for('login'))
                 _login_register_success(username)
+                # senha em formato antigo (sha256 sem salt) -> re-hash agora
+                if db.password_needs_upgrade(user['password_hash']):
+                    try:
+                        db.update_panel_user(user['id'],
+                                             password_hash=db.hash_password(password))
+                    except Exception:
+                        pass
                 # sessão nova: evita carregar dados de sessão anteriores
                 session.clear()
                 session['user_id'] = int(user['id'])
@@ -894,6 +924,11 @@ def create_user():
 
         if not username:
             return jsonify(success=False, message='Username inválido')
+        err_pw = db.password_policy_error(password, username)
+        if err_pw:
+            return jsonify(success=False, message=err_pw)
+        if not password.isalnum():
+            return jsonify(success=False, message='Use apenas letras e números na senha.')
         if not category_id:
             return jsonify(success=False, message='Selecione uma categoria')
 
@@ -999,6 +1034,11 @@ def create_test():
 
     if not username:
         return jsonify(success=False, message='Username inválido')
+    err_pw = db.password_policy_error(password, username)
+    if err_pw:
+        return jsonify(success=False, message=err_pw)
+    if not password.isalnum():
+        return jsonify(success=False, message='Use apenas letras e números na senha.')
 
     target_servers = db.get_servers_by_category(category_id)
     if not target_servers:
@@ -1126,7 +1166,7 @@ def _sync_renew_to_category(u):
         # fique idêntica ao painel independentemente do estado anterior.
         ok, msg = sc.create_ssh_user_on_server(
             srv['ip'], srv['module_port'], srv['auth_token'],
-            u['username'], u['password'], exp_days, u['connection_limit'],
+            u['username'], db.ssh_plain_password(u['password']), exp_days, u['connection_limit'],
             uuid=u['v2ray_uuid']
         )
         return {'ok': ok, 'msg': msg, 'srv': srv}
@@ -1348,9 +1388,13 @@ def update_user(user_id):
     # Change password on SSH server if requested
     server_msg = ''
     if new_password:
-        if len(new_password) < 4:
-            return jsonify(success=False, message='Senha muito curta (mínimo 4 caracteres)')
-        db.update_ssh_user(user_id, password=new_password)
+        err_pw = db.password_policy_error(new_password, u['username'])
+        if err_pw:
+            return jsonify(success=False, message=err_pw)
+        if not new_password.isalnum():
+            return jsonify(success=False, message='Use apenas letras e números na senha.')
+        # grava cifrada no banco (Fernet)
+        db.update_ssh_user(user_id, password=db.encrypt_ssh_password(new_password))
         if u['server_id']:
             srv = db.get_server(u['server_id'])
             if srv:
@@ -1483,7 +1527,7 @@ def recreate_user_on_server(user_id):
         # ── Cria o usuário (ou adiciona UUID ao Xray se estiver faltando) ──
         c_ok, c_msg = sc.create_ssh_user_on_server(
             srv['ip'], srv['module_port'], srv['auth_token'],
-            u['username'], u['password'], exp_days, u['connection_limit'],
+            u['username'], db.ssh_plain_password(u['password']), exp_days, u['connection_limit'],
             uuid=u['v2ray_uuid']
         )
         action = 'criado' if c_ok else f'erro: {c_msg}'
@@ -1564,7 +1608,7 @@ def user_add_extra_server(user_id):
 
     s_ok, s_msg = sc.create_ssh_user_on_server(
         srv['ip'], srv['module_port'], srv['auth_token'],
-        u['username'], u['password'], exp_days, u['connection_limit'],
+        u['username'], db.ssh_plain_password(u['password']), exp_days, u['connection_limit'],
         uuid=u['v2ray_uuid']
     )
 
@@ -1696,6 +1740,10 @@ def create_reseller():
     if not username or not password or not expires_at:
         return jsonify(success=False, message='Preencha todos os campos')
 
+    err_pw = db.password_policy_error(password, username)
+    if err_pw:
+        return jsonify(success=False, message=err_pw)
+
     # Validate limits
     unlimited = request.form.get('unlimited') == '1'
     if unlimited and current_user['role'] != 'admin':
@@ -1743,11 +1791,12 @@ def set_reseller_password(reseller_id):
         if reseller_id not in [t['id'] for t in tree]:
             return jsonify(success=False, message='Sem permissão')
     new_pw = request.form.get('password', '').strip()
-    if len(new_pw) < 4:
-        return jsonify(success=False, message='Senha muito curta (mínimo 4 caracteres)')
+    err_pw = db.password_policy_error(new_pw, r['username'])
+    if err_pw:
+        return jsonify(success=False, message=err_pw)
     db.update_panel_user(reseller_id,
                          password_hash=db.hash_password(new_pw),
-                         password_plain=new_pw)
+                         must_change_password=0)
     return jsonify(success=True, message='Senha alterada com sucesso')
 
 
@@ -2686,7 +2735,7 @@ def user_login():
 
         u = db.get_ssh_user_by_username(username)
 
-        if u and u['password'] == password:
+        if u and secrets.compare_digest(db.ssh_plain_password(u['password']), password):
             _login_register_success(username)
             user_data = dict(u)
             # Store in session so generate_pix can use it without re-auth
@@ -2863,6 +2912,31 @@ def _get_user_connections(username: str) -> int:
     return total
 
 
+def _checkuser_rate_ok() -> bool:
+    """Limite de consultas no /checkuser por IP (evita enumerar usuários)."""
+    ip = _client_ip()
+    now = time.time()
+    with _login_state_lock:
+        hits = [t for t in _checkuser_hits.get(ip, []) if now - t < 60]
+        if len(hits) >= CHECKUSER_MAX_PER_MIN:
+            _checkuser_hits[ip] = hits
+            return False
+        hits.append(now)
+        _checkuser_hits[ip] = hits
+        if len(_checkuser_hits) > 5000:
+            for k in [k for k, v in _checkuser_hits.items() if not v or now - v[-1] > 60]:
+                _checkuser_hits.pop(k, None)
+    return True
+
+
+def _checkuser_token_ok() -> bool:
+    """Se houver token configurado, o cliente precisa enviá-lo."""
+    if not CHECKUSER_TOKEN:
+        return True
+    sent = (request.args.get('token') or request.headers.get('X-Check-Token') or '').strip()
+    return bool(sent) and secrets.compare_digest(sent, CHECKUSER_TOKEN)
+
+
 def _checkuser_response(username: str):
     """CheckUser response matching standard format used by VPN apps."""
     username = _clean_username(username)
@@ -2943,6 +3017,10 @@ def _checkuser_response(username: str):
 
 @app.route('/checkuser/dtunnel.php', methods=['GET', 'POST'])
 def checkuser_dtunnel():
+    if not _checkuser_token_ok():
+        return jsonify({"error": "invalid token"}), 403
+    if not _checkuser_rate_ok():
+        return jsonify({"error": "too many requests"}), 429
     username = (request.args.get('user') or request.form.get('user') or '').strip()
     if not username:
         return jsonify({"error": "missing user parameter"})
@@ -2953,6 +3031,10 @@ def checkuser_dtunnel():
 @app.route('/checkuser', methods=['GET', 'POST'])
 def checkuser_index():
     """DTunnel/HTTP style: /checkuser?user=USERNAME"""
+    if not _checkuser_token_ok():
+        return jsonify({"error": "invalid token"}), 403
+    if not _checkuser_rate_ok():
+        return jsonify({"error": "too many requests"}), 429
     username = (request.args.get('user') or request.args.get('username')
                 or request.form.get('user') or request.form.get('username') or '').strip()
     if not username:
@@ -2966,6 +3048,10 @@ def checkuser_index():
 
 @app.route('/api/checkuser', methods=['GET', 'POST'])
 def checkuser_api():
+    if not _checkuser_token_ok():
+        return jsonify({"error": "invalid token"}), 403
+    if not _checkuser_rate_ok():
+        return jsonify({"error": "too many requests"}), 429
     username = (request.args.get('user') or request.args.get('username')
                 or request.form.get('user') or request.form.get('username') or '').strip()
     if not username:
@@ -2975,11 +3061,19 @@ def checkuser_api():
 
 @app.route('/checkuser/<path:username>', methods=['GET', 'POST'])
 def checkuser(username):
+    if not _checkuser_token_ok():
+        return jsonify({"error": "invalid token"}), 403
+    if not _checkuser_rate_ok():
+        return jsonify({"error": "too many requests"}), 429
     return _checkuser_response(username)
 
 
 @app.route('/check/<path:username>', methods=['GET', 'POST'])
 def checkuser_check_path(username):
+    if not _checkuser_token_ok():
+        return jsonify({"error": "invalid token"}), 403
+    if not _checkuser_rate_ok():
+        return jsonify({"error": "too many requests"}), 429
     return _checkuser_response(username)
 
 
@@ -2998,7 +3092,7 @@ def user_credentials(user_id):
     return jsonify(
         success=True,
         username=u['username'],
-        password=u['password'],
+        password=db.ssh_plain_password(u['password']),
         v2ray_uuid=u['v2ray_uuid'],
         expires_at=u['expires_at'],
         connection_limit=u['connection_limit'],
@@ -3014,7 +3108,7 @@ def user_credentials(user_id):
 def random_credentials():
     return jsonify(
         username=db.random_username('user'),
-        password=db.random_password(5),   # 5 digits — easy to type, e.g. 12345
+        password=db.random_password(8),   # alfanumérica de 8 chars (letra+número)
         uuid=db.random_uuid()
     )
 
@@ -3043,11 +3137,22 @@ def profile():
     current_user = get_current_user()
     if request.method == 'POST':
         new_pw = request.form.get('new_password', '').strip()
-        if len(new_pw) >= 4:
-            db.update_panel_user(current_user['id'], password_hash=db.hash_password(new_pw))
-            flash('Senha alterada com sucesso!', 'success')
+        old_pw = request.form.get('current_password', '').strip()
+        # A troca de senha é OPCIONAL (ninguém é obrigado a trocar). Se o
+        # usuário preencher a senha atual, ela é conferida; se deixar em
+        # branco, a troca segue normal.
+        if old_pw and not db.check_password(old_pw, current_user['password_hash']):
+            flash('Senha atual incorreta.', 'danger')
+            return redirect(url_for('profile'))
+        err = db.password_policy_error(new_pw, current_user['username'])
+        if err:
+            flash(err, 'danger')
+        elif new_pw == (old_pw or ''):
+            flash('A nova senha deve ser diferente da atual.', 'danger')
         else:
-            flash('Senha muito curta (mínimo 4 caracteres).', 'danger')
+            db.update_panel_user(current_user['id'], password_hash=db.hash_password(new_pw))
+            db.set_must_change_password(current_user['id'], False)
+            flash('Senha alterada com sucesso!', 'success')
     return render_template('shared/profile.html')
 
 
@@ -3393,8 +3498,9 @@ def _process_tg_update(bot_token: str, admin_chat: str, update: dict):
         st = _tg_state.get(chat_id, {})
 
         if st.get('state') == 'await_pw':
-            if len(text) < 6:
-                _tg_send(bot_token, chat_id, '❌ Mínimo 6 caracteres. Tente novamente:')
+            err_pw = db.password_policy_error(text)
+            if err_pw:
+                _tg_send(bot_token, chat_id, f'❌ {err_pw} Tente novamente:')
                 return
             conn = db.get_db()
             row  = conn.execute(
@@ -3402,7 +3508,8 @@ def _process_tg_update(bot_token: str, admin_chat: str, update: dict):
             conn.close()
             if row:
                 db.update_panel_user(row['id'],
-                                     password_plain=text, password_hash=db.hash_password(text))
+                                     password_hash=db.hash_password(text),
+                                     must_change_password=0)
             _tg_state.pop(chat_id, None)
             _tg_send(bot_token, chat_id, '✅ Senha alterada!')
             _tg_send(bot_token, chat_id, '🏠 Menu:', _main_menu_kb())
@@ -3413,8 +3520,9 @@ def _process_tg_update(bot_token: str, admin_chat: str, update: dict):
             admin_r  = conn.execute(
                 "SELECT * FROM panel_users WHERE role='admin' LIMIT 1").fetchone()
             conn.close()
-            ok_pw = admin_r and (text == admin_r['password_plain'] or
-                                  db.check_password(text, admin_r['password_hash']))
+            # só o HASH vale — nunca a senha em texto puro (podia estar
+            # desatualizada no banco e virar backdoor de reset)
+            ok_pw = admin_r and db.check_password(text, admin_r['password_hash'])
             if not ok_pw:
                 _tg_state.pop(chat_id, None)
                 _tg_send(bot_token, chat_id, '❌ Senha incorreta. Reset cancelado.')
@@ -3748,5 +3856,9 @@ if __name__ == '__main__':
     # Use `or` so that an empty-string PORT env-var also falls back to the default
     port = int(os.environ.get('PORT') or 2083)
     debug = os.environ.get('DEBUG', 'false').lower() == 'true'
+    # Por padrão o app só escuta em 127.0.0.1 (o nginx local é o único
+    # cliente). Escutar em 0.0.0.0 allow que se pule o nginx e falsifique
+    # o X-Forwarded-For para escapar do rate-limit.
+    host = os.environ.get('HOST', '127.0.0.1')
     _bootstrap_vnc_proxy()
-    app.run(host='0.0.0.0', port=port, debug=debug)
+    app.run(host=host, port=port, debug=debug)
