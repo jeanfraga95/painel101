@@ -13,6 +13,11 @@ SERVICE_NAME="painel-master"
 PANEL_PORT="${PANEL_PORT:-2083}"
 [ -z "$PANEL_PORT" ] && PANEL_PORT="2083"
 REPO_URL="https://github.com/jeanfraga95/painel101"
+# Repositorio PRIVADO: o clone/fetch exige autenticacao. Informe o token
+# (PAT do GitHub com escopo "repo" ou um deploy key) no ambiente:
+#     export PAINEL_TOKEN=github_pat_xxxx
+# Se nao for informado e o repo exigir, o instalador pergunta no terminal.
+# O token NAO fica gravado no .git/config (vai no header HTTP do git).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DB_BACKUP=""
 
@@ -292,6 +297,18 @@ check_syntax() {
     fi
 }
 
+# Autentica o git no repo privado SEM gravar o token no .git/config
+# (o token vai no header Authorization e fica so no processo atual).
+git_auth() {
+    if [ -n "${PAINEL_TOKEN:-}" ]; then
+        local basic
+        basic="$(printf 'x-access-token:%s' "$PAINEL_TOKEN" | base64 | tr -d '\n')"
+        git -c "http.extraheader=Authorization: Basic ${basic}" "$@"
+    else
+        git "$@"
+    fi
+}
+
 copy_files() {
     # Sempre forca sincronizacao com GitHub — nunca usa arquivos locais
     # Isso garante que push --force no GitHub seja refletido na instalacao
@@ -304,12 +321,24 @@ copy_files() {
         git remote set-url origin "$REPO_URL" 2>/dev/null || \
             git remote add origin "$REPO_URL" 2>/dev/null || true
         # Busca tudo incluindo rewrites causados por push --force
-        git fetch --all --prune 2>/dev/null || git fetch origin 2>/dev/null || true
+        if ! git_auth fetch --all --prune 2>/dev/null && ! git_auth fetch origin 2>/dev/null; then
+            warn "Nao foi possivel baixar do GitHub (repositorio privado sem token?)."
+            if [ -z "${PAINEL_TOKEN:-}" ] && [ -t 0 ]; then
+                read -rp "  Token de acesso do GitHub (PAT com escopo repo): " PAINEL_TOKEN
+                export PAINEL_TOKEN
+            fi
+            if ! git_auth fetch --all --prune 2>/dev/null && ! git_auth fetch origin 2>/dev/null; then
+                error "Atualizacao abortada: nao da para alinhar com o GitHub.\nO codigo atual seria mantido (sem atualizacao). Use PAINEL_TOKEN=seu_token bash install.sh update"
+            fi
+        fi
         # Reset hard: descarta QUALQUER alteracao local e alinha com o GitHub
-        git reset --hard origin/main 2>/dev/null || \
-            git reset --hard origin/master 2>/dev/null || \
-            git reset --hard FETCH_HEAD 2>/dev/null || true
+        if ! git reset --hard origin/main 2>/dev/null && ! git reset --hard origin/master 2>/dev/null; then
+            error "Atualizacao abortada: nao foi possivel alinhar o codigo com o GitHub."
+        fi
         # Remove arquivos nao rastreados (pyc, caches etc)
+        # -x NAO e usado: arquivos ignorados (.gitignore) como painel.db,
+        # .secret_key e venv/ sao preservados (e o .gitignore e o que protege
+        # o banco e a chave de cifragem das senhas SSH).
         git clean -fd 2>/dev/null || true
         log "Codigo forcado para versao atual do GitHub"
         _apply_hotfixes
@@ -323,20 +352,32 @@ copy_files() {
     fi
 
     info "Clonando: $REPO_URL"
-    if git clone --depth=1 "$REPO_URL" "$INSTALL_DIR" 2>/dev/null; then
+    if git_auth clone --depth=1 "$REPO_URL" "$INSTALL_DIR" 2>/dev/null; then
         log "Clone concluido com sucesso"
         _apply_hotfixes
         return 0
     fi
 
     warn "Clone com --depth=1 falhou. Tentando clone completo..."
-    if git clone "$REPO_URL" "$INSTALL_DIR" 2>/dev/null; then
+    if git_auth clone "$REPO_URL" "$INSTALL_DIR" 2>/dev/null; then
         log "Clone completo concluido"
         _apply_hotfixes
         return 0
     fi
 
-    error "Nao foi possivel clonar: $REPO_URL\nVerifique a conexao com a internet e tente novamente."
+    # Repo privado sem credencial: pergunta o token e tenta de novo.
+    if [ -z "${PAINEL_TOKEN:-}" ] && [ -t 0 ]; then
+        warn "Nao foi possivel clonar (repo privado? token ausente)."
+        read -rp "  Token de acesso do GitHub (PAT com escopo repo): " PAINEL_TOKEN
+        export PAINEL_TOKEN
+        if [ -n "$PAINEL_TOKEN" ] && git_auth clone --depth=1 "$REPO_URL" "$INSTALL_DIR" 2>/dev/null; then
+            log "Clone concluido com sucesso (autenticado)"
+            _apply_hotfixes
+            return 0
+        fi
+    fi
+
+    error "Nao foi possivel clonar: $REPO_URL\nVerifique a conexao com a internet e, se o repositorio for privado, export PAINEL_TOKEN=seu_token"
 }
 
 
@@ -505,6 +546,113 @@ open_firewall() {
     done
 }
 
+# ── Vhost do domínio (porta 80) ───────────────────────────────────
+# Usado na instalação e na atualização: assim um cliente que já tinha
+# instalado o painel recebe o mesmo hardening (HTTPS real, CSP, rate
+# limit) sem precisar reinstalar.
+write_domain_vhost() {
+    local dom="$1"
+    [ -z "$dom" ] && return 1
+    cat > "/etc/nginx/sites-available/${dom}" << DOMCNF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${dom};
+${cf_ips}
+
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    # Cliente via Cloudflare em http:// -> https:// (senha de login em claro).
+    if (\$painel_https_target) {
+        return 301 \$painel_https_target;
+    }
+
+    include /etc/nginx/snippets/painel-security.conf;
+
+    location = /login {
+        limit_req zone=painel_login burst=30 nodelay;
+        proxy_pass http://127.0.0.1:${PANEL_PORT:-2083};
+        include /etc/nginx/snippets/proxy_params.conf;
+        proxy_hide_header Server;
+    }
+
+    location = /user/login {
+        limit_req zone=painel_login burst=30 nodelay;
+        proxy_pass http://127.0.0.1:${PANEL_PORT:-2083};
+        include /etc/nginx/snippets/proxy_params.conf;
+        proxy_hide_header Server;
+    }
+
+    location ~ ^/check(user)?(/|\$) {
+        limit_req zone=painel_checkuser burst=100 nodelay;
+        proxy_pass http://127.0.0.1:${PANEL_PORT:-2083};
+        include /etc/nginx/snippets/proxy_params.conf;
+        proxy_hide_header Server;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:${PANEL_PORT:-2083};
+        include /etc/nginx/snippets/proxy_params.conf;
+        proxy_hide_header Server;
+    }
+}
+DOMCNF
+DOMCNF
+    # O domínio canônico e conhecido aqui: grava no redirect do mapa para
+    # que o Location aponte sempre para o domínio oficial (nunca para o Host
+    # enviado pelo cliente - isso viraria open redirect).
+    sed -i "s|__PANEL_DOMAIN__|${dom}|g" /etc/nginx/conf.d/painel-scheme.conf 2>/dev/null || true
+    ln -sf "/etc/nginx/sites-available/${dom}" "/etc/nginx/sites-enabled/${dom}" 2>/dev/null || true
+}
+
+# ── Descobre o domínio já configurado ──────────────────────────────
+detect_domain() {
+    local f d
+    for f in /etc/nginx/sites-enabled/*; do
+        [ -f "$f" ] || continue
+        d="$(grep -m1 -oE 'server_name[[:space:]]+[a-zA-Z0-9.-]+' "$f" 2>/dev/null | awk '{print $2}')"
+        if [ -n "$d" ] && [ "$d" != "_" ]; then
+            echo "$d"
+            return 0
+        fi
+    done
+    # fallback: URL do checkuser guardada no proprio painel
+    if [ -f "$INSTALL_DIR/painel.db" ]; then
+        d="$(python3 - "$INSTALL_DIR/painel.db" << 'PYDB' 2>/dev/null
+import re, sqlite3, sys
+try:
+    c = sqlite3.connect(sys.argv[1])
+    for (v,) in c.execute("SELECT value FROM settings WHERE key='checkuser_url'"):
+        m = re.search(r'https?://([^/]+)', v or '')
+        if m:
+            print(m.group(1)); break
+except Exception:
+    pass
+PYDB
+)"
+        [ -n "$d" ] && { echo "$d"; return 0; }
+    fi
+    return 1
+}
+
+# ── Reaplica o hardening do nginx (usado na atualização) ───────────
+apply_nginx_hardening() {
+    banner "Reaplicando configuracao segura do nginx..."
+    setup_nginx_base || { warn "Falha ao (re)aplicar o nginx"; return 0; }
+    local dom
+    if dom="$(detect_domain)"; then
+        write_domain_vhost "$dom"
+        log "Vhost do dominio atualizado: $dom"
+    else
+        disable_https_redirect_if_no_domain
+    fi
+    if nginx -t 2>/dev/null; then
+        systemctl reload nginx 2>/dev/null && log "nginx recarregado (HTTPS real, CSP, rate limit)"
+    else
+        warn "nginx -t falhou: o nginx NAO foi recarregado (o painel continua no proxy anterior)"
+    fi
+}
+
 # ── Nginx base: sempre instala com suporte a IP direto + Cloudflare ──────────
 setup_nginx_base() {
     banner "Instalando nginx..."
@@ -515,7 +663,8 @@ setup_nginx_base() {
     fi
 
     # Garante que o módulo real_ip do nginx está ativo
-    local cf_ips="
+    # (global de proposito: write_domain_vhost() tambem usa)
+    cf_ips="
     # Cloudflare IPv4
     set_real_ip_from 103.21.244.0/22;
     set_real_ip_from 103.22.200.0/22;
@@ -828,64 +977,12 @@ setup_ssl() {
             || true
     fi
 
-    local cf_ips="
-    set_real_ip_from 103.21.244.0/22; set_real_ip_from 103.22.200.0/22;
-    set_real_ip_from 104.16.0.0/13;   set_real_ip_from 104.24.0.0/14;
-    set_real_ip_from 162.158.0.0/15;  set_real_ip_from 172.64.0.0/13;
-    set_real_ip_from 173.245.48.0/20; set_real_ip_from 188.114.96.0/20;
-    set_real_ip_from 197.234.240.0/22; set_real_ip_from 198.41.128.0/17;
-    real_ip_header CF-Connecting-IP;"
+    # (usa o cf_ips global de setup_nginx_base: lista completa de faixas do
+    #  Cloudflare - com a lista curta o IP real do cliente nao era recuperado
+    #  em algumas bordas e o rate-limit contava o IP da borda)
 
     # Config nginx para o domínio (Let's Encrypt vai adicionar bloco 443)
-    cat > "/etc/nginx/sites-available/${DOMAIN}" << DOMCNF
-server {
-    listen 80;
-    listen [::]:80;
-    server_name ${DOMAIN};
-${cf_ips}
-
-    add_header Strict-Transport-Security "max-age=31536000" always;
-
-    # Cliente via Cloudflare em http:// -> https:// (senha de login em claro).
-    if (\$painel_https_target) {
-        return 301 \$painel_https_target;
-    }
-
-    include /etc/nginx/snippets/painel-security.conf;
-
-    location = /login {
-        limit_req zone=painel_login burst=30 nodelay;
-        proxy_pass http://127.0.0.1:${PANEL_PORT:-2083};
-        include /etc/nginx/snippets/proxy_params.conf;
-        proxy_hide_header Server;
-    }
-
-    location = /user/login {
-        limit_req zone=painel_login burst=30 nodelay;
-        proxy_pass http://127.0.0.1:${PANEL_PORT:-2083};
-        include /etc/nginx/snippets/proxy_params.conf;
-        proxy_hide_header Server;
-    }
-
-    location ~ ^/check(user)?(/|\$) {
-        limit_req zone=painel_checkuser burst=100 nodelay;
-        proxy_pass http://127.0.0.1:${PANEL_PORT:-2083};
-        include /etc/nginx/snippets/proxy_params.conf;
-        proxy_hide_header Server;
-    }
-
-    location / {
-        proxy_pass http://127.0.0.1:${PANEL_PORT:-2083};
-        include /etc/nginx/snippets/proxy_params.conf;
-        proxy_hide_header Server;
-    }
-}
-DOMCNF
-
-    # O domínio canônico é conhecido só agora: grava no redirect do mapa para
-    # que o Location aponte sempre para o domínio oficial (nunca para o Host
-    # enviado pelo cliente - isso viraria open redirect).
-    sed -i "s|__PANEL_DOMAIN__|${DOMAIN}|g" /etc/nginx/conf.d/painel-scheme.conf
+    write_domain_vhost "$DOMAIN"
 
     ln -sf "/etc/nginx/sites-available/${DOMAIN}" "/etc/nginx/sites-enabled/${DOMAIN}" 2>/dev/null || true
     nginx -t && systemctl reload nginx
@@ -1005,11 +1102,20 @@ if [ "$MODE" = "update" ]; then
     check_python
     free_ports
 
-    # Salva banco antes de qualquer operação
+    # Salva banco e chave de cifragem antes de qualquer operação
     if [ -f "$INSTALL_DIR/painel.db" ]; then
         DB_BACKUP="/tmp/painel_backup_$(date +%s).db"
         cp "$INSTALL_DIR/painel.db" "$DB_BACKUP"
         warn "Banco salvo em: $DB_BACKUP"
+    fi
+    # A chave Fernet das senhas SSH e irrecuperavel: se ela se perder, todas
+    # as senhas de usuario SSH ficam indecifraveis. Ela esta no .gitignore
+    # (o git clean nao apaga), mas fica um backup por seguranca.
+    KEY_BACKUP=""
+    if [ -f "$INSTALL_DIR/.secret_key" ]; then
+        KEY_BACKUP="/tmp/painel_key_$(date +%s).key"
+        cp "$INSTALL_DIR/.secret_key" "$KEY_BACKUP"
+        chmod 600 "$KEY_BACKUP"
     fi
 
     systemctl stop "$SERVICE_NAME" 2>/dev/null || true
@@ -1022,12 +1128,23 @@ if [ "$MODE" = "update" ]; then
         cp "$DB_BACKUP" "$INSTALL_DIR/painel.db"
         log "Banco restaurado"
     fi
+    # Garante que a chave de cifragem continua a mesma
+    if [ -n "$KEY_BACKUP" ] && [ -f "$KEY_BACKUP" ] && [ ! -f "$INSTALL_DIR/.secret_key" ]; then
+        cp "$KEY_BACKUP" "$INSTALL_DIR/.secret_key"
+        chmod 600 "$INSTALL_DIR/.secret_key"
+        warn "Chave de cifragem restaurada do backup"
+    fi
 
     # Atualiza dependências Python sem recriar o venv
     if [ -f "$INSTALL_DIR/venv/bin/pip" ]; then
         info "Atualizando dependencias Python..."
         "$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt" -q 2>/dev/null || true
     fi
+
+    # Reaplica o hardening do nginx (HTTPS real atras do Cloudflare, CSP,
+    # rate limit, HSTS). Sem isso o cliente ficaria com o nginx antigo:
+    # o codigo do app atualiza, mas a borda continua sem cookie Secure.
+    apply_nginx_hardening
 
     systemctl daemon-reload
     systemctl start "$SERVICE_NAME"

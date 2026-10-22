@@ -4,16 +4,37 @@ Sistema web completo para gerenciamento de usuários SSH/V2Ray com suporte a rev
 
 ## 🚀 Instalação rápida
 
+O repositório é **privado**. O instalador pede o token de acesso do GitHub
+(PAT com escopo `repo`) na primeira execução:
+
 ```bash
+export PAINEL_TOKEN=github_pat_seu_token
 curl -sSL https://raw.githubusercontent.com/jeanfraga95/painel101/main/install.sh | bash
 ```
 
+Sem o token no ambiente, o instalador pergunta por ele no terminal quando o
+clone falhar (é só o repositório de código que exige autenticação).
+
 Ou manualmente:
 ```bash
-git clone https://github.com/jeanfraga33/painel-master
-cd painel-master
-bash install.sh
+git clone https://github.com/jeanfraga95/painel101
+cd painel101
+PAINEL_TOKEN=github_pat_seu_token bash install.sh
 ```
+
+### Atualização (preserva o banco)
+
+```bash
+export PAINEL_TOKEN=github_pat_seu_token
+bash install.sh update
+```
+
+O modo `update` sincroniza o código com o GitHub, **mantém o `painel.db` e a
+chave `.secret_key` intactos** (os dois estão no `.gitignore` e são preservados
+pelo `git clean -fd`), reaplica o hardening do nginx (HTTPS real atrás do
+Cloudflare, CSP, HSTS e rate limit) e reinicia o serviço. Se não conseguir
+alinhar com o GitHub, o instalador **aborta com erro** em vez de fingir que
+atualizou.
 
 ## 📋 Requisitos
 

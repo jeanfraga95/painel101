@@ -1674,7 +1674,7 @@ location ~ ^/servers/vnc/(?<vnc_sid>\\d+)/(?<vnc_rest>.*)$ {
     proxy_set_header Connection        "upgrade";
     proxy_set_header X-Real-IP         $remote_addr;
     proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Proto $painel_proto;
     proxy_set_header CF-Connecting-IP  $http_cf_connecting_ip;
 
     # Console e sessao longa e ociosa. Com o timeout padrao de 60s a conexao
@@ -1698,7 +1698,7 @@ location @vnc_denied {
 # internet e use isto para sondar sessao de terceiros.
 location = /_vnc_authz {
     internal;
-    proxy_pass http://127.0.0.1:2083/_vnc_authz;
+    proxy_pass http://127.0.0.1:__PANEL_PORT__/_vnc_authz;
     proxy_pass_request_body off;
     proxy_set_header Content-Length "";
     proxy_set_header Cookie           $http_cookie;
@@ -1757,8 +1757,15 @@ def install_vnc_proxy(servers) -> tuple:
 
     try:
         os.makedirs(os.path.dirname(snippet_path), exist_ok=True)
+        # A porta real do painel (o default 2083 pode ter sido trocado) e o
+        # esquema real (atras do Cloudflare a conexao interna e HTTP, mas o
+        # cliente usa HTTPS - $painel_proto cuida disso).
+        try:
+            painel_port = int(os.environ.get('PORT') or 2083)
+        except (TypeError, ValueError):
+            painel_port = 2083
         with open(snippet_path, 'w', encoding='utf-8') as f:
-            f.write(VNC_NGINX_LOCATION)
+            f.write(VNC_NGINX_LOCATION.replace('__PANEL_PORT__', str(painel_port)))
         with open(map_path, 'w', encoding='utf-8') as f:
             f.write(vnc_nginx_upstreams_map(servers))
 
