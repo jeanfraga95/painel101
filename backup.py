@@ -82,7 +82,8 @@ def send_backup_telegram(bot_token: str, chat_id: str) -> tuple:
                     'chat_id': chat_id,
                     'caption': (f'🗄️ *Backup Painel Master* (criptografado)\n'
                                 f'📅 {now}\n'
-                                f'🔐 Senha de descriptografia: a mesma do painel.'),
+                                f'🔐 Cifrado com a chave do servidor (arquivo .secret_key).\n'
+                                f'ℹ️ Para restaurar, o painel precisa da mesma chave.'),
                     'parse_mode': 'Markdown'
                 },
                 files={'document': (os.path.basename(archive_path), f, 'application/octet-stream')},
@@ -113,25 +114,45 @@ def restore_backup(archive_file) -> tuple:
                 f.write(archive_file.read())
 
         # arquivo cifrado? decifra; senão assume tar.gz legado
+        nome_upload = (getattr(archive_file, 'filename', '') or '').lower()
         if not _decrypt_file(raw_path, archive_path):
+            if nome_upload.endswith(ENC_SUFFIX):
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                return False, ('Arquivo cifrado inválido: não foi possível decifrar '
+                               '(arquivo corrompido ou gerado com outra chave).')
             shutil.copy2(raw_path, archive_path)
 
         base_dir = os.path.dirname(os.path.abspath(__file__))
 
-        with tarfile.open(archive_path, 'r:gz') as tar:
-            _safe_extract(tar, tmp_dir)
+        try:
+            with tarfile.open(archive_path, 'r:gz') as tar:
+                _safe_extract(tar, tmp_dir)
+        except tarfile.TarError as e:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return False, ('Arquivo de backup inválido: envie um .enc gerado pelo '
+                           f'painel ou um .tar.gz válido ({e}).')
 
         # Restore database
         restored_db = os.path.join(tmp_dir, 'painel.db')
         if os.path.exists(restored_db):
-            # Validate SQLite
+            # Validate SQLite e confere que é um banco deste painel
             try:
                 conn = sqlite3.connect(restored_db)
-                conn.execute("SELECT count(*) FROM sqlite_master")
+                tabelas = {r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
                 conn.close()
             except Exception:
-                shutil.rmtree(tmp_dir)
+                shutil.rmtree(tmp_dir, ignore_errors=True)
                 return False, 'Arquivo de banco de dados inválido'
+            if 'panel_users' not in tabelas:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                return False, ('Arquivo inválido: este SQLite não tem a tabela '
+                               'panel_users — o backup não é deste painel.')
+
+            # cópia de segurança do banco atual antes de sobrescrever
+            if os.path.exists(DB_PATH):
+                stamp = datetime.now(TZ).strftime('%Y%m%d_%H%M%S')
+                shutil.copy2(DB_PATH, f'{DB_PATH}.pre-restore.{stamp}')
 
             shutil.copy2(restored_db, DB_PATH)
 
