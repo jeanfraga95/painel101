@@ -103,11 +103,13 @@ kill_port() {
 
 free_ports() {
     banner "Liberando portas..."
+    # Libera SOMENTE a porta do painel. A versao anterior matava tudo que
+    # estivesse em 2083/5001/5050/5052/8000/8080/8888 - e 8888 e porta
+    # comum de proxy SSH do cliente: o update derrubava um servico que nao
+    # tinha nada a ver com o painel.
     kill_port "$PANEL_PORT"
-    for p in 2083 5001 5050 5052 8000 8080 8888; do
-        [ "$p" -ne "$PANEL_PORT" ] && kill_port "$p"
-    done
-    pkill -9 -f "python.*app\.py" 2>/dev/null || true
+    # apenas o processo do proprio painel (caminho completo do app.py)
+    pkill -9 -f "${INSTALL_DIR}/app\.py" 2>/dev/null || true
     sleep 1
     log "Portas liberadas"
 }
