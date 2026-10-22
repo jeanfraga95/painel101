@@ -570,6 +570,7 @@ ${cf_ips}
     }
 
     include /etc/nginx/snippets/painel-security.conf;
+    include /etc/nginx/snippets/vnc-location.conf;
 
     location = /login {
         limit_req zone=painel_login burst=30 nodelay;
@@ -598,7 +599,6 @@ ${cf_ips}
         proxy_hide_header Server;
     }
 }
-DOMCNF
 DOMCNF
     # O domínio canônico e conhecido aqui: grava no redirect do mapa para
     # que o Location aponte sempre para o domínio oficial (nunca para o Host
@@ -640,6 +640,15 @@ PYDB
 # ── Reaplica o hardening do nginx (usado na atualização) ───────────
 apply_nginx_hardening() {
     banner "Reaplicando configuracao segura do nginx..."
+    # Backup do estado atual: se o nginx -t falhar, a configuracao anterior
+    # volta (o painel nunca fica com o nginx quebrado no disco).
+    local bkp
+    bkp="$(mktemp -d)"
+    cp -a /etc/nginx/conf.d "$bkp/" 2>/dev/null || true
+    cp -a /etc/nginx/snippets "$bkp/" 2>/dev/null || true
+    cp -a /etc/nginx/sites-available "$bkp/" 2>/dev/null || true
+    cp -a /etc/nginx/sites-enabled "$bkp/" 2>/dev/null || true
+
     setup_nginx_base || { warn "Falha ao (re)aplicar o nginx"; return 0; }
     local dom
     if dom="$(detect_domain)"; then
@@ -651,8 +660,16 @@ apply_nginx_hardening() {
     if nginx -t 2>/dev/null; then
         systemctl reload nginx 2>/dev/null && log "nginx recarregado (HTTPS real, CSP, rate limit)"
     else
-        warn "nginx -t falhou: o nginx NAO foi recarregado (o painel continua no proxy anterior)"
+        warn "nginx -t falhou: restaurando a configuracao anterior"
+        rm -rf /etc/nginx/conf.d /etc/nginx/snippets /etc/nginx/sites-available /etc/nginx/sites-enabled
+        cp -a "$bkp/conf.d" "$bkp/snippets" "$bkp/sites-available" "$bkp/sites-enabled" /etc/nginx/ 2>/dev/null || true
+        if nginx -t 2>/dev/null; then
+            systemctl reload nginx 2>/dev/null && log "nginx restaurado e recarregado"
+        else
+            error "nginx -t falhou mesmo com o rollback: o nginx precisa de atencao manual"
+        fi
     fi
+    rm -rf "$bkp"
 }
 
 # ── Nginx base: sempre instala com suporte a IP direto + Cloudflare ──────────
@@ -754,6 +771,75 @@ proxy_read_timeout 120s;
 client_max_body_size 110M;
 SNIPPET
 
+    # ── Proxy do console VNC (noVNC) ─────────────────────────────────────
+    # O painel reescreve estes dois arquivos quando inicia e a cada servidor
+    # cadastrado. O instalador tambem os cria: sem o snippet, o mapa com
+    # $vnc_sid fica sem origem e o "nginx -t" falha com
+    # "unknown vnc_sid variable" — o que derrubaria o proxy no update.
+    mkdir -p /etc/nginx/snippets /etc/nginx/conf.d
+    if [ ! -f /etc/nginx/conf.d/vnc-upstreams.conf ]; then
+        cat > /etc/nginx/conf.d/vnc-upstreams.conf << 'VNCUPCNF'
+# Mapa de servidores VNC: id do servidor -> backend websockify.
+# Gerado pelo painel (regenerado quando a lista de servidores muda).
+# default aponta para porta descartavel: um id desconhecido nao deve
+# acabar conectado em algum servidor real.
+map $vnc_sid $vnc_backend {
+    default        "127.0.0.1:1";
+}
+VNCUPCNF
+    fi
+    if [ ! -f /etc/nginx/snippets/vnc-location.conf ]; then
+        cat > /etc/nginx/snippets/vnc-location.conf << 'VNCSNIPCNF'
+# ---- Console VNC (NoVNC) ---------------------------------------------------
+# O navegador nunca fala com o servidor VNC direto: passa pelo painel. O nginx
+# valida a sessao do Flask com auth_request antes de encaminhar, entao o
+# console fica inacessivel a quem nao estiver logado como admin - e a porta do
+# websockify no servidor so aceita o IP do painel.
+location ~ ^/servers/vnc/(?<vnc_sid>\\d+)/(?<vnc_rest>.*)$ {
+    auth_request /_vnc_authz;
+    error_page 401 = @vnc_unauth;
+    error_page 403 = @vnc_denied;
+
+    proxy_pass http://$vnc_backend/$vnc_rest;
+
+    proxy_http_version 1.1;
+    proxy_set_header Host              $host;
+    proxy_set_header Upgrade           $http_upgrade;
+    proxy_set_header Connection        "upgrade";
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $painel_proto;
+    proxy_set_header CF-Connecting-IP  $http_cf_connecting_ip;
+
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_buffering off;
+}
+
+location @vnc_unauth {
+    default_type application/json;
+    return 401 '{"success":false,"message":"Sessao expirada. Faca login novamente."}';
+}
+
+location @vnc_denied {
+    default_type application/json;
+    return 403 '{"success":false,"message":"Acesso negado: requer admin."}';
+}
+
+# Subrequisicao do auth_request. "internal" impede que alguem chame pela
+# internet e use isto para sondar sessao de terceiros.
+location = /_vnc_authz {
+    internal;
+    proxy_pass http://127.0.0.1:__PANEL_PORT__/_vnc_authz;
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+    proxy_set_header Cookie           $http_cookie;
+    proxy_set_header X-Original-URI   $request_uri;
+}
+VNCSNIPCNF
+        sed -i "s|__PANEL_PORT__|${PANEL_PORT:-2083}|g" /etc/nginx/snippets/vnc-location.conf
+    fi
+
     # ── Zonas de limite de requisicao (contexto http) ──────────────────────
     # Defense in depth: o app tambem limita (por usuario/IP), mas o nginx
     # barra o ataque bruto mesmo que o app nao veja o IP real.
@@ -789,6 +875,7 @@ server {
 ${cf_ips}
 
     include /etc/nginx/snippets/painel-security.conf;
+    include /etc/nginx/snippets/vnc-location.conf;
 
     # HSTS tambem no vhost HTTP: quem chega pelo Cloudflare recebe o header
     # na resposta HTTPS da borda e passa a exigir HTTPS no navegador.
@@ -850,6 +937,7 @@ server {
 ${cf_ips}
 
     include /etc/nginx/snippets/painel-security.conf;
+    include /etc/nginx/snippets/vnc-location.conf;
     add_header Strict-Transport-Security "max-age=31536000" always;
 
     location = /login {
