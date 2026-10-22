@@ -542,17 +542,83 @@ setup_nginx_base() {
     set_real_ip_from 2c0f:f248::/32;
     real_ip_header CF-Connecting-IP;"
 
+    # ── Esquema HTTPS real atrás do Cloudflare ─────────────────────────────
+    # O Cloudflare termina o TLS do cliente mas fala HTTP com a origem. Sem
+    # isto o nginx sobrescreve o X-Forwarded-Proto com $scheme (http) e o app
+    # acha que a requisição é HTTP: o cookie de sessão sai sem "Secure" e o
+    # webhook do Mercado Pago é montado com http://.
+    # O geo (e não o map) é usado porque só ele casa CIDR com fonte variável.
+    cat > /etc/nginx/conf.d/painel-scheme.conf << 'SCHEMECNF'
+geo $realip_remote_addr $painel_cf_client {
+    default            0;
+    103.21.244.0/22    1;
+    103.22.200.0/22    1;
+    103.31.4.0/22      1;
+    104.16.0.0/13      1;
+    104.24.0.0/14      1;
+    108.162.192.0/18   1;
+    131.0.72.0/22      1;
+    141.101.64.0/18    1;
+    162.158.0.0/15     1;
+    172.64.0.0/13      1;
+    173.245.48.0/20    1;
+    188.114.96.0/20    1;
+    190.93.240.0/20    1;
+    197.234.240.0/22   1;
+    198.41.128.0/17    1;
+    2400:cb00::/32     1;
+    2606:4700::/32     1;
+    2803:f800::/32     1;
+    2405:b500::/32     1;
+    2405:8100::/32     1;
+    2a06:98c0::/29     1;
+    2c0f:f248::/32     1;
+}
+
+map "$painel_cf_client:$http_x_forwarded_proto" $painel_proto {
+    default     $scheme;
+    "1:https"   https;
+}
+
+# Redireciona para HTTPS o que veio do Cloudflare em http://.
+# Exceção: /check* (apps de VPN não seguem redirect) e o host é fixo no
+# domínio canônico para não virar open redirect.
+map "$painel_cf_client:$http_x_forwarded_proto:$uri" $painel_https_target {
+    default                       "";
+    "~^1:https:"                  "";
+    "~^1:http:/check"             "";
+    "~^1:http:"                   "https://__PANEL_DOMAIN__$uri";
+}
+SCHEMECNF
+
     # Snippet de proxy_params reutilizável
     cat > /etc/nginx/snippets/proxy_params.conf << 'SNIPPET'
 proxy_http_version 1.1;
 proxy_set_header   Host              $http_host;
 proxy_set_header   X-Real-IP         $remote_addr;
 proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
-proxy_set_header   X-Forwarded-Proto $scheme;
+proxy_set_header   X-Forwarded-Proto $painel_proto;
 proxy_set_header   CF-Connecting-IP  $http_cf_connecting_ip;
 proxy_read_timeout 120s;
 client_max_body_size 110M;
 SNIPPET
+
+    # ── Zonas de limite de requisicao (contexto http) ──────────────────────
+    # Defense in depth: o app tambem limita (por usuario/IP), mas o nginx
+    # barra o ataque bruto mesmo que o app nao veja o IP real.
+    cat > /etc/nginx/conf.d/painel-limit.conf << 'LIMITCNF'
+limit_req_zone $binary_remote_addr zone=painel_login:10m rate=10r/s;
+limit_req_zone $binary_remote_addr zone=painel_checkuser:10m rate=30r/s;
+LIMITCNF
+
+    # ── Headers de seguranca e esconder a versao do nginx ───────────────────
+    cat > /etc/nginx/snippets/painel-security.conf << 'SECCNF'
+server_tokens off;
+add_header X-Frame-Options "SAMEORIGIN" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header Referrer-Policy "same-origin" always;
+add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+SECCNF
 
     # ── Bloco catch-all porta 80 (IP direto + Cloudflare HTTP Flexible) ──────
     cat > /etc/nginx/sites-available/painel-ip << IPCNF
@@ -562,9 +628,43 @@ server {
     server_name _;
 ${cf_ips}
 
+    include /etc/nginx/snippets/painel-security.conf;
+
+    # HSTS tambem no vhost HTTP: quem chega pelo Cloudflare recebe o header
+    # na resposta HTTPS da borda e passa a exigir HTTPS no navegador.
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    # Cliente via Cloudflare em http:// -> https:// (senha de login em claro).
+    if (\$painel_https_target) {
+        return 301 \$painel_https_target;
+    }
+
+    # Limite de requisicoes nas rotas de autenticacao/enumeracao.
+    location = /login {
+        limit_req zone=painel_login burst=30 nodelay;
+        proxy_pass http://127.0.0.1:${PANEL_PORT:-2083};
+        include /etc/nginx/snippets/proxy_params.conf;
+        proxy_hide_header Server;
+    }
+
+    location = /user/login {
+        limit_req zone=painel_login burst=30 nodelay;
+        proxy_pass http://127.0.0.1:${PANEL_PORT:-2083};
+        include /etc/nginx/snippets/proxy_params.conf;
+        proxy_hide_header Server;
+    }
+
+    location ~ ^/check(user)?(/|\$) {
+        limit_req zone=painel_checkuser burst=100 nodelay;
+        proxy_pass http://127.0.0.1:${PANEL_PORT:-2083};
+        include /etc/nginx/snippets/proxy_params.conf;
+        proxy_hide_header Server;
+    }
+
     location / {
         proxy_pass http://127.0.0.1:${PANEL_PORT:-2083};
         include /etc/nginx/snippets/proxy_params.conf;
+        proxy_hide_header Server;
     }
 }
 IPCNF
@@ -589,10 +689,34 @@ server {
     ssl_protocols       TLSv1.2 TLSv1.3;
 ${cf_ips}
 
+    include /etc/nginx/snippets/painel-security.conf;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    location = /login {
+        limit_req zone=painel_login burst=30 nodelay;
+        proxy_pass http://127.0.0.1:${PANEL_PORT:-2083};
+        include /etc/nginx/snippets/proxy_params.conf;
+        proxy_hide_header Server;
+    }
+
+    location = /user/login {
+        limit_req zone=painel_login burst=30 nodelay;
+        proxy_pass http://127.0.0.1:${PANEL_PORT:-2083};
+        include /etc/nginx/snippets/proxy_params.conf;
+        proxy_hide_header Server;
+    }
+
+    location ~ ^/check(user)?(/|\$) {
+        limit_req zone=painel_checkuser burst=100 nodelay;
+        proxy_pass http://127.0.0.1:${PANEL_PORT:-2083};
+        include /etc/nginx/snippets/proxy_params.conf;
+        proxy_hide_header Server;
+    }
+
     location / {
         proxy_pass         http://127.0.0.1:${PANEL_PORT:-2083};
         include            /etc/nginx/snippets/proxy_params.conf;
-        proxy_set_header   X-Forwarded-Proto https;
+        proxy_hide_header  Server;
     }
 }
 SSLCNF
@@ -711,12 +835,48 @@ server {
     server_name ${DOMAIN};
 ${cf_ips}
 
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    # Cliente via Cloudflare em http:// -> https:// (senha de login em claro).
+    if (\$painel_https_target) {
+        return 301 \$painel_https_target;
+    }
+
+    include /etc/nginx/snippets/painel-security.conf;
+
+    location = /login {
+        limit_req zone=painel_login burst=30 nodelay;
+        proxy_pass http://127.0.0.1:${PANEL_PORT:-2083};
+        include /etc/nginx/snippets/proxy_params.conf;
+        proxy_hide_header Server;
+    }
+
+    location = /user/login {
+        limit_req zone=painel_login burst=30 nodelay;
+        proxy_pass http://127.0.0.1:${PANEL_PORT:-2083};
+        include /etc/nginx/snippets/proxy_params.conf;
+        proxy_hide_header Server;
+    }
+
+    location ~ ^/check(user)?(/|\$) {
+        limit_req zone=painel_checkuser burst=100 nodelay;
+        proxy_pass http://127.0.0.1:${PANEL_PORT:-2083};
+        include /etc/nginx/snippets/proxy_params.conf;
+        proxy_hide_header Server;
+    }
+
     location / {
         proxy_pass http://127.0.0.1:${PANEL_PORT:-2083};
         include /etc/nginx/snippets/proxy_params.conf;
+        proxy_hide_header Server;
     }
 }
 DOMCNF
+
+    # O domínio canônico é conhecido só agora: grava no redirect do mapa para
+    # que o Location aponte sempre para o domínio oficial (nunca para o Host
+    # enviado pelo cliente - isso viraria open redirect).
+    sed -i "s|__PANEL_DOMAIN__|${DOMAIN}|g" /etc/nginx/conf.d/painel-scheme.conf
 
     ln -sf "/etc/nginx/sites-available/${DOMAIN}" "/etc/nginx/sites-enabled/${DOMAIN}" 2>/dev/null || true
     nginx -t && systemctl reload nginx
@@ -740,10 +900,12 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
     ssl_protocols       TLSv1.2 TLSv1.3;
 ${cf_ips}
+    include /etc/nginx/snippets/painel-security.conf;
+    add_header Strict-Transport-Security "max-age=31536000" always;
     location / {
         proxy_pass         http://127.0.0.1:${PANEL_PORT:-2083};
         include            /etc/nginx/snippets/proxy_params.conf;
-        proxy_set_header   X-Forwarded-Proto https;
+        proxy_hide_header  Server;
     }
 }
 EXTRA2083
@@ -752,6 +914,18 @@ EXTRA2083
         log "Porta 2083 também disponível"
         SSL_DOMAIN="${DOMAIN}"
     } || warn "Certbot falhou. DNS ${DOMAIN} aponta para este IP? Verifique e tente: certbot --nginx -d ${DOMAIN}"
+}
+
+# Sem domínio configurado não há redirect para HTTPS (o Cloudflare não é usado
+# nesse modo). Desliga a regra para nunca emitir um Location quebrado.
+disable_https_redirect_if_no_domain() {
+    local f=/etc/nginx/conf.d/painel-scheme.conf
+    [[ -f "$f" ]] || return 0
+    if grep -q "__PANEL_DOMAIN__" "$f"; then
+        sed -i 's|"~^1:http:"[[:space:]]*"https://__PANEL_DOMAIN__\$uri";|"~^1:http:" "";|' "$f"
+        warn "Domínio não configurado: redirect HTTP->HTTPS desativado"
+        nginx -t && systemctl reload nginx 2>/dev/null || true
+    fi
 }
 
 
@@ -865,5 +1039,6 @@ else
     configure_service
     open_firewall
     setup_ssl
+    disable_https_redirect_if_no_domain
     print_info
 fi
