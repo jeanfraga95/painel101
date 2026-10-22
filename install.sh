@@ -618,6 +618,15 @@ add_header X-Frame-Options "SAMEORIGIN" always;
 add_header X-Content-Type-Options "nosniff" always;
 add_header Referrer-Policy "same-origin" always;
 add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+
+# Content-Security-Policy: trava as origens de onde o painel pode carregar
+# codigo/estilo/fonte. O que o app usa de fora: Bootstrap e FullCalendar no
+# cdn.jsdelivr.net e o Font Awesome no cdnjs.cloudflare.com - nada mais.
+# O QR do PIX e um data: URI gerado no servidor (sem servico externo).
+# "unsafe-inline" em script/style e necessario porque os templates tem
+# <script> e <style> inline; o ganho e bloquear origem desconhecida,
+# frame/object/base e o base-uri hijacking.
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; font-src 'self' data: https://cdnjs.cloudflare.com; img-src 'self' data: blob:; connect-src 'self' ws: wss:; frame-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'" always;
 SECCNF
 
     # ── Bloco catch-all porta 80 (IP direto + Cloudflare HTTP Flexible) ──────
