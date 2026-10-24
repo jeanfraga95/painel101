@@ -960,11 +960,9 @@ def create_user():
 
         if not username:
             return jsonify(success=False, message='Username inválido')
-        err_pw = db.password_policy_error(password, username)
+        err_pw = db.ssh_password_error(password, username)
         if err_pw:
             return jsonify(success=False, message=err_pw)
-        if not password.isalnum():
-            return jsonify(success=False, message='Use apenas letras e números na senha.')
         if not category_id:
             return jsonify(success=False, message='Selecione uma categoria')
 
@@ -1070,11 +1068,9 @@ def create_test():
 
     if not username:
         return jsonify(success=False, message='Username inválido')
-    err_pw = db.password_policy_error(password, username)
+    err_pw = db.ssh_password_error(password, username)
     if err_pw:
         return jsonify(success=False, message=err_pw)
-    if not password.isalnum():
-        return jsonify(success=False, message='Use apenas letras e números na senha.')
 
     target_servers = db.get_servers_by_category(category_id)
     if not target_servers:
@@ -1424,20 +1420,30 @@ def update_user(user_id):
     # Change password on SSH server if requested
     server_msg = ''
     if new_password:
-        err_pw = db.password_policy_error(new_password, u['username'])
+        err_pw = db.ssh_password_error(new_password, u['username'])
         if err_pw:
             return jsonify(success=False, message=err_pw)
-        if not new_password.isalnum():
-            return jsonify(success=False, message='Use apenas letras e números na senha.')
         # grava cifrada no banco (Fernet)
         db.update_ssh_user(user_id, password=db.encrypt_ssh_password(new_password))
-        if u['server_id']:
-            srv = db.get_server(u['server_id'])
-            if srv:
-                s_ok, server_msg = sc.send_command(
-                    srv['ip'], srv['module_port'], srv['auth_token'],
-                    f"echo '{u['username']}:{new_password}' | chpasswd"
-                )
+        # Aplica em TODOS os servidores do usuário: se ficasse só no primário,
+        # o cliente continuaria com a senha antiga nos servidores extras.
+        applied, failed = [], []
+        for sid in db.get_user_all_server_ids(user_id):
+            srv = db.get_server(sid)
+            if not srv:
+                continue
+            s_ok, s_msg = sc.change_ssh_password_on_server(
+                srv['ip'], srv['module_port'], srv['auth_token'],
+                u['username'], new_password
+            )
+            if s_ok:
+                applied.append(srv['name'])
+            else:
+                failed.append(f"{srv['name']}: {s_msg}")
+        if applied:
+            server_msg = 'senha aplicada em: ' + ', '.join(applied)
+        if failed:
+            server_msg = (server_msg + '; ' if server_msg else '') + 'falhou em: ' + '; '.join(failed)
 
     # Sincroniza a nova data de expiração com TODOS os servidores (primário + extras)
     # quando expires_at foi editado manualmente neste modal (antes só ia pro banco local)

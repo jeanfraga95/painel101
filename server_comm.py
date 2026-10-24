@@ -8,12 +8,21 @@ import requests
 import paramiko
 import io
 import os
+import shlex
 import time
 
 
 TIMEOUT = 15
 SYNC_TIMEOUT = 125  # tempo maior para sincronização com muitos usuários
 SYNC_BATCH_SIZE = 50  # usuários por lote na sincronização
+
+
+def _q(value) -> str:
+    """Aspa um valor para ser interpolado com segurança em um comando de
+    shell enviado ao agente da VPS (que roda via `subprocess ... shell=True`).
+    Evita que senhas com espaço/`#` quebrem o comando e bloqueia injeção de
+    shell a partir de campos digitados no painel."""
+    return shlex.quote(str(value))
 
 
 def send_command(ip: str, port: int, auth_token: str, command: str,
@@ -92,27 +101,38 @@ def create_ssh_user_on_server(ip: str, port: int, auth_token: str,
                                username: str, password: str, days: int,
                                limit: int, uuid: str = None) -> tuple:
     if uuid:
-        cmd = f"/root/pmaster_agent v2rayadd {uuid} {username} {password} {days} {limit}"
+        cmd = f"/root/pmaster_agent v2rayadd {_q(uuid)} {_q(username)} {_q(password)} {_q(days)} {_q(limit)}"
     else:
-        cmd = f"/root/pmaster_agent createssh {username} {password} {days} {limit}"
+        cmd = f"/root/pmaster_agent createssh {_q(username)} {_q(password)} {_q(days)} {_q(limit)}"
     ok, out = send_command(ip, port, auth_token, cmd)
     if ok and 'CRIADOCOMSUCESSO' not in (out or ''):
         ok = False
     return ok, out
 
 
+def change_ssh_password_on_server(ip: str, port: int, auth_token: str,
+                                  username: str, password: str) -> tuple:
+    """Troca a senha de um usuário SSH na VPS via chpasswd (sha512, sem o
+    truncamento de 8 caracteres do `crypt`). A senha vai em base64 para não
+    sofrer nenhuma interpretação do shell."""
+    import base64
+    b64 = base64.b64encode(f"{username}:{password}".encode()).decode()
+    cmd = f"echo {_q(b64)} | base64 -d | chpasswd"
+    return send_command(ip, port, auth_token, cmd)
+
+
 def delete_user_on_server(ip: str, port: int, auth_token: str,
                            username: str, uuid: str = None) -> tuple:
     if uuid:
-        cmd = f"/root/pmaster_agent v2raydel {uuid} {username}"
+        cmd = f"/root/pmaster_agent v2raydel {_q(uuid)} {_q(username)}"
     else:
-        cmd = f"/root/pmaster_agent removessh {username}"
+        cmd = f"/root/pmaster_agent removessh {_q(username)}"
     return send_command(ip, port, auth_token, cmd)
 
 
 def renew_user_on_server(ip: str, port: int, auth_token: str,
                           username: str, days: int) -> tuple:
-    cmd = f"/root/pmaster_agent timedata {username} {days}"
+    cmd = f"/root/pmaster_agent timedata {_q(username)} {_q(days)}"
     ok, out = send_command(ip, port, auth_token, cmd)
     # HTTP 200 só significa que o painel conseguiu falar com a VPS.
     # É preciso conferir o texto de retorno para saber se o comando
@@ -154,11 +174,11 @@ def create_test_user_on_server(ip: str, port: int, auth_token: str,
     """
     minutes = max(1, int(hours)) * 60  # hours → minutes
     if uuid:
-        cmd = (f"/root/pmaster_agent v2rayaddteste {uuid} {username} {password} {minutes} {limit} "
-               f"2>/dev/null || /root/dragonmodule v2rayaddteste {uuid} {username} {password} {minutes} {limit}")
+        cmd = (f"/root/pmaster_agent v2rayaddteste {_q(uuid)} {_q(username)} {_q(password)} {_q(minutes)} {_q(limit)} "
+               f"2>/dev/null || /root/dragonmodule v2rayaddteste {_q(uuid)} {_q(username)} {_q(password)} {_q(minutes)} {_q(limit)}")
     else:
-        cmd = (f"/root/pmaster_agent createsshteste {username} {password} {minutes} {limit} "
-               f"2>/dev/null || /root/dragonmodule createsshteste {username} {password} {minutes} {limit}")
+        cmd = (f"/root/pmaster_agent createsshteste {_q(username)} {_q(password)} {_q(minutes)} {_q(limit)} "
+               f"2>/dev/null || /root/dragonmodule createsshteste {_q(username)} {_q(password)} {_q(minutes)} {_q(limit)}")
     return send_command(ip, port, auth_token, cmd)
 
 
@@ -216,6 +236,14 @@ def sync_users_to_server(ip: str, port: int, auth_token: str, users: list, force
     if not users:
         return True, 'Nenhum usuário ativo associado a este servidor'
 
+    # Acesso às funções de cifra/decifra da senha (a senha no banco é guardada
+    # cifrada, mas a VPS precisa do texto puro).
+    try:
+        import db as _db_mod
+        _plain = _db_mod.ssh_plain_password
+    except Exception:
+        _plain = lambda v: v
+
     # ── 1. Busca estado atual do servidor (pula se force=True) ───────────────
     if force:
         xray_uuids: set = set()
@@ -250,14 +278,26 @@ def sync_users_to_server(ip: str, port: int, auth_token: str, users: list, force
         except Exception:
             days_left = 30
 
+        # A senha no banco está cifrada; a VPS precisa do texto puro. As linhas
+        # do sync são separadas por espaço e o script da VPS faz split()/os.system
+        # SEM quoting, então pulamos senhas que quebrariam esse formato (o
+        # create/edit normal valida e escapado usa shlex, então aceita mais).
+        plain_pw = _plain(u['password'])
+        if any(ch.isspace() for ch in (plain_pw or '')) or (plain_pw or '').startswith('#'):
+            skipped += 1
+            continue
+        if any(c in plain_pw for c in '"\'`\\$;&|<>(){}[]*?'):
+            skipped += 1
+            continue
+
         if uuid:
             # pmaster_agent v2rayadd espera: uuid username password days limit
             lines.append(
-                f"{uuid} {u['username']} {u['password']} {days_left} {u['connection_limit']}")
+                f"{uuid} {u['username']} {plain_pw} {days_left} {u['connection_limit']}")
         else:
             # SSH puro: username password days limit (4 campos)
             lines.append(
-                f"{u['username']} {u['password']} {days_left} {u['connection_limit']}")
+                f"{u['username']} {plain_pw} {days_left} {u['connection_limit']}")
 
     skip_info = f' ({skipped} já existiam no servidor, pulados)' if skipped else ''
     force_info = ' [sincronização forçada]' if force else ''
@@ -869,11 +909,14 @@ def broadcast_renew(user, days_for_server: int, db_module) -> list:
     """
     server_ids = db_module.get_user_all_server_ids(user['id'])
     uuid = user['v2ray_uuid'] if 'v2ray_uuid' in user.keys() else None
+    # A senha guardada no banco está cifrada (Fernet). Ao recriar o usuário na
+    # VPS é preciso enviar o texto puro, senão o login do cliente quebra.
+    plain_pw = db_module.ssh_plain_password(user['password']) if hasattr(db_module, 'ssh_plain_password') else user['password']
 
     def _create(srv):
         return create_ssh_user_on_server(
             srv['ip'], srv['module_port'], srv['auth_token'],
-            user['username'], user['password'], days_for_server,
+            user['username'], plain_pw, days_for_server,
             user['connection_limit'], uuid=uuid
         )
 
@@ -922,8 +965,8 @@ def build_block_cmd(user) -> str:
     username = user['username']
     uuid = user['v2ray_uuid'] if 'v2ray_uuid' in user.keys() else None
     return (
-        f"/root/pmaster_agent blockuser {username} {uuid or ''} 2>/dev/null || "
-        f"/root/dragonmodule blockuser {username} {uuid or ''} 2>/dev/null || true"
+        f"/root/pmaster_agent blockuser {_q(username)} {_q(uuid or '')} 2>/dev/null || "
+        f"/root/dragonmodule blockuser {_q(username)} {_q(uuid or '')} 2>/dev/null || true"
     )
 
 
@@ -932,8 +975,8 @@ def build_unblock_cmd(user) -> str:
     (and re-adds the UUID to Xray), so unlocking is just a safety net."""
     username = user['username']
     return (
-        f"/root/pmaster_agent unblockuser {username} 2>/dev/null || "
-        f"/root/dragonmodule unblockuser {username} 2>/dev/null || true"
+        f"/root/pmaster_agent unblockuser {_q(username)} 2>/dev/null || "
+        f"/root/dragonmodule unblockuser {_q(username)} 2>/dev/null || true"
     )
 
 

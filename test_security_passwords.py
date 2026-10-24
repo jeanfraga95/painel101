@@ -75,6 +75,21 @@ def test_policy():
     check('política: contém o usuário rejeitada',
           db.password_policy_error('jeanfraga1', 'jeanfraga') != '')
 
+    # Senha de usuário SSH/V2Ray: 5+ caracteres, qualquer combinação
+    check('ssh: 4 caracteres rejeitada', db.ssh_password_error('abcd') != '')
+    check('ssh: 5 caracteres aceita (sem exigir número)', db.ssh_password_error('abcde') == '')
+    check('ssh: 5 caracteres aceita', db.ssh_password_error('abcde') == '')
+    check('ssh: só números aceita', db.ssh_password_error('12345') == '')
+    check('ssh: símbolos comuns aceitos', db.ssh_password_error('a@b#c-d_e+f%g=h:i,j~k^l') == '')
+    check('ssh: espaço rejeitado', db.ssh_password_error('ab cd') != '')
+    check('ssh: aspas rejeitadas', db.ssh_password_error('ab"cd') != '')
+    check('ssh: crase rejeitada', db.ssh_password_error('ab`cd') != '')
+    check('ssh: cifrão rejeitado', db.ssh_password_error('ab$cd') != '')
+    check('ssh: ponto e vírgula rejeitado', db.ssh_password_error('ab;cd') != '')
+    check('ssh: pipe rejeitado', db.ssh_password_error('ab|cd') != '')
+    check('ssh: barra invertida rejeitada', db.ssh_password_error('ab\\cd') != '')
+    check('ssh: senha longa aceita', db.ssh_password_error('a' * 64) == '')
+
 
 # ---------------------------------------------------------------------------
 # 2) Hash
@@ -375,13 +390,37 @@ def test_ssh_password_policy():
     tok = csrf(c, '/')
     r = c.post(f'/users/update/{uid}', data={'password': '1234', 'csrf_token': tok},
                headers={'User-Agent': UA}, follow_redirects=False)
-    check('usuário SSH: senha curta recusada', r.status_code in (200, 400, 403),
-          f'{r.status_code} {r.get_data(as_text=True)[:120]}')
+    body = r.get_data(as_text=True)
+    check('usuário SSH: senha de 4 caracteres recusada',
+          (r.status_code in (400, 403)) or ('"success":false' in body.replace(' ', '') or '"success": false' in body),
+          f'{r.status_code} {body[:120]}')
     conn = db.get_db()
     try:
         row = conn.execute("SELECT password FROM ssh_users WHERE id=?", (uid,)).fetchone()
-        check('usuário SSH: senha não foi alterada para a fraca',
+        check('usuário SSH: senha não foi alterada para a curta',
               db.ssh_plain_password(row['password']) == 'senhaantiga1')
+    finally:
+        conn.close()
+
+    tok = csrf(c, '/')
+    r = c.post(f'/users/update/{uid}', data={'password': 'abcde', 'csrf_token': tok},
+               headers={'User-Agent': UA}, follow_redirects=False)
+    conn = db.get_db()
+    try:
+        row = conn.execute("SELECT password FROM ssh_users WHERE id=?", (uid,)).fetchone()
+        check('usuário SSH: senha de 5 caracteres (sem número) aceita',
+              db.ssh_plain_password(row['password']) == 'abcde')
+    finally:
+        conn.close()
+
+    tok = csrf(c, '/')
+    r = c.post(f'/users/update/{uid}', data={'password': 'a@b#c-d', 'csrf_token': tok},
+               headers={'User-Agent': UA}, follow_redirects=False)
+    conn = db.get_db()
+    try:
+        row = conn.execute("SELECT password FROM ssh_users WHERE id=?", (uid,)).fetchone()
+        check('usuário SSH: senha com símbolos aceita',
+              db.ssh_plain_password(row['password']) == 'a@b#c-d')
     finally:
         conn.close()
 

@@ -302,7 +302,12 @@ def password_needs_upgrade(hashed: str) -> bool:
 
 
 def password_policy_error(pw: str, username: str = '') -> str:
-    """Valida a força da senha. Retorna '' se estiver OK, ou o motivo."""
+    """Valida a força da senha. Retorna '' se estiver OK, ou o motivo.
+
+    Usado nas senhas de LOGIN DO PAINEL (admin/revenda) e do bot Telegram,
+    onde o risco de senha fraca é alto. Continua exigindo 8+ com letra e
+    número.
+    """
     pw = pw or ''
     if len(pw) < 8:
         return 'A senha deve ter no mínimo 8 caracteres.'
@@ -314,6 +319,33 @@ def password_policy_error(pw: str, username: str = '') -> str:
         return 'A senha não pode ser igual ao usuário.'
     if username and username.lower() in pw.lower():
         return 'A senha não pode conter o nome do usuário.'
+    return ''
+
+
+_SSH_PW_BLOCKED = set(' \t\n\r\x00"\'`\\$;&|<>(){}[]*?')
+_SSH_PW_MIN = 5
+
+
+def ssh_password_error(pw: str, username: str = '') -> str:
+    """Valida a senha de um USUÁRIO SSH/V2Ray (criação, teste e troca).
+
+    Regra pedida pelo cliente: aceitar QUALQUER senha com MAIS de 4
+    caracteres (5+), sem exigir letra+número.
+
+    Só bloqueamos o que é tecnicamente impossível de transportar com
+    segurança: a senha é concatenada em um comando de shell enviado ao
+    agente da VPS. Espaço, aspas, crase, `$`, `;`, `&`, `|`, `\\` e afins
+    quebrariam o comando (a criação falharia) e abririam injeção de shell.
+    O `#` é permitido no meio da senha (não pode iniciar).
+    """
+    pw = pw or ''
+    if len(pw) < _SSH_PW_MIN:
+        return f'A senha deve ter no mínimo {_SSH_PW_MIN} caracteres.'
+    bad = sorted({c for c in pw if c in _SSH_PW_BLOCKED})
+    if bad:
+        legiveis = ' '.join(repr(c) for c in bad)
+        return (f'A senha contém caracteres não permitidos: {legiveis}. '
+                'Evite aspas, crase, cifrão, ponto e vírgula, barra e afins.')
     return ''
 
 
