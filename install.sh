@@ -1202,6 +1202,262 @@ print_info() {
     echo ""
 }
 
+
+# ── Remover painel instalado ──────────────────────────────────
+remove_panel() {
+    banner "Remover painel instalado"
+
+    # Lista serviços painel-master relacionados
+    local svcs
+    svcs=$(systemctl list-units --all 2>/dev/null | grep -E 'painel-master' | awk '{print $1}' | sed 's/\.service$//' | sort -u)
+    # Também checa arquivos de serviço
+    for f in /etc/systemd/system/painel-master*.service; do
+        [ -f "$f" ] || continue
+        local sn
+        sn=$(basename "$f" .service)
+        echo "$svcs" | grep -q "^$sn$" || svcs="$svcs $sn"
+    done
+    # Lista diretórios
+    local dirs
+    for d in /opt/painel-master /opt/painel-master-*; do
+        [ -d "$d" ] || continue
+        dirs="$dirs $d"
+    done
+
+    if [ -z "$(echo $svcs | tr -d ' ')" ] && [ -z "$(echo $dirs | tr -d ' ')" ]; then
+        warn "Nenhum painel instalado encontrado."
+        exit 0
+    fi
+
+    echo ""
+    echo -e "  ${BOLD}Instalações encontradas:${NC}"
+    local idx=0
+    local list_items=()
+    for sn in $svcs; do
+        [ -z "$sn" ] && continue
+        local d="/opt/$sn"
+        [ ! -d "$d" ] && d="$INSTALL_DIR"
+        [ -d "$d" ] || continue
+        idx=$((idx+1))
+        list_items+=("$sn|$d")
+        local status
+        if systemctl is-active --quiet "$sn" 2>/dev/null; then status="${GREEN}ativo${NC}"; else status="${YELLOW}inativo${NC}"; fi
+        echo -e "    [$idx] $sn ($d) - $status"
+    done
+    # se nenhum serviço mapeado mas tem diretório
+    if [ $idx -eq 0 ]; then
+        for d in $dirs; do
+            [ -z "$d" ] && continue
+            local sn2
+            sn2=$(basename "$d")
+            idx=$((idx+1))
+            list_items+=("$sn2|$d")
+            local status
+            if systemctl is-active --quiet "$sn2" 2>/dev/null; then status="${GREEN}ativo${NC}"; else status="${YELLOW}inativo${NC}"; fi
+            echo -e "    [$idx] $sn2 ($d) - $status"
+        done
+    fi
+
+    echo ""
+    read -rp "  Selecione qual remover [1-$idx] ou 0 para cancelar: " sel
+    [ "$sel" = "0" ] || [ -z "$sel" ] && { warn "Cancelado"; exit 0; }
+    local item="${list_items[$((sel-1))]}"
+    local r_svc
+    local r_dir
+    r_svc=$(echo "$item" | cut -d'|' -f1)
+    r_dir=$(echo "$item" | cut -d'|' -f2)
+    [ -z "$r_svc" ] && error "Seleção inválida"
+    [ -z "$r_dir" ] && r_dir="/opt/$r_svc"
+
+    echo ""
+    warn "Você está prestes a REMOVER: $r_svc ($r_dir)"
+    warn "Isso apagará o painel, vhosts nginx relacionados e o banco de dados."
+    read -rp "  Digite CONFIRMAR para continuar: " conf
+    [ "$conf" != "CONFIRMAR" ] && { warn "Cancelado"; exit 0; }
+
+    banner "Removendo $r_svc..."
+    systemctl stop "$r_svc" 2>/dev/null || true
+    systemctl disable "$r_svc" 2>/dev/null || true
+    rm -f "/etc/systemd/system/${r_svc}.service"
+    systemctl daemon-reload 2>/dev/null
+
+    pkill -9 -f "${r_dir}/app\.py" 2>/dev/null || true
+    sleep 2
+
+    # Remove vhosts nginx relacionados ao diretório/serviço
+    for vf in /etc/nginx/sites-available/${r_svc}* /etc/nginx/sites-enabled/${r_svc}*; do
+        [ -e "$vf" ] || continue
+        rm -f "$vf"
+    done
+    # Tenta remover vhosts com referência ao diretório
+    grep -l "$r_dir" /etc/nginx/sites-available/* 2>/dev/null | xargs -r rm -f
+    grep -l "$r_dir" /etc/nginx/sites-enabled/* 2>/dev/null | xargs -r rm -f
+
+    if [ -d "$r_dir" ]; then
+        if [ -f "$r_dir/painel.db" ]; then
+            local bkp="/tmp/${r_svc}_backup_$(date +%s).db"
+            cp "$r_dir/painel.db" "$bkp"
+            warn "Backup do banco salvo em: $bkp"
+        fi
+        rm -rf "$r_dir"
+        log "Diretório removido: $r_dir"
+    fi
+
+    nginx -t && systemctl reload nginx 2>/dev/null || true
+    log "Remoção concluída!"
+    exit 0
+}
+
+# ── Instalar painel adicional (mesma VPS, outro domínio/porta) ────────────────
+install_additional() {
+    banner "Instalar PAINEL ADICIONAL na mesma VPS"
+
+    read -rp "  Informe o DOMÍNIO ou SUBDOMÍNIO para este painel (ex: painel2.seudominio.com): " ADD_DOMAIN
+    ADD_DOMAIN=$(echo "$ADD_DOMAIN" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+    [ -z "$ADD_DOMAIN" ] && error "Domínio inválido"
+
+    # Detecta porta livre
+    local port
+    for p in 2084 2085 2086 2087 2090 2091 2092 2093 2094 2095; do
+        if ! ss -tlnp 2>/dev/null | grep -q ":$p " && ! lsof -i :$p 2>/dev/null | grep -q LISTEN; then
+            port=$p; break
+        fi
+    done
+    [ -z "$port" ] && port=2084
+    read -rp "  Porta da aplicação [$port]: " ADD_PORT
+    ADD_PORT="${ADD_PORT:-$port}"
+    ADD_PORT=$(echo "$ADD_PORT" | tr -d ' ')
+    # Garante porta livre
+    if ss -tlnp 2>/dev/null | grep -q ":$ADD_PORT " || lsof -i :$ADD_PORT 2>/dev/null | grep -q LISTEN; then
+        error "Porta $ADD_PORT já está em uso"
+    fi
+
+    local add_name="painel-master-$(echo $ADD_DOMAIN | tr '.' '-' | cut -c1-15)"
+    # Garante nome único
+    if [ -d "/opt/$add_name" ] || systemctl list-unit-files 2>/dev/null | grep -q "^${add_name}\.service"; then
+        add_name="painel-master-$(date +%s | tail -c 5)"
+    fi
+    local ADD_DIR="/opt/$add_name"
+    local ADD_SVC="$add_name"
+
+    info "Instalando em: $ADD_DIR"
+    info "Serviço: $ADD_SVC"
+    info "Porta: $ADD_PORT"
+    info "Domínio: $ADD_DOMAIN"
+
+    echo ""
+    warn "IMPORTANTE: O domínio $ADD_DOMAIN deve estar apontado para o IP desta VPS (A/AAAA)."
+    warn "Quando acessado por este domínio, o Nginx irá direcionar APENAS para este painel."
+    read -rp "  Continuar? [s/N]: " cont
+    [[ "$cont" =~ ^[sS]$ ]] || { warn "Cancelado"; exit 0; }
+
+    check_python
+    install_system_deps
+
+    # Clone/baixa código
+    banner "Baixando código..."
+    if [ -d "$ADD_DIR/.git" ]; then
+        rm -rf "$ADD_DIR"
+    fi
+    mkdir -p "$ADD_DIR"
+    cd "$ADD_DIR" || error "Falha ao acessar $ADD_DIR"
+
+    if git_auth clone --depth=1 "$REPO_URL" "$ADD_DIR" 2>/dev/null; then
+        log "Clonado via git"
+    else
+        # Fallback: baixa via instalador servido pelo painel (funciona com repo privado)
+        local tmpzip
+        tmpzip="/tmp/${add_name}_src.tar.gz"
+        if curl -sL "https://raw.githubusercontent.com/jeanfraga95/painel101/main/README.md" >/dev/null 2>&1; then
+            git_auth clone --depth=1 "$REPO_URL" /tmp/${add_name}_src 2>/dev/null && mv /tmp/${add_name}_src/.git "$ADD_DIR/" && (cd "$ADD_DIR" && git_auth reset --hard origin/main) && rm -rf /tmp/${add_name}_src
+        else
+            curl -sSL "https://${ADD_DOMAIN}/install.sh" -o /dev/null 2>&1 || true
+            git_auth clone --depth=1 "$REPO_URL" /tmp/${add_name}_src 2>&1 | tail -2
+            [ -d /tmp/${add_name}_src ] && { cp -r /tmp/${add_name}_src/* "$ADD_DIR/"; cp -r /tmp/${add_name}_src/.* "$ADD_DIR/" 2>/dev/null; rm -rf /tmp/${add_name}_src; }
+        fi
+    fi
+
+    # Venv
+    banner "Criando ambiente virtual..."
+    "$PYTHON_CMD" -m venv "$ADD_DIR/venv"
+    "$ADD_DIR/venv/bin/pip" install --upgrade pip -q
+    "$ADD_DIR/venv/bin/pip" install -r "$ADD_DIR/requirements.txt" -q
+
+    # Serviço systemd separado
+    banner "Configurando serviço..."
+    cat > "/etc/systemd/system/${ADD_SVC}.service" << EOF
+[Unit]
+Description=Painel Master (${ADD_DOMAIN})
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=${ADD_DIR}
+Environment="PATH=${ADD_DIR}/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="PORT=${ADD_PORT}"
+Environment="DOMAIN=${ADD_DOMAIN}"
+ExecStart=${ADD_DIR}/venv/bin/gunicorn --bind 127.0.0.1:${ADD_PORT} --workers 2 --threads 4 app:app
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable --now "$ADD_SVC"
+
+    # Nginx vhost APENAS para este domínio apontando para esta porta
+    banner "Configurando Nginx para ${ADD_DOMAIN}..."
+    mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled /etc/nginx/snippets
+
+    cat > "/etc/nginx/sites-available/${ADD_SVC}" << EOF
+# Vhost exclusivo para ${ADD_DOMAIN} -> ${ADD_SVC} (porta ${ADD_PORT})
+server {
+    listen 80;
+    server_name ${ADD_DOMAIN};
+    include /etc/nginx/snippets/painel-security.conf;
+    include /etc/nginx/snippets/vnc-location.conf;
+    location / {
+        include /etc/nginx/snippets/proxy_params.conf;
+        proxy_pass http://127.0.0.1:${ADD_PORT};
+    }
+}
+server {
+    listen 443 ssl;
+    server_name ${ADD_DOMAIN};
+    ssl_certificate /etc/ssl/certs/ssl-cert-snakeoil.pem;
+    ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
+    include /etc/nginx/snippets/painel-security.conf;
+    include /etc/nginx/snippets/vnc-location.conf;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    location / {
+        include /etc/nginx/snippets/proxy_params.conf;
+        proxy_pass http://127.0.0.1:${ADD_PORT};
+    }
+}
+EOF
+    ln -sf "/etc/nginx/sites-available/${ADD_SVC}" "/etc/nginx/sites-enabled/${ADD_SVC}"
+    nginx -t && systemctl reload nginx
+
+    echo ""
+    echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}${BOLD}║     PAINEL ADICIONAL INSTALADO COM SUCESSO      ║${NC}"
+    echo -e "${GREEN}${BOLD}╚══════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "  Domínio:        ${BOLD}http://${ADD_DOMAIN}${NC} / ${BOLD}https://${ADD_DOMAIN}${NC}"
+    echo -e "  Porta interna:  ${ADD_PORT}"
+    echo -e "  Diretório:      ${ADD_DIR}"
+    echo -e "  Serviço:        ${ADD_SVC}"
+    echo -e "  Login padrão:   admin / admin123"
+    echo ""
+    echo -e "  ${YELLOW}Acesse pelo DOMÍNIO informado para usar este painel.${NC}"
+    echo -e "  ${YELLOW}Troque a senha do admin após o primeiro login.${NC}"
+    echo ""
+    exit 0
+}
+
+
 # ══════════════════════════════════════════════════════════════
 #  Main
 # ══════════════════════════════════════════════════════════════
@@ -1213,6 +1469,26 @@ echo ""
 
 SSL_DOMAIN=""
 MODE="${1:-install}"   # install (default) | update
+
+# Menu interativo quando rodado sem argumento
+if [ "$#" -eq 0 ] && [ -t 0 ]; then
+    echo -e "  ${BOLD}Selecione uma opção:${NC}"
+    echo ""
+    echo -e "    [1] Instalar painel (padrão)"
+    echo -e "    [2] Atualizar painel existente"
+    echo -e "    [3] Remover painel instalado"
+    echo -e "    [4] Instalar painel ADICIONAL (mesma VPS, outro domínio/porta)"
+    echo ""
+    read -rp "  Opção [1]: " MENU_OPT
+    MENU_OPT="${MENU_OPT:-1}"
+    case "$MENU_OPT" in
+        2) MODE="update" ;;
+        3) remove_panel ;;
+        4) install_additional ;;
+        *) MODE="install" ;;
+    esac
+    echo ""
+fi
 
 check_root
 detect_arch
