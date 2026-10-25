@@ -675,8 +675,13 @@ apply_nginx_hardening() {
         systemctl reload nginx 2>/dev/null && log "nginx recarregado (HTTPS real, CSP, rate limit)"
     else
         warn "nginx -t falhou: restaurando a configuracao anterior"
-        rm -rf /etc/nginx/conf.d /etc/nginx/snippets /etc/nginx/sites-available /etc/nginx/sites-enabled
-        cp -a "$bkp/conf.d" "$bkp/snippets" "$bkp/sites-available" "$bkp/sites-enabled" /etc/nginx/ 2>/dev/null || true
+        for d in conf.d snippets sites-available sites-enabled; do
+            rm -rf "/etc/nginx/$d"
+            mkdir -p "/etc/nginx/$d"
+            if [ -d "$bkp/$d" ]; then
+                cp -a "$bkp/$d/." "/etc/nginx/$d/" 2>/dev/null || true
+            fi
+        done
         if nginx -t 2>/dev/null; then
             systemctl reload nginx 2>/dev/null && log "nginx restaurado e recarregado"
         else
@@ -790,7 +795,8 @@ SNIPPET
     # cadastrado. O instalador tambem os cria: sem o snippet, o mapa com
     # $vnc_sid fica sem origem e o "nginx -t" falha com
     # "unknown vnc_sid variable" — o que derrubaria o proxy no update.
-    mkdir -p /etc/nginx/snippets /etc/nginx/conf.d
+    mkdir -p /etc/nginx/snippets /etc/nginx/conf.d \
+             /etc/nginx/sites-available /etc/nginx/sites-enabled
     if [ ! -f /etc/nginx/conf.d/vnc-upstreams.conf ]; then
         cat > /etc/nginx/conf.d/vnc-upstreams.conf << 'VNCUPCNF'
 # Mapa de servidores VNC: id do servidor -> backend websockify.
@@ -1259,7 +1265,7 @@ remove_panel() {
     fi
 
     echo ""
-    read -rp "  Selecione qual remover [1-$idx] ou 0 para cancelar: " sel
+    read -rp "  Selecione qual remover [1-$idx] ou 0 para cancelar: " sel < /dev/tty
     [ "$sel" = "0" ] || [ -z "$sel" ] && { warn "Cancelado"; exit 0; }
     local item="${list_items[$((sel-1))]}"
     local r_svc
@@ -1272,7 +1278,7 @@ remove_panel() {
     echo ""
     warn "Você está prestes a REMOVER: $r_svc ($r_dir)"
     warn "Isso apagará o painel, vhosts nginx relacionados e o banco de dados."
-    read -rp "  Digite CONFIRMAR para continuar: " conf
+    read -rp "  Digite CONFIRMAR para continuar: " conf < /dev/tty
     [ "$conf" != "CONFIRMAR" ] && { warn "Cancelado"; exit 0; }
 
     banner "Removendo $r_svc..."
@@ -1312,7 +1318,7 @@ remove_panel() {
 install_additional() {
     banner "Instalar PAINEL ADICIONAL na mesma VPS"
 
-    read -rp "  Informe o DOMÍNIO ou SUBDOMÍNIO para este painel (ex: painel2.seudominio.com): " ADD_DOMAIN
+    read -rp "  Informe o DOMÍNIO ou SUBDOMÍNIO para este painel (ex: painel2.seudominio.com): " ADD_DOMAIN < /dev/tty
     ADD_DOMAIN=$(echo "$ADD_DOMAIN" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
     [ -z "$ADD_DOMAIN" ] && error "Domínio inválido"
 
@@ -1324,7 +1330,7 @@ install_additional() {
         fi
     done
     [ -z "$port" ] && port=2084
-    read -rp "  Porta da aplicação [$port]: " ADD_PORT
+    read -rp "  Porta da aplicação [$port]: " ADD_PORT < /dev/tty
     ADD_PORT="${ADD_PORT:-$port}"
     ADD_PORT=$(echo "$ADD_PORT" | tr -d ' ')
     # Garante porta livre
@@ -1348,7 +1354,7 @@ install_additional() {
     echo ""
     warn "IMPORTANTE: O domínio $ADD_DOMAIN deve estar apontado para o IP desta VPS (A/AAAA)."
     warn "Quando acessado por este domínio, o Nginx irá direcionar APENAS para este painel."
-    read -rp "  Continuar? [s/N]: " cont
+    read -rp "  Continuar? [s/N]: " cont < /dev/tty
     [[ "$cont" =~ ^[sS]$ ]] || { warn "Cancelado"; exit 0; }
 
     check_python
@@ -1470,8 +1476,9 @@ echo ""
 SSL_DOMAIN=""
 MODE="${1:-install}"   # install (default) | update
 
-# Menu interativo quando rodado sem argumento
-if [ "$#" -eq 0 ] && [ -t 0 ]; then
+# Menu interativo quando rodado sem argumento. Le do /dev/tty para tambem
+# aparecer quando o instalador roda via "curl ... | bash" (stdin e o pipe).
+if [ "$#" -eq 0 ] && [ -e /dev/tty ]; then
     echo -e "  ${BOLD}Selecione uma opção:${NC}"
     echo ""
     echo -e "    [1] Instalar painel (padrão)"
@@ -1479,7 +1486,7 @@ if [ "$#" -eq 0 ] && [ -t 0 ]; then
     echo -e "    [3] Remover painel instalado"
     echo -e "    [4] Instalar painel ADICIONAL (mesma VPS, outro domínio/porta)"
     echo ""
-    read -rp "  Opção [1]: " MENU_OPT
+    read -rp "  Opção [1]: " MENU_OPT < /dev/tty
     MENU_OPT="${MENU_OPT:-1}"
     case "$MENU_OPT" in
         2) MODE="update" ;;
