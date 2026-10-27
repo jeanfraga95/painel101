@@ -1419,7 +1419,7 @@ WorkingDirectory=${ADD_DIR}
 Environment="PATH=${ADD_DIR}/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 Environment="PORT=${ADD_PORT}"
 Environment="DOMAIN=${ADD_DOMAIN}"
-ExecStart=${ADD_DIR}/venv/bin/gunicorn --bind 127.0.0.1:${ADD_PORT} --workers 2 --threads 4 app:app
+ExecStart=${ADD_DIR}/venv/bin/python app.py
 Restart=always
 RestartSec=5
 
@@ -1428,6 +1428,8 @@ WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
     systemctl enable --now "$ADD_SVC"
+    sleep 5
+    systemctl status "$ADD_SVC" --no-pager 2>&1 | tail -15
 
     # Nginx vhost APENAS para este domínio apontando para esta porta
     banner "Configurando Nginx para ${ADD_DOMAIN}..."
