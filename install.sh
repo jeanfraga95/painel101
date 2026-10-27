@@ -1388,6 +1388,22 @@ install_additional() {
     "$PYTHON_CMD" -m venv "$ADD_DIR/venv"
     "$ADD_DIR/venv/bin/pip" install --upgrade pip -q
     "$ADD_DIR/venv/bin/pip" install -r "$ADD_DIR/requirements.txt" -q
+    "$ADD_DIR/venv/bin/pip" install gunicorn -q 2>/dev/null || true
+
+    # Inicializa banco e chave
+    banner "Inicializando banco de dados..."
+    if [ -f "/opt/painel-master/.secret_key" ] && [ ! -f "$ADD_DIR/.secret_key" ]; then
+        cp "/opt/painel-master/.secret_key" "$ADD_DIR/.secret_key"
+        chmod 600 "$ADD_DIR/.secret_key"
+    fi
+    if [ ! -f "$ADD_DIR/.secret_key" ]; then
+        python3 -c "import os; open('$ADD_DIR/.secret_key','wb').write(os.urandom(32))" 2>/dev/null || head -c 32 /dev/urandom > "$ADD_DIR/.secret_key"
+        chmod 600 "$ADD_DIR/.secret_key"
+    fi
+    if [ ! -f "$ADD_DIR/painel.db" ]; then
+        (cd "$ADD_DIR" && "$ADD_DIR/venv/bin/python" -c "import db; db.init_db()" 2>&1 | tail -5) || true
+    fi
+    chown -R root:root "$ADD_DIR" 2>/dev/null || true
 
     # Serviço systemd separado
     banner "Configurando serviço..."
@@ -1415,7 +1431,27 @@ EOF
 
     # Nginx vhost APENAS para este domínio apontando para esta porta
     banner "Configurando Nginx para ${ADD_DOMAIN}..."
-    mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled /etc/nginx/snippets
+    mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled /etc/nginx/snippets /etc/nginx/conf.d
+    # Garante snippets básicos
+    [ -f /etc/nginx/snippets/painel-security.conf ] || cat > /etc/nginx/snippets/painel-security.conf << 'SEOF'
+add_header X-Content-Type-Options nosniff always;
+add_header X-Frame-Options SAMEORIGIN always;
+add_header Referrer-Policy strict-origin-when-cross-origin always;
+add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+client_max_body_size 110M;
+SEOF
+    [ -f /etc/nginx/snippets/proxy_params.conf ] || cat > /etc/nginx/snippets/proxy_params.conf << 'PEOF'
+proxy_set_header Host $host;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_http_version 1.1;
+proxy_set_header Upgrade $http_upgrade;
+proxy_set_header Connection "upgrade";
+PEOF
+    [ -f /etc/nginx/conf.d/painel-scheme.conf ] || echo 'map $http_x_forwarded_proto $painel_proto { default $scheme; https https; }' > /etc/nginx/conf.d/painel-scheme.conf
+    [ -f /etc/nginx/snippets/vnc-location.conf ] || true
+    [ -f /etc/nginx/conf.d/vnc-upstreams.conf ] || echo 'map $vnc_sid $vnc_backend { default "127.0.0.1:1"; }' > /etc/nginx/conf.d/vnc-upstreams.conf
 
     cat > "/etc/nginx/sites-available/${ADD_SVC}" << EOF
 # Vhost exclusivo para ${ADD_DOMAIN} -> ${ADD_SVC} (porta ${ADD_PORT})
@@ -1426,6 +1462,7 @@ server {
     include /etc/nginx/snippets/vnc-location.conf;
     location / {
         include /etc/nginx/snippets/proxy_params.conf;
+        proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_pass http://127.0.0.1:${ADD_PORT};
     }
 }
@@ -1439,12 +1476,14 @@ server {
     add_header Strict-Transport-Security "max-age=31536000" always;
     location / {
         include /etc/nginx/snippets/proxy_params.conf;
+        proxy_set_header X-Forwarded-Proto https;
         proxy_pass http://127.0.0.1:${ADD_PORT};
     }
 }
 EOF
     ln -sf "/etc/nginx/sites-available/${ADD_SVC}" "/etc/nginx/sites-enabled/${ADD_SVC}"
     nginx -t && systemctl reload nginx
+    systemctl restart "$ADD_SVC" 2>/dev/null || true
 
     echo ""
     echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════════════╗${NC}"
