@@ -1485,7 +1485,10 @@ server {
 EOF
     ln -sf "/etc/nginx/sites-available/${ADD_SVC}" "/etc/nginx/sites-enabled/${ADD_SVC}"
     nginx -t && systemctl reload nginx
+    sleep 2
     systemctl restart "$ADD_SVC" 2>/dev/null || true
+    sleep 3
+    curl -sI "http://127.0.0.1:${ADD_PORT}/" 2>&1 | head -2
 
     echo ""
     echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════════════╗${NC}"
