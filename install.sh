@@ -1296,8 +1296,8 @@ remove_panel() {
         rm -f "$vf"
     done
     # Tenta remover vhosts com referência ao diretório
-    grep -l "$r_dir" /etc/nginx/sites-available/* 2>/dev/null | xargs -r rm -f
-    grep -l "$r_dir" /etc/nginx/sites-enabled/* 2>/dev/null | xargs -r rm -f
+    [ -d /etc/nginx/sites-available ] && grep -l "$r_dir" /etc/nginx/sites-available/* 2>/dev/null | xargs -r rm -f
+    [ -d /etc/nginx/sites-enabled ] && grep -l "$r_dir" /etc/nginx/sites-enabled/* 2>/dev/null | xargs -r rm -f
 
     if [ -d "$r_dir" ]; then
         if [ -f "$r_dir/painel.db" ]; then
