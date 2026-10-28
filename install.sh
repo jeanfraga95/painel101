@@ -1381,9 +1381,14 @@ install_additional() {
         banner "Instalar PAINEL ADICIONAL na mesma VPS"
     fi
 
-    read -rp "  Informe o DOMÍNIO ou SUBDOMÍNIO para este painel (ex: painel2.seudominio.com): " ADD_DOMAIN < /dev/tty
-    ADD_DOMAIN=$(echo "$ADD_DOMAIN" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
-    [ -z "$ADD_DOMAIN" ] && error "Domínio inválido"
+    if [ -z "$DEMO_DOMAIN" ]; then
+        read -rp "  Informe o DOMÍNIO ou SUBDOMÍNIO para este painel (ex: painel2.seudominio.com): " ADD_DOMAIN < /dev/tty
+        ADD_DOMAIN=$(echo "$ADD_DOMAIN" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+        [ -z "$ADD_DOMAIN" ] && error "Domínio inválido"
+    else
+        ADD_DOMAIN=$(echo "$DEMO_DOMAIN" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+        [ "$is_demo" = 1 ] || warn "DEMO_DOMAIN definido: instalando ${ADD_DOMAIN} sem perguntar"
+    fi
 
     # Detecta porta livre
     local port
@@ -1393,7 +1398,9 @@ install_additional() {
         fi
     done
     [ -z "$port" ] && port=2084
-    read -rp "  Porta da aplicação [$port]: " ADD_PORT < /dev/tty
+    if [ -z "$DEMO_DOMAIN" ]; then
+        read -rp "  Porta da aplicação [$port]: " ADD_PORT < /dev/tty
+    fi
     ADD_PORT="${ADD_PORT:-$port}"
     ADD_PORT=$(echo "$ADD_PORT" | tr -d ' ')
     # Garante porta livre
@@ -1419,8 +1426,10 @@ install_additional() {
     echo ""
     warn "IMPORTANTE: O domínio $ADD_DOMAIN deve estar apontado para o IP desta VPS (A/AAAA)."
     warn "Quando acessado por este domínio, o Nginx irá direcionar APENAS para este painel."
-    read -rp "  Continuar? [s/N]: " cont < /dev/tty
-    [[ "$cont" =~ ^[sS]$ ]] || { warn "Cancelado"; exit 0; }
+    if [ -z "$DEMO_DOMAIN" ]; then
+        read -rp "  Continuar? [s/N]: " cont < /dev/tty
+        [[ "$cont" =~ ^[sS]$ ]] || { warn "Cancelado"; exit 0; }
+    fi
 
     check_python
     install_system_deps
@@ -1635,7 +1644,7 @@ banner "╚═══════════════════════
 echo ""
 
 SSL_DOMAIN=""
-MODE="${1:-install}"   # install (default) | update
+MODE="${1:-install}"   # install (default) | update | demo (exige DEMO_DOMAIN)
 
 # Menu interativo quando rodado sem argumento. Le do /dev/tty para tambem
 # aparecer quando o instalador roda via "curl ... | bash" (stdin e o pipe).
@@ -1665,6 +1674,12 @@ fi
 check_root
 detect_arch
 detect_os
+
+if [ "$MODE" = "demo" ]; then
+    # ── Instalacao DEMO nao-interativa: DEMO_DOMAIN=dom bash install.sh demo ──
+    [ -z "$DEMO_DOMAIN" ] && error "Modo demo nao-interativo exige: DEMO_DOMAIN=demo.seudominio.com bash install.sh demo"
+    install_additional demo
+fi
 
 if [ "$MODE" = "update" ]; then
     # ── Modo atualização: só sincroniza código e reinicia, sem apagar banco ──
