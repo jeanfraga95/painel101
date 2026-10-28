@@ -1702,8 +1702,9 @@ install_additional() {
 
     # Nao-interativo (automacao): PANEL_DOMAIN=dom bash install.sh add
     # (ou DEMO_DOMAIN=dom bash install.sh demo, compatibilidade)
+    # NOTA: a porta opcional vai em PANEL_ADD_PORT — PANEL_PORT e a variavel
+    # global do painel principal e NAO pode ser usada aqui.
     [ -z "$ADD_DOMAIN" ] && ADD_DOMAIN="${PANEL_DOMAIN:-$DEMO_DOMAIN}"
-    [ -z "$ADD_PORT" ] && ADD_PORT="${PANEL_PORT:-}"
     if [ -z "$ADD_DOMAIN" ]; then
         if [ -e /dev/tty ]; then
             read -rp "  Informe o DOMÍNIO ou SUBDOMÍNIO para este painel (ex: painel2.seudominio.com): " ADD_DOMAIN < /dev/tty
@@ -1729,6 +1730,8 @@ install_additional() {
         read -rp "  Porta da aplicação [$port]: " ADD_PORT < /dev/tty
     fi
     ADD_PORT="${ADD_PORT:-$port}"
+    # Porta opcional via ambiente (nao-interativo): PANEL_ADD_PORT=2090
+    [ -n "$PANEL_ADD_PORT" ] && ADD_PORT="$PANEL_ADD_PORT"
     ADD_PORT=$(echo "$ADD_PORT" | tr -d ' ')
     # Garante porta livre
     if ss -tlnp 2>/dev/null | grep -q ":$ADD_PORT " || lsof -i :$ADD_PORT 2>/dev/null | grep -q LISTEN; then
