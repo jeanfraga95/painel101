@@ -1493,6 +1493,7 @@ WorkingDirectory=${ADD_DIR}
 Environment="PATH=${ADD_DIR}/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 Environment="PORT=${ADD_PORT}"
 Environment="DOMAIN=${ADD_DOMAIN}"
+$([ "$is_demo" = 1 ] && echo 'Environment="PANEL_DEMO=1"')
 ExecStart=${ADD_DIR}/venv/bin/python app.py
 Restart=always
 RestartSec=5

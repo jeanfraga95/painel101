@@ -951,6 +951,12 @@ def create_user():
         use_v2ray   = request.form.get('use_v2ray') == '1'
         uuid        = request.form.get('uuid', '').strip() or (db.random_uuid() if use_v2ray else None)
         telefone    = request.form.get('telefone', '').strip()
+        # UUID entra em comandos no servidor (python -c): sem validacao,
+        # um uuid com aspas quebraria a string e executaria codigo como root.
+        # So aceita o formato canonico de UUID.
+        if uuid and not re.match(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-'
+                                 r'[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$', uuid):
+            return jsonify(success=False, message='UUID v2ray invalido (use o formato uuid padrao)')
 
         if current_user['role'] != 'admin':
             if current_user['account_limit'] != -1:
@@ -975,9 +981,11 @@ def create_user():
 
         # Verifica duplicidade no primeiro servidor da categoria
         first_srv = target_servers[0]
+        # username vem do form: sem quoting viraria injecao de comando no
+        # agente (que roda shell=True com root). _q protege o id.
         chk_ok, chk_out = sc.send_command(
             first_srv['ip'], first_srv['module_port'], first_srv['auth_token'],
-            f"id {username} 2>/dev/null && echo EXISTS || echo NOTFOUND"
+            f"id {sc._q(username)} 2>/dev/null && echo EXISTS || echo NOTFOUND"
         )
         if chk_ok and 'EXISTS' in chk_out:
             return jsonify(success=False, message=f'Usuário "{username}" já existe no servidor. Escolha outro nome.')
@@ -1545,7 +1553,7 @@ def recreate_user_on_server(user_id):
             # Usuário SSH puro: basta verificar se o usuário Linux existe
             ck_ok, ck_out = sc.send_command(
                 srv['ip'], srv['module_port'], srv['auth_token'],
-                f"id {u['username']} 2>/dev/null && echo EXISTS || echo MISSING"
+                f"id {sc._q(u['username'])} 2>/dev/null && echo EXISTS || echo MISSING"
             )
             already_exists = ck_ok and 'EXISTS' in (ck_out or '')
 
@@ -1558,7 +1566,7 @@ def recreate_user_on_server(user_id):
             if exp_date:
                 ch_ok, ch_out = sc.send_command(
                     srv['ip'], srv['module_port'], srv['auth_token'],
-                    f"chage -E {exp_date} {u['username']} 2>&1 && echo EXP_SYNC_OK || echo EXP_SYNC_FAIL"
+                    f"chage -E {sc._q(exp_date)} {sc._q(u['username'])} 2>&1 && echo EXP_SYNC_OK || echo EXP_SYNC_FAIL"
                 )
                 if ch_ok and 'EXP_SYNC_OK' in (ch_out or ''):
                     results.append({'server': srv['name'], 'action': f'expiração sincronizada p/ {exp_date}', 'ok': True})
@@ -2381,7 +2389,11 @@ def server_command(server_id):
     command = request.form.get('command', '').strip()
     allowed = ['iptables -F', 'reboot', 'systemctl restart xray', 'systemctl restart v2ray',
                'df -h', 'free -m', 'uptime', 'who']
-    # Only allow predefined or custom commands if admin explicitly confirms
+    # No painel DEMO (PANEL_DEMO=1) comandos livres ficam bloqueados: a
+    # senha de admin e publica e o agente roda como root na VPS - um
+    # "curioso" podia apagar a maquina inteira do admin.
+    if os.environ.get('PANEL_DEMO') == '1' and command not in allowed:
+        return jsonify(success=False, message='Demo: apenas comandos de diagnóstico são permitidos')
     if not command:
         return jsonify(success=False, message='Comando vazio')
 
@@ -2497,6 +2509,16 @@ def settings():
             val = request.form.get(key, '').strip()
             if val is not None:
                 db.set_setting(key, val)
+        # panel_color/app_link são os valores quebrados dentro de <style> e
+        # de JS/URL — validar aqui evita que qualquer coisa estranha acabe
+        # injetada (o Jinja escapa, mas cores/links formatados errado
+        # quebram o layout e degradam a segurança).
+        val_color = request.form.get('panel_color', '').strip()
+        if val_color and not re.match(r'^#[0-9a-fA-F]{3,8}$', val_color):
+            db.set_setting('panel_color', '#0d6efd')
+        val_link = request.form.get('app_link', '').strip()
+        if val_link and not re.match(r'^https?://', val_link, re.I):
+            db.set_setting('app_link', '')
         flash('Configurações salvas!', 'success')
         return redirect(url_for('settings'))
 
