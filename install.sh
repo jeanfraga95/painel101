@@ -1215,9 +1215,9 @@ remove_panel() {
 
     # Lista serviços painel-master relacionados
     local svcs
-    svcs=$(systemctl list-units --all 2>/dev/null | grep -E 'painel-master' | awk '{print $1}' | sed 's/\.service$//' | sort -u)
+    svcs=$(systemctl list-units --all 2>/dev/null | grep -E 'painel-(master|demo)' | awk '{print $1}' | sed 's/\.service$//' | grep -v -- '-reset' | sort -u)
     # Também checa arquivos de serviço
-    for f in /etc/systemd/system/painel-master*.service; do
+    for f in /etc/systemd/system/painel-master*.service /etc/systemd/system/painel-demo*.service; do
         [ -f "$f" ] || continue
         local sn
         sn=$(basename "$f" .service)
@@ -1225,7 +1225,7 @@ remove_panel() {
     done
     # Lista diretórios
     local dirs
-    for d in /opt/painel-master /opt/painel-master-*; do
+    for d in /opt/painel-master /opt/painel-master-* /opt/painel-demo-*; do
         [ -d "$d" ] || continue
         dirs="$dirs $d"
     done
@@ -1285,6 +1285,11 @@ remove_panel() {
     systemctl stop "$r_svc" 2>/dev/null || true
     systemctl disable "$r_svc" 2>/dev/null || true
     rm -f "/etc/systemd/system/${r_svc}.service"
+    # Se era um demo, remove tambem o timer/script do reset
+    if [[ "$r_svc" == painel-demo* ]]; then
+        systemctl disable --now "${r_svc}-reset.timer" 2>/dev/null || true
+        rm -f "/etc/systemd/system/${r_svc}-reset.timer" "/etc/systemd/system/${r_svc}-reset.service"
+    fi
     systemctl daemon-reload 2>/dev/null
 
     pkill -9 -f "${r_dir}/app\.py" 2>/dev/null || true
@@ -1314,9 +1319,67 @@ remove_panel() {
     exit 0
 }
 
+# ── Desativar/remover painel DEMO ────────────────────────────────────────────
+disable_demo() {
+    banner "Desativar painel DEMO"
+
+    local demos
+    demos=""
+    for d in /opt/painel-demo-*; do
+        [ -d "$d" ] && demos="$demos $d"
+    done
+    # Servicos demo sem diretorio
+    for f in /etc/systemd/system/painel-demo*.service; do
+        [ -f "$f" ] || continue
+        local sn
+        sn=$(basename "$f" .service)
+        [[ "$sn" == *-reset ]] && continue
+        local dd="/opt/$sn"
+        [ -d "$dd" ] || demos="$demos $dd"
+    done
+
+    [ -z "$(echo $demos | tr -d ' ')" ] && { warn "Nenhum painel DEMO instalado."; exit 0; }
+
+    echo ""
+    echo -e "  ${BOLD}Demos instalados:${NC}"
+    echo "$demos" | sed 's/^ *//' | nl
+    echo ""
+    warn "Isto remove o demo por completo: servico, timer de reset, banco e vhost."
+    read -rp "  Digite CONFIRMAR para desativar/limpar TODOS os demos acima: " conf < /dev/tty
+    [ "$conf" != "CONFIRMAR" ] && { warn "Cancelado"; exit 0; }
+
+    local d
+    for d in $demos; do
+        local svc
+        svc=$(basename "$d")
+        systemctl disable --now "${svc}-reset.timer" 2>/dev/null || true
+        systemctl stop "$svc" 2>/dev/null || true
+        systemctl disable "$svc" 2>/dev/null || true
+        rm -f "/etc/systemd/system/${svc}.service" \
+              "/etc/systemd/system/${svc}-reset.service" \
+              "/etc/systemd/system/${svc}-reset.timer"
+        rm -f /usr/local/sbin/painel-demo-reset
+        rm -f /etc/nginx/sites-available/${svc}* /etc/nginx/sites-enabled/${svc}*
+        [ -d /etc/nginx/sites-available ] && grep -l "$d" /etc/nginx/sites-available/* 2>/dev/null | xargs -r rm -f
+        [ -d /etc/nginx/sites-enabled ] && grep -l "$d" /etc/nginx/sites-enabled/* 2>/dev/null | xargs -r rm -f
+        rm -rf "$d"
+        log "Demo removido: $d"
+    done
+    systemctl daemon-reload 2>/dev/null
+    nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null || true
+    log "Demos desativados por completo!"
+    exit 0
+}
+
 # ── Instalar painel adicional (mesma VPS, outro domínio/porta) ────────────────
 install_additional() {
-    banner "Instalar PAINEL ADICIONAL na mesma VPS"
+    local is_demo=0
+    [ "$1" = "demo" ] && is_demo=1
+    if [ "$is_demo" = 1 ]; then
+        banner "Instalar versao DEMO (reseta sozinha a cada 20 min)"
+    else
+        banner "Instalar PAINEL ADICIONAL na mesma VPS"
+    fi
 
     read -rp "  Informe o DOMÍNIO ou SUBDOMÍNIO para este painel (ex: painel2.seudominio.com): " ADD_DOMAIN < /dev/tty
     ADD_DOMAIN=$(echo "$ADD_DOMAIN" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
@@ -1338,10 +1401,12 @@ install_additional() {
         error "Porta $ADD_PORT já está em uso"
     fi
 
-    local add_name="painel-master-$(echo $ADD_DOMAIN | tr '.' '-' | cut -c1-15)"
+    local add_prefix="painel-master"
+    [ "$is_demo" = 1 ] && add_prefix="painel-demo"
+    local add_name="${add_prefix}-$(echo $ADD_DOMAIN | tr '.' '-' | cut -c1-15)"
     # Garante nome único
     if [ -d "/opt/$add_name" ] || systemctl list-unit-files 2>/dev/null | grep -q "^${add_name}\.service"; then
-        add_name="painel-master-$(date +%s | tail -c 5)"
+        add_name="${add_prefix}-$(date +%s | tail -c 5)"
     fi
     local ADD_DIR="/opt/$add_name"
     local ADD_SVC="$add_name"
@@ -1409,7 +1474,7 @@ install_additional() {
     banner "Configurando serviço..."
     cat > "/etc/systemd/system/${ADD_SVC}.service" << EOF
 [Unit]
-Description=Painel Master (${ADD_DOMAIN})
+Description=$([ "$is_demo" = 1 ] && echo "Painel DEMO (${ADD_DOMAIN}) — reset 20min" || echo "Painel Master (${ADD_DOMAIN})")
 After=network.target
 
 [Service]
@@ -1430,6 +1495,47 @@ EOF
     systemctl enable --now "$ADD_SVC"
     sleep 5
     systemctl status "$ADD_SVC" --no-pager 2>&1 | tail -15
+
+    if [ "$is_demo" = 1 ]; then
+        banner "Configurando RESET automatico (a cada 20 minutos)..."
+        cat > /usr/local/sbin/painel-demo-reset << 'RSTEOF'
+#!/bin/bash
+# Reset total do painel demo: apaga banco + chave e deixa o app recriar
+# tudo do zero (admin/admin123, tabelas novas). Gerado pelo instalador.
+DIR="$1"; SVC="$2"
+systemctl stop "$SVC" 2>/dev/null
+rm -f "$DIR/painel.db" "$DIR/painel.db-journal" "$DIR/.secret_key"
+systemctl start "$SVC" 2>/dev/null
+RSTEOF
+        chmod 700 /usr/local/sbin/painel-demo-reset
+        cat > "/etc/systemd/system/${ADD_SVC}-reset.service" << EOF
+[Unit]
+Description=Reset total do painel demo (${ADD_DOMAIN})
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/painel-demo-reset ${ADD_DIR} ${ADD_SVC}
+EOF
+        cat > "/etc/systemd/system/${ADD_SVC}-reset.timer" << EOF
+[Unit]
+Description=Timer de reset do painel demo (${ADD_DOMAIN})
+[Timer]
+OnCalendar=*:0/20
+AccuracySec=30s
+Persistent=true
+Unit=${ADD_SVC}-reset.service
+[Install]
+WantedBy=timers.target
+EOF
+        systemctl daemon-reload
+        systemctl enable --now "${ADD_SVC}-reset.timer"
+        log "Reset automatico ativo: banco zerado a cada 20 minutos"
+    fi
+
+    # Cert snakeoil: base de 443 (Cloudflare modo Full SSL usa este caminho)
+    if [ ! -f /etc/ssl/certs/ssl-cert-snakeoil.pem ]; then
+        command -v make-ssl-cert >/dev/null 2>&1 || apt-get install -y ssl-cert 2>/dev/null
+        make-ssl-cert generate-default-snakeoil 2>/dev/null || true
+    fi
 
     # Nginx vhost APENAS para este domínio apontando para esta porta
     banner "Configurando Nginx para ${ADD_DOMAIN}..."
@@ -1495,6 +1601,12 @@ EOF
     echo -e "${GREEN}${BOLD}║     PAINEL ADICIONAL INSTALADO COM SUCESSO      ║${NC}"
     echo -e "${GREEN}${BOLD}╚══════════════════════════════════════════════════╝${NC}"
     echo ""
+    if [ "$is_demo" = 1 ]; then
+        echo -e "  ${YELLOW}VERSAO DEMO: tudo que for criado aqui e PERDIDO a cada 20 minutos${NC}"
+        echo -e "  ${YELLOW}Banco, usuarios, servidores e senhas zerados no reset automatico.${NC}"
+        echo -e "  Reset manual:  systemctl start ${ADD_SVC}-reset.service"
+        echo -e "  Desativar:     systemctl disable --now ${ADD_SVC}-reset.timer"
+    fi
     echo -e "  Domínio:        ${BOLD}http://${ADD_DOMAIN}${NC} / ${BOLD}https://${ADD_DOMAIN}${NC}"
     echo -e "  Porta interna:  ${ADD_PORT}"
     echo -e "  Diretório:      ${ADD_DIR}"
@@ -1503,6 +1615,11 @@ EOF
     echo ""
     echo -e "  ${YELLOW}Acesse pelo DOMÍNIO informado para usar este painel.${NC}"
     echo -e "  ${YELLOW}Troque a senha do admin após o primeiro login.${NC}"
+    echo ""
+    echo -e "  ${BOLD}HTTPS com Cloudflare (proxy laranja ativo):${NC}"
+    echo -e "   - SSL/TLS: modo ${BOLD}Flexible${NC} (Cloudflare->origem HTTP/80) ou"
+    echo -e "     ${BOLD}Full${NC} (origem HTTPS/443 com cert autoassinado) - ambos funcionam."
+    echo -e "   - A entry aponta o A/AAAA de ${ADD_DOMAIN} para o IP desta VPS."
     echo ""
     exit 0
 }
@@ -1529,6 +1646,8 @@ if [ "$#" -eq 0 ] && [ -e /dev/tty ]; then
     echo -e "    [2] Atualizar painel existente"
     echo -e "    [3] Remover painel instalado"
     echo -e "    [4] Instalar painel ADICIONAL (mesma VPS, outro domínio/porta)"
+    echo -e "    [5] Instalar versão DEMO (banco resetado a cada 20 minutos)"
+    echo -e "    [6] Desativar/limpar painel DEMO"
     echo ""
     read -rp "  Opção [1]: " MENU_OPT < /dev/tty
     MENU_OPT="${MENU_OPT:-1}"
@@ -1536,6 +1655,8 @@ if [ "$#" -eq 0 ] && [ -e /dev/tty ]; then
         2) MODE="update" ;;
         3) remove_panel ;;
         4) install_additional ;;
+        5) install_additional demo ;;
+        6) disable_demo ;;
         *) MODE="install" ;;
     esac
     echo ""
