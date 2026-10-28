@@ -21,6 +21,19 @@ REPO_URL="https://github.com/jeanfraga95/painel101"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DB_BACKUP=""
 
+# ── Registro de paineis instalados nesta VPS (self-healing do nginx) ────
+# Formato de cada linha: servico|diretorio|porta|dominio|tipo
+# Tipos: master (painel principal), add (painel adicional), demo (versao demo)
+# Serve para RECONSTRUIR os vhosts do nginx se eles forem apagados/quebrados
+# (p.ex. um "rm -rf /etc/nginx/sites-available/*" manual deixa symlinks mortos
+# em sites-enabled; dai o nginx -t falha, nginx NUNCA mais recarrega e todo
+# dominio passa a cair no catch-all -> painel antigo).
+REGISTRY_FILE="/etc/nginx/painel-panels.reg"
+# Dominio canônico do painel principal. Gravado quando o vhost do painel
+# principal e escrito; usado por detect_domain() para nunca confundir o
+# dominio principal com o dominio de um painel adicional/demo.
+MASTER_DOMAIN_FILE="/etc/nginx/.painel_master_domain"
+
 log()    { echo -e "${GREEN}[✔]${NC} $1"; }
 warn()   { echo -e "${YELLOW}[!]${NC} $1"; }
 error()  { echo -e "${RED}[✗]${NC} $1"; exit 1; }
@@ -560,6 +573,19 @@ open_firewall() {
 write_domain_vhost() {
     local dom="$1"
     [ -z "$dom" ] && return 1
+    # Protecao anti-clobber: se o vhost deste dominio ja existe com proxy_pass
+    # em uma porta DIFERENTE da deste painel (PANEL_PORT), ele pertence a um
+    # painel adicional/demo — NAO sobrescreve. Sem isto, um update do painel
+    # principal podia reconstruir o vhost do demo apontando para a porta do
+    # painel principal, e o dominio do demo voltava a mostrar o painel antigo.
+    local _vhost_file="/etc/nginx/sites-available/${dom}"
+    if [ -f "$_vhost_file" ]; then
+        if grep -q 'proxy_pass' "$_vhost_file" 2>/dev/null && \
+           ! grep -qE "proxy_pass[[:space:]]*[^;]*127\.0\.0\.1:${PANEL_PORT:-2083};" "$_vhost_file" 2>/dev/null; then
+            warn "Vhost /etc/nginx/sites-available/${dom} pertence a outro painel (porta diferente de ${PANEL_PORT:-2083}). Nao sera sobrescrito."
+            return 1
+        fi
+    fi
     cat > "/etc/nginx/sites-available/${dom}" << DOMCNF
 server {
     listen 80;
@@ -619,13 +645,27 @@ DOMCNF
     # enviado pelo cliente - isso viraria open redirect).
     sed -i "s|__PANEL_DOMAIN__|${dom}|g" /etc/nginx/conf.d/painel-scheme.conf 2>/dev/null || true
     ln -sf "/etc/nginx/sites-available/${dom}" "/etc/nginx/sites-enabled/${dom}" 2>/dev/null || true
+    # Grava o dominio canônico do painel principal. detect_domain() usa este
+    # marcador em vez de "primeiro vhost achado em sites-enabled", que pode ser
+    # o dominio de um painel adicional/demo.
+    echo "$dom" > "$MASTER_DOMAIN_FILE" 2>/dev/null || true
 }
 
 # ── Descobre o domínio já configurado ──────────────────────────────
+# Ordem de preferencia:
+#  1) marcador canônico gravado pelo proprio instalador (MASTER_DOMAIN_FILE)
+#  2) vhost que tem proxy_pass para a porta do PAINEL PRINCIPAL (${PANEL_PORT})
+#  3) fallback legado (qualquer vhost) + URL do checkuser no banco
+# Assim nunca se pega o dominio de um painel adicional/demo por engano.
 detect_domain() {
     local f d
+    if [ -f "$MASTER_DOMAIN_FILE" ]; then
+        d="$(cat "$MASTER_DOMAIN_FILE" 2>/dev/null | tr -d '[:space:]')"
+        if [ -n "$d" ]; then echo "$d"; return 0; fi
+    fi
     for f in /etc/nginx/sites-enabled/*; do
         [ -f "$f" ] || continue
+        grep -qE "proxy_pass[[:space:]]*[^;]*127\.0\.0\.1:${PANEL_PORT:-2083};" "$f" 2>/dev/null || continue
         d="$(grep -m1 -oE 'server_name[[:space:]]+[a-zA-Z0-9.-]+' "$f" 2>/dev/null | awk '{print $2}')"
         if [ -n "$d" ] && [ "$d" != "_" ]; then
             echo "$d"
@@ -651,9 +691,280 @@ PYDB
     return 1
 }
 
+# ═══════════════════════════════════════════════════════════════════
+#  Self-healing do nginx: registro de paineis, vhosts e verificacao
+# ═══════════════════════════════════════════════════════════════════
+
+# ── Registra um painel no arquivo de registro ─────────────────────
+# Uso: registry_add servico diretorio porta dominio tipo
+registry_add() {
+    local svc="$1" dir="$2" port="$3" dom="$4" kind="$5"
+    touch "$REGISTRY_FILE" 2>/dev/null && chmod 644 "$REGISTRY_FILE" || return 0
+    grep -v "^${svc}|" "$REGISTRY_FILE" > "${REGISTRY_FILE}.tmp" 2>/dev/null || true
+    mv "${REGISTRY_FILE}.tmp" "$REGISTRY_FILE"
+    echo "${svc}|${dir}|${port}|${dom}|${kind}" >> "$REGISTRY_FILE"
+}
+
+# ── Remove do registro um servico que nao existe mais ──────────────
+registry_del_service() {
+    local svc="$1"
+    [ -f "$REGISTRY_FILE" ] || return 0
+    grep -v "^${svc}|" "$REGISTRY_FILE" > "${REGISTRY_FILE}.tmp" 2>/dev/null || true
+    mv "${REGISTRY_FILE}.tmp" "$REGISTRY_FILE"
+}
+
+# ── Limpa o registro: ache as entradas cujo servico/diretorio morreu ─
+registry_sync() {
+    [ -f "$REGISTRY_FILE" ] || return 0
+    local tmp
+    tmp="$(mktemp)"
+    while IFS='|' read -r svc dir port dom kind; do
+        [ -z "$svc" ] && continue
+        if [ -d "$dir" ] || [ -f "/etc/systemd/system/${svc}.service" ]; then
+            echo "${svc}|${dir}|${port}|${dom}|${kind}" >> "$tmp"
+        fi
+    done < "$REGISTRY_FILE"
+    mv "$tmp" "$REGISTRY_FILE"
+}
+
+# ── Reconstrói o registro lendo as unidades systemd do proprio painel ─
+# Cobertura retroativa: maquinas instaladas com versoes antigas do
+# instalador nao tem o registro. Tudo que o instalador grava na unit
+# (PORT, DOMAIN, PATH do venv) e suficiente para reconstruir.
+registry_rebuild_from_systemd() {
+    local u svc dir port dom kind path0
+    for u in /etc/systemd/system/painel-*.service; do
+        [ -f "$u" ] || continue
+        svc="$(basename "$u" .service)"
+        [[ "$svc" == *-reset* || "$svc" == *-update* ]] && continue
+        # Quebra nas aspas: fica uma linha "VAR=valor" por trecho
+        # Environment="PORT=2083"  ->  PORT=2083
+        port="$(tr '"' '\n' < "$u" | grep -E '^PORT=[0-9]+' | head -1 | cut -d= -f2)"
+        case "$port" in ''|*[!0-9]*) continue ;; esac
+        dom="$(tr '"' '\n' < "$u" | grep -E '^DOMAIN=[a-zA-Z0-9.-]+' | head -1 | cut -d= -f2 | tr '[:upper:]' '[:lower:]')"
+        path0="$(tr '"' '\n' < "$u" | grep -E '^PATH=' | head -1 | cut -d= -f2 | cut -d: -f1)"
+        dir=""
+        case "$path0" in
+            */venv) dir="$(dirname "$path0")" ;;
+            */venv/*) dir="${path0%/venv*}" ;;
+        esac
+        if [ -z "$dir" ]; then
+            dir="$(grep -oE 'WorkingDirectory=[^[:space:]]+' "$u" 2>/dev/null | head -1 | cut -d= -f2)"
+        fi
+        [ -n "$dir" ] && [ -d "$dir" ] || continue
+        case "$svc" in
+            painel-demo-*) kind="demo" ;;
+            painel-master) kind="master" ;;
+            *)             kind="add"   ;;
+        esac
+        registry_add "$svc" "$dir" "$port" "$dom" "$kind"
+    done
+}
+
+# ── Apaga symlinks quebrados em sites-enabled ──────────────────────
+# Um symlink que aponta para arquivo inexistente faz o nginx -t falhar
+# ("open() ... failed (2: No such file or directory)") e ENQUANTO ISSO
+# o nginx mantem a config antiga na memoria: qualquer dominio novo cai
+# no catch-all, ou seja, no painel principal. Isto foi exatamente o
+# caso real da VPS que originou esta protecao.
+nginx_prune_dead_symlinks() {
+    [ -d /etc/nginx/sites-enabled ] || return 0
+    local f removed=0
+    for f in /etc/nginx/sites-enabled/*; do
+        # [ -e ] segue o symlink: false quando o alvo nao existe
+        [ -e "$f" ] || { rm -f "$f" 2>/dev/null && removed=$((removed+1)); }
+    done
+    if [ "$removed" -gt 0 ]; then
+        warn "Removidos ${removed} symlink(s) quebrados em /etc/nginx/sites-enabled (o nginx não recarregava por causa disso)"
+    fi
+}
+
+# ── Recarga segura do nginx: valida ANTES de trocar a config viva ──
+reload_nginx_safe() {
+    local err
+    err="$(mktemp)"
+    if nginx -t > "$err" 2>&1; then
+        systemctl reload nginx 2>/dev/null || systemctl restart nginx 2>/dev/null
+        rm -f "$err"
+        return 0
+    fi
+    warn "nginx -t falhou — config nos discos esta invalida e nginx seguiu com a anterior:"
+    grep -E 'emerg|failed|invalid' "$err" | head -5
+    rm -f "$err"
+    return 1
+}
+
+# ── Vhost generico de um painel adicional/demo ────────────────────
+# Uso: write_panel_vhost servico porta dominio
+# Sempre aponta a porta CERTA do servico. Idempotente: pode ser chamado
+# de novo pelo modo repair para reconstruir o vhost perdido.
+write_panel_vhost() {
+    local svc="$1" port="$2" dom="$3"
+    { [ -z "$svc" ] || [ -z "$port" ] || [ -z "$dom" ]; } && return 1
+    mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
+    cat > "/etc/nginx/sites-available/${svc}" << PNLVHOST
+# Vhost exclusivo para ${dom} -> ${svc} (porta ${port})
+# Gerenciado pelo instalador painel101 (mode repair reconstrói este arquivo).
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${dom};
+    include /etc/nginx/snippets/painel-security.conf;
+    include /etc/nginx/snippets/vnc-location.conf;
+    # Instalador distribuido pelo proprio painel (mesmo com repo privado)
+    location = /install.sh {
+        alias /opt/painel-master/install.sh;
+        default_type application/x-shellscript;
+    }
+    location / {
+        include /etc/nginx/snippets/proxy_params.conf;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_pass http://127.0.0.1:${port};
+    }
+}
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name ${dom};
+    ssl_certificate /etc/ssl/certs/ssl-cert-snakeoil.pem;
+    ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
+    include /etc/nginx/snippets/painel-security.conf;
+    include /etc/nginx/snippets/vnc-location.conf;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    # Instalador distribuido pelo proprio painel (mesmo com repo privado)
+    location = /install.sh {
+        alias /opt/painel-master/install.sh;
+        default_type application/x-shellscript;
+    }
+    location / {
+        include /etc/nginx/snippets/proxy_params.conf;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_pass http://127.0.0.1:${port};
+    }
+}
+PNLVHOST
+    ln -sf "/etc/nginx/sites-available/${svc}" "/etc/nginx/sites-enabled/${svc}"
+    log "Vhost ${dom} -> ${svc} (porta ${port}) gravado"
+    return 0
+}
+
+# ── Confirma se um dominio ja e servido por OUTRO vhost ────────────
+# Evita o caso de dois paineis disputando o mesmo server_name: o nginx
+# apenas avisa em stderr ("conflicting server name") e o PRIMEIRO vhost
+# vence — o segundo painel nunca seria alcancado.
+check_server_name_taken() {
+    local dom="$1" my_file="$2" f tok
+    [ -z "$dom" ] && return 1
+    for f in /etc/nginx/sites-enabled/*; do
+        [ -f "$f" ] || continue
+        [ "$(readlink -f "$f" 2>/dev/null)" = "$(readlink -f "$my_file" 2>/dev/null)" ] && continue
+        for tok in $(grep -iE '^[[:space:]]*server_name' "$f" 2>/dev/null | tr -d ';' | sed 's/server_name//i'); do
+            [ "$tok" = "_" ] && continue
+            [ "$tok" = "$dom" ] && { echo "$f"; return 0; }
+        done
+    done
+    return 1
+}
+
+# ── Verifica que o nginx atende o dominio pelo painel CERTO ────────
+# Faz uma requisicao local com o Host do dominio e mostra o codigo HTTP.
+# Envia UA de navegador: o painel bloqueia curl por User-Agent (anti-bot)
+# e o probe receberia 403 mesmo com o roteamento correto.
+probe_panel_vhost() {
+    local dom="$1" port="$2" code
+    [ -z "$dom" ] && return 0
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1/" -H "Host: ${dom}" -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) probe" 2>/dev/null)"
+    echo "   ${dom} (porta 80)  -> HTTP ${code}  (painel na porta ${port})"
+    code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "https://127.0.0.1/" -H "Host: ${dom}" -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) probe" 2>/dev/null)"
+    echo "   ${dom} (porta 443) -> HTTP ${code}  (painel na porta ${port})"
+}
+
+# ── Recontroi vhosts de TODOS os paineis do registro ───────────────
+# Chamado pelo modo repair e tambem pelo modo update: se um vhost foi
+# apagado/corrompido ele volta com a porta certa, sempre.
+fix_all_panel_vhosts() {
+    [ -f "$REGISTRY_FILE" ] || return 0
+    local svc dir port dom kind
+    while IFS='|' read -r svc dir port dom kind; do
+        [ -z "$svc" ] && continue
+        [ -d "$dir" ] || continue
+        [ -n "$dom" ] || continue
+        # Reescreve SEMPRE: garante porta certa e vhost completo
+        write_panel_vhost "$svc" "$port" "$dom"
+    done < "$REGISTRY_FILE"
+}
+
+# ── Modo reparo completo ────────────────────────────────────────────
+# bash install.sh repair   (ou menu [7])
+repair_panels() {
+    banner "Modo REPARO — reconstruindo nginx de todos os paineis..."
+    command -v nginx &>/dev/null || error "nginx nao esta instalado nesta maquina."
+
+    # 1) Registro: limpa mortos, reunifica com o que existe no systemd
+    registry_sync
+    registry_rebuild_from_systemd
+
+    # 2) Symlinks quebrados iam fazer nginx -t fracassar para sempre
+    nginx_prune_dead_symlinks
+
+    # 3) Base do nginx (catch-alls por IP + snippets) do painel principal
+    if [ -d "$INSTALL_DIR" ]; then
+        setup_nginx_base
+    else
+        warn "Painel principal nao esta em $INSTALL_DIR — mantendo snippets/catch-alls atuais."
+    fi
+
+    # 4) Dominio canônico do painel principal: reescreve o vhost dele
+    local md
+    if [ -f "$MASTER_DOMAIN_FILE" ]; then
+        md="$(cat "$MASTER_DOMAIN_FILE" 2>/dev/null | tr -d '[:space:]')"
+        if [ -z "$md" ] && md="$(detect_domain)"; then
+            :
+        fi
+    else
+        md="$(detect_domain || true)"
+    fi
+    if [ -n "$md" ]; then
+        if write_domain_vhost "$md"; then
+            log "Vhost do painel principal reescrito: $md (porta ${PANEL_PORT:-2083})"
+        else
+            warn "Vhost de $md pertence a outro painel — mantido."
+        fi
+    else
+        disable_https_redirect_if_no_domain
+        warn "Sem dominio principal configurado: acesso por IP segue funcionando."
+    fi
+
+    # 5) Vhosts de cada painel adicional/demo do arquivo de registro
+    fix_all_panel_vhosts
+
+    # 6) Valida e recarrega
+    if reload_nginx_safe; then
+        log "nginx recarregado com sucesso"
+    else
+        error "nginx segue com a configuracao anterior. Corrija o erro acima (ou rode: bash install.sh repair) —\nse o problema persistir, verifique com: nginx -t"
+    fi
+
+    # 7) Prova real: cada dominio responde pelo painel certo?
+    echo ""
+    info "Verificacao de roteamento (loopback, na propria VPS):"
+    probe_panel_vhost "_catchall_probe_.invalid" "${PANEL_PORT:-2083}"
+    local svc dir port dom kind
+    while IFS='|' read -r svc dir port dom kind; do
+        [ -z "$dom" ] && continue
+        probe_panel_vhost "$dom" "$port"
+    done < "$REGISTRY_FILE"
+    echo ""
+    info "Se qualquer dominio aparecer com HTTP 000/400, o DNS dele ainda não aponta para este IP da VPS."
+    log "Reparo concluido."
+    return 0
+}
+
 # ── Reaplica o hardening do nginx (usado na atualização) ───────────
 apply_nginx_hardening() {
     banner "Reaplicando configuracao segura do nginx..."
+    # Symlinks quebrados fazem nginx -t fracassar e o update nunca recarrega.
+    nginx_prune_dead_symlinks
     # Backup do estado atual: se o nginx -t falhar, a configuracao anterior
     # volta (o painel nunca fica com o nginx quebrado no disco).
     local bkp
@@ -671,6 +982,9 @@ apply_nginx_hardening() {
     else
         disable_https_redirect_if_no_domain
     fi
+    # Reconstrói os vhosts de paineis adicionais/demo registrados: um vhost
+    # apagado ou sobrescrito volta com a porta certa (self-healing).
+    fix_all_panel_vhosts
     if nginx -t 2>/dev/null; then
         systemctl reload nginx 2>/dev/null && log "nginx recarregado (HTTPS real, CSP, rate limit)"
     else
@@ -685,7 +999,7 @@ apply_nginx_hardening() {
         if nginx -t 2>/dev/null; then
             systemctl reload nginx 2>/dev/null && log "nginx restaurado e recarregado"
         else
-            error "nginx -t falhou mesmo com o rollback: o nginx precisa de atencao manual"
+            error "nginx -t falhou mesmo com o rollback: o nginx precisa de atencao manual\nTente: bash install.sh repair"
         fi
     fi
     rm -rf "$bkp"
@@ -1044,6 +1358,7 @@ HOOK
 # ── SSL com domínio (nginx + certbot Let's Encrypt) ───────────────────────────
 setup_ssl() {
     setup_nginx_base  # Garante nginx base + IP direto sempre funcionando
+    nginx_prune_dead_symlinks
 
     banner "Configuração SSL/HTTPS com domínio"
     echo ""
@@ -1205,6 +1520,7 @@ print_info() {
     echo -e "    journalctl -u ${SERVICE_NAME} -n 50       # últimas 50 linhas"
     echo -e "    systemctl restart ${SERVICE_NAME}         # reiniciar painel"
     echo -e "    nginx -t && systemctl reload nginx        # recarregar nginx"
+    echo -e "    bash install.sh repair                    # reconstruir vhosts de TODOS os paineis"
     echo ""
 }
 
@@ -1295,6 +1611,8 @@ remove_panel() {
     pkill -9 -f "${r_dir}/app\.py" 2>/dev/null || true
     sleep 2
 
+    registry_del_service "$r_svc"
+
     # Remove vhosts nginx relacionados ao diretório/serviço
     for vf in /etc/nginx/sites-available/${r_svc}* /etc/nginx/sites-enabled/${r_svc}*; do
         [ -e "$vf" ] || continue
@@ -1363,6 +1681,7 @@ disable_demo() {
         [ -d /etc/nginx/sites-available ] && grep -l "$d" /etc/nginx/sites-available/* 2>/dev/null | xargs -r rm -f
         [ -d /etc/nginx/sites-enabled ] && grep -l "$d" /etc/nginx/sites-enabled/* 2>/dev/null | xargs -r rm -f
         rm -rf "$d"
+        registry_del_service "$svc"
         log "Demo removido: $d"
     done
     systemctl daemon-reload 2>/dev/null
@@ -1381,13 +1700,21 @@ install_additional() {
         banner "Instalar PAINEL ADICIONAL na mesma VPS"
     fi
 
-    if [ -z "$DEMO_DOMAIN" ]; then
-        read -rp "  Informe o DOMÍNIO ou SUBDOMÍNIO para este painel (ex: painel2.seudominio.com): " ADD_DOMAIN < /dev/tty
+    # Nao-interativo (automacao): PANEL_DOMAIN=dom bash install.sh add
+    # (ou DEMO_DOMAIN=dom bash install.sh demo, compatibilidade)
+    [ -z "$ADD_DOMAIN" ] && ADD_DOMAIN="${PANEL_DOMAIN:-$DEMO_DOMAIN}"
+    [ -z "$ADD_PORT" ] && ADD_PORT="${PANEL_PORT:-}"
+    if [ -z "$ADD_DOMAIN" ]; then
+        if [ -e /dev/tty ]; then
+            read -rp "  Informe o DOMÍNIO ou SUBDOMÍNIO para este painel (ex: painel2.seudominio.com): " ADD_DOMAIN < /dev/tty
+        else
+            error "Modo nao-interativo exige PANEL_DOMAIN (ou DEMO_DOMAIN). Ex:\n  PANEL_DOMAIN=painel2.seudominio.com bash install.sh add\n  PANEL_DOMAIN=demo.seudominio.com PANEL_DEMO=1 bash install.sh demo"
+        fi
         ADD_DOMAIN=$(echo "$ADD_DOMAIN" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
         [ -z "$ADD_DOMAIN" ] && error "Domínio inválido"
     else
-        ADD_DOMAIN=$(echo "$DEMO_DOMAIN" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
-        [ "$is_demo" = 1 ] || warn "DEMO_DOMAIN definido: instalando ${ADD_DOMAIN} sem perguntar"
+        ADD_DOMAIN=$(echo "$ADD_DOMAIN" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+        [ "$is_demo" = 1 ] || warn "PANEL_DOMAIN definido: instalando ${ADD_DOMAIN} sem perguntar"
     fi
 
     # Detecta porta livre
@@ -1398,7 +1725,7 @@ install_additional() {
         fi
     done
     [ -z "$port" ] && port=2084
-    if [ -z "$DEMO_DOMAIN" ]; then
+    if [ -z "$DEMO_DOMAIN" ] && [ -z "$PANEL_DOMAIN" ] && [ -t 0 ] && [ -e /dev/tty ]; then
         read -rp "  Porta da aplicação [$port]: " ADD_PORT < /dev/tty
     fi
     ADD_PORT="${ADD_PORT:-$port}"
@@ -1426,7 +1753,7 @@ install_additional() {
     echo ""
     warn "IMPORTANTE: O domínio $ADD_DOMAIN deve estar apontado para o IP desta VPS (A/AAAA)."
     warn "Quando acessado por este domínio, o Nginx irá direcionar APENAS para este painel."
-    if [ -z "$DEMO_DOMAIN" ]; then
+    if [ -z "$DEMO_DOMAIN" ] && [ -z "$PANEL_DOMAIN" ] && [ -e /dev/tty ]; then
         read -rp "  Continuar? [s/N]: " cont < /dev/tty
         [[ "$cont" =~ ^[sS]$ ]] || { warn "Cancelado"; exit 0; }
     fi
@@ -1571,40 +1898,42 @@ PEOF
     [ -f /etc/nginx/snippets/vnc-location.conf ] || true
     [ -f /etc/nginx/conf.d/vnc-upstreams.conf ] || echo 'map $vnc_sid $vnc_backend { default "127.0.0.1:1"; }' > /etc/nginx/conf.d/vnc-upstreams.conf
 
-    cat > "/etc/nginx/sites-available/${ADD_SVC}" << EOF
-# Vhost exclusivo para ${ADD_DOMAIN} -> ${ADD_SVC} (porta ${ADD_PORT})
-server {
-    listen 80;
-    server_name ${ADD_DOMAIN};
-    include /etc/nginx/snippets/painel-security.conf;
-    include /etc/nginx/snippets/vnc-location.conf;
-    location / {
-        include /etc/nginx/snippets/proxy_params.conf;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_pass http://127.0.0.1:${ADD_PORT};
-    }
-}
-server {
-    listen 443 ssl;
-    server_name ${ADD_DOMAIN};
-    ssl_certificate /etc/ssl/certs/ssl-cert-snakeoil.pem;
-    ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
-    include /etc/nginx/snippets/painel-security.conf;
-    include /etc/nginx/snippets/vnc-location.conf;
-    add_header Strict-Transport-Security "max-age=31536000" always;
-    location / {
-        include /etc/nginx/snippets/proxy_params.conf;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_pass http://127.0.0.1:${ADD_PORT};
-    }
-}
-EOF
-    ln -sf "/etc/nginx/sites-available/${ADD_SVC}" "/etc/nginx/sites-enabled/${ADD_SVC}"
-    nginx -t && systemctl reload nginx
+    # Nao deixa outro vhost ja ativo roubar este server_name (o nginx apenas
+    # avisa em stderr e o PRIMEIRO vhost vence — este painel nunca seria
+    # alcancado e o dominio mostraria outro painel).
+    local dup_file
+    if dup_file="$(check_server_name_taken "$ADD_DOMAIN" "/etc/nginx/sites-enabled/${ADD_SVC}" 2>/dev/null)"; then
+        error "O dominio ${ADD_DOMAIN} ja e servido pelo vhost ${dup_file}.\nEscolha outro dominio/subdominio ou remova o vhost antigo antes de reinstalar."
+    fi
+
+    # A limpeza de symlinks quebrados evita o caso: nginx -t falha por um
+    # symlink morto, o reload nunca acontece e o dominio novo cai no
+    # catch-all (painel principal) em vez deste painel.
+    nginx_prune_dead_symlinks
+
+    write_panel_vhost "$ADD_SVC" "$ADD_PORT" "$ADD_DOMAIN"
+
+    # Registra no arquivo de registro (self-healing: o modo repair reconstrói
+    # este vhost se ele desaparecer/for corrompido).
+    registry_add "$ADD_SVC" "$ADD_DIR" "$ADD_PORT" "$ADD_DOMAIN" "$([ "$is_demo" = 1 ] && echo demo || echo add)"
+
+    # Reload critico: se gravar o vhost e o reload falhar silenciosamente, o
+    # dominio novo continua caindo no painel principal. Aqui o erro fica
+    # explícito.
+    if reload_nginx_safe; then
+        log "nginx recarregado: ${ADD_DOMAIN} -> 127.0.0.1:${ADD_PORT}"
+    else
+        error "nginx NAO recarregou: enquanto isso ${ADD_DOMAIN} continuaria mostrando outro painel.\nCorrija o erro indicado acima e rode: bash install.sh repair"
+    fi
     sleep 2
     systemctl restart "$ADD_SVC" 2>/dev/null || true
     sleep 3
     curl -sI "http://127.0.0.1:${ADD_PORT}/" 2>&1 | head -2
+
+    # Prova real: na propria VPS, o dominio deve ser atendido por 127.0.0.1:$ADD_PORT
+    echo ""
+    info "Verificacao de roteamento local:"
+    probe_panel_vhost "$ADD_DOMAIN" "$ADD_PORT"
 
     echo ""
     echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════════════╗${NC}"
@@ -1645,7 +1974,7 @@ banner "╚═══════════════════════
 echo ""
 
 SSL_DOMAIN=""
-MODE="${1:-install}"   # install (default) | update | demo (exige DEMO_DOMAIN)
+MODE="${1:-install}"   # install (default) | update | repair | add | demo (exige PANEL_DOMAIN/DEMO_DOMAIN)
 
 # Menu interativo quando rodado sem argumento. Le do /dev/tty para tambem
 # aparecer quando o instalador roda via "curl ... | bash" (stdin e o pipe).
@@ -1658,6 +1987,7 @@ if [ "$#" -eq 0 ] && [ -e /dev/tty ]; then
     echo -e "    [4] Instalar painel ADICIONAL (mesma VPS, outro domínio/porta)"
     echo -e "    [5] Instalar versão DEMO (banco resetado a cada 20 minutos)"
     echo -e "    [6] Desativar/limpar painel DEMO"
+    echo -e "    [7] REPARAR painéis (reconstrói vhosts nginx de todos os paineis)"
     echo ""
     read -rp "  Opção [1]: " MENU_OPT < /dev/tty
     MENU_OPT="${MENU_OPT:-1}"
@@ -1667,6 +1997,7 @@ if [ "$#" -eq 0 ] && [ -e /dev/tty ]; then
         4) install_additional ;;
         5) install_additional demo ;;
         6) disable_demo ;;
+        7) repair_panels; exit 0 ;;
         *) MODE="install" ;;
     esac
     echo ""
@@ -1676,10 +2007,31 @@ check_root
 detect_arch
 detect_os
 
+# Modo nao-interativo de painel ADICIONAL completo:
+#   PANEL_DOMAIN=painel2.seudominio.com bash install.sh add
+# (PANEL_PORT=2090 opcional; PANEL_DEMO=1 cria como demo)
+if [ "$MODE" = "add" ]; then
+    [ -z "$PANEL_DOMAIN" ] && error "Modo add nao-interativo exige: PANEL_DOMAIN=painel2.seudominio.com bash install.sh add"
+    if [ "$PANEL_DEMO" = "1" ]; then
+        install_additional demo
+    else
+        install_additional
+    fi
+    exit 0
+fi
+
 if [ "$MODE" = "demo" ]; then
     # ── Instalacao DEMO nao-interativa: DEMO_DOMAIN=dom bash install.sh demo ──
-    [ -z "$DEMO_DOMAIN" ] && error "Modo demo nao-interativo exige: DEMO_DOMAIN=demo.seudominio.com bash install.sh demo"
+    [ -z "$DEMO_DOMAIN" ] && [ -z "$PANEL_DOMAIN" ] && error "Modo demo nao-interativo exige: DEMO_DOMAIN=demo.seudominio.com bash install.sh demo"
+    DEMO_DOMAIN="${DEMO_DOMAIN:-$PANEL_DOMAIN}"
     install_additional demo
+    exit 0
+fi
+
+if [ "$MODE" = "repair" ]; then
+    # ── bash install.sh repair : reconstrói o nginx de todos os paineis ──
+    repair_panels
+    exit 0
 fi
 
 if [ "$MODE" = "update" ]; then
@@ -1687,6 +2039,10 @@ if [ "$MODE" = "update" ]; then
     banner "Modo ATUALIZAÇÃO — sincronizando código do GitHub..."
     check_python
     free_ports
+
+    # Registra o painel principal (self-healing: modo repair reconstrói os
+    # vhosts a partir deste registro).
+    registry_add "$SERVICE_NAME" "$INSTALL_DIR" "$PANEL_PORT" "" master
 
     # Salva banco e chave de cifragem antes de qualquer operação
     if [ -f "$INSTALL_DIR/painel.db" ]; then
@@ -1749,6 +2105,9 @@ else
     check_python
     install_panel
     configure_service
+    # Registra o painel principal (self-healing: modo repair reconstrói os
+    # vhosts a partir deste registro).
+    registry_add "$SERVICE_NAME" "$INSTALL_DIR" "$PANEL_PORT" "" master
     open_firewall
     setup_ssl
     disable_https_redirect_if_no_domain
