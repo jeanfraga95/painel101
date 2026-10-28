@@ -8,6 +8,7 @@ import requests
 import paramiko
 import io
 import os
+import re
 import shlex
 import time
 
@@ -1702,12 +1703,16 @@ VNC_NGINX_LOCATION = """# ---- Console VNC (NoVNC) -----------------------------
 # valida a sessao do Flask com auth_request antes de encaminhar, entao o
 # console fica inacessivel a quem nao estiver logado como admin - e a porta do
 # websockify no servidor so aceita o IP do painel.
-location ~ ^/servers/vnc/(?<vnc_sid>\\d+)/(?<vnc_rest>.*)$ {
-    auth_request /_vnc_authz;
-    error_page 401 = @vnc_unauth;
-    error_page 403 = @vnc_denied;
+# {SUF} namespaça as variaveis por painel: cada painel da VPS (porta propria)
+# tem o seu snippet/mapa (vnc-location_2085.conf etc.), senao o ULTIMO painel
+# a iniciar sobrescrevia o arquivo global e o console dos OUTROS paineis
+# quebrava (401 "Sessao expirada" ou tela branca).
+location ~ ^/servers/vnc/(?<vnc_sid{SUF}>\\d+)/(?<vnc_rest{SUF}>.*)$ {
+    auth_request /_vnc_authz{SUF};
+    error_page 401 = @vnc_unauth{SUF};
+    error_page 403 = @vnc_denied{SUF};
 
-    proxy_pass http://$vnc_backend/$vnc_rest;
+    proxy_pass http://$vnc_backend{SUF}/$vnc_rest{SUF};
 
     # Upgrade de WebSocket: o noVNC fala direto com o x11vnc por tras do
     # websockify, entao o handshake tem que passar intacto.
@@ -1727,21 +1732,21 @@ location ~ ^/servers/vnc/(?<vnc_sid>\\d+)/(?<vnc_rest>.*)$ {
     proxy_buffering off;
 }
 
-location @vnc_unauth {
+location @vnc_unauth{SUF} {
     default_type application/json;
     return 401 '{"success":false,"message":"Sessao expirada. Faca login novamente."}';
 }
 
-location @vnc_denied {
+location @vnc_denied{SUF} {
     default_type application/json;
     return 403 '{"success":false,"message":"Acesso negado: requer admin."}';
 }
 
 # Subrequisicao do auth_request. "internal" impede que alguem chame pela
 # internet e use isto para sondar sessao de terceiros.
-location = /_vnc_authz {
+location = /_vnc_authz{SUF} {
     internal;
-    proxy_pass http://127.0.0.1:__PANEL_PORT__/_vnc_authz;
+    proxy_pass http://127.0.0.1:__PANEL_PORT__/_vnc_authz{SUF};
     proxy_pass_request_body off;
     proxy_set_header Content-Length "";
     proxy_set_header Cookie           $http_cookie;
@@ -1750,18 +1755,20 @@ location = /_vnc_authz {
 """
 
 
-def vnc_nginx_upstreams_map(servers) -> str:
+def vnc_nginx_upstreams_map(servers, suf='') -> str:
     """Monta o mapa de upstreams do VNC a partir da lista de servidores.
 
     'default' aponta para porta descartavel de proposito: um id que nao esteja
     no mapa nao pode acabar conectado em algum servidor real por acidente.
+    'suf' e o mesmo sufixo usado no snippet (ex.: '_2085' para o painel da
+    porta 2085) — cada painel tem o seu mapa com os SEUS servidores.
     """
     linhas = [
         '# Mapa de servidores VNC: id do servidor -> backend websockify.',
         '# Gerado pelo painel (regenerado quando a lista de servidores muda).',
         '# default aponta para porta descartavel: um id desconhecido nao deve',
         '# acabar conectado em algum servidor real.',
-        'map $vnc_sid $vnc_backend {',
+        f'map $vnc_sid{suf} $vnc_backend{suf} {{',
         '    default        "127.0.0.1:1";',
     ]
     for srv in servers or []:
@@ -1789,8 +1796,27 @@ def install_vnc_proxy(servers) -> tuple:
     import shutil
     import subprocess
 
-    snippet_path = '/etc/nginx/snippets/vnc-location.conf'
-    map_path = '/etc/nginx/conf.d/vnc-upstreams.conf'
+    # Multi-painel: os arquivos sao namespaced pela porta do painel
+    # (vnc-location.conf para a 2083, vnc-location_2085.conf para a 2085...).
+    # Sem isso, com varios paineis na mesma VPS, cada start reescrevia o MESMO
+    # arquivo global e o console VNC quebrava em todos os paineis menos o
+    # ultimo que subiu: o auth_request ia para o app errado (401 "Sessao
+    # expirada") e o mapa ficava sem os servidores dos outros paineis
+    # (console em branco).
+    # A porta real do painel (o default 2083 pode ter sido trocada) e o
+    # esquema real (atras do Cloudflare a conexao interna e HTTP, mas o
+    # cliente usa HTTPS - $painel_proto cuida disso).
+    try:
+        painel_port = int(os.environ.get('PORT') or 2083)
+    except (TypeError, ValueError):
+        painel_port = 2083
+    # 2083 (painel principal classico) mantem os nomes antigos: vhosts ja
+    # instalados por versoes anteriores continuam apontando para eles.
+    suf = '' if painel_port == 2083 else f'_{painel_port}'
+    snippet_name = f'vnc-location{suf}.conf'
+    map_name = f'vnc-upstreams{suf}.conf'
+    snippet_path = f'/etc/nginx/snippets/{snippet_name}'
+    map_path = f'/etc/nginx/conf.d/{map_name}'
     site_dirs = ['/etc/nginx/sites-enabled', '/etc/nginx/conf.d']
 
     if shutil.which('nginx') is None:
@@ -1800,17 +1826,12 @@ def install_vnc_proxy(servers) -> tuple:
 
     try:
         os.makedirs(os.path.dirname(snippet_path), exist_ok=True)
-        # A porta real do painel (o default 2083 pode ter sido trocado) e o
-        # esquema real (atras do Cloudflare a conexao interna e HTTP, mas o
-        # cliente usa HTTPS - $painel_proto cuida disso).
-        try:
-            painel_port = int(os.environ.get('PORT') or 2083)
-        except (TypeError, ValueError):
-            painel_port = 2083
         with open(snippet_path, 'w', encoding='utf-8') as f:
-            f.write(VNC_NGINX_LOCATION.replace('__PANEL_PORT__', str(painel_port)))
+            f.write(VNC_NGINX_LOCATION
+                    .replace('__PANEL_PORT__', str(painel_port))
+                    .replace('{SUF}', suf))
         with open(map_path, 'w', encoding='utf-8') as f:
-            f.write(vnc_nginx_upstreams_map(servers))
+            f.write(vnc_nginx_upstreams_map(servers, suf))
 
         # garantir que o mapa exista no contexto http
         with open('/etc/nginx/nginx.conf', 'r', encoding='utf-8') as f:
@@ -1835,12 +1856,22 @@ def install_vnc_proxy(servers) -> tuple:
                     continue
                 if 'listen' not in txt or 'server {' not in txt:
                     continue
-                if 'vnc-location.conf' in txt:
+                # So mexe em vhosts que apontam para ESTE painel: o proxy do
+                # VNC de um painel nunca deve ser incluido no vhost de outro,
+                # senao ele interceptaria (auth errado) o console do vizinho.
+                if f'proxy_pass http://127.0.0.1:{painel_port};' not in txt:
                     continue
                 if 'location / {' not in txt:
                     continue
-                novo = txt.replace('location / {',
-                                   f'include {snippet_path};\n\n    location / {{', 1)
+                # Remove TODOS os includes de VNC (legado e de outros paineis)
+                # e recoloca APENAS o deste painel — includes duplicados/estranhos
+                # faziam o primeiro vencer (auth errado) ou o nginx reclamar de
+                # location duplicada.
+                novo = re.sub(r'[ \t]*include /etc/nginx/snippets/vnc-location[^;]*;\n',
+                              '', txt)
+                if f'include {snippet_path};' not in novo:
+                    novo = novo.replace('location / {',
+                                        f'include {snippet_path};\n\n    location / {{')
                 with open(caminho, 'w', encoding='utf-8') as f:
                     f.write(novo)
                 incluidos += 1
@@ -1852,8 +1883,8 @@ def install_vnc_proxy(servers) -> tuple:
         subprocess.run(['nginx', '-s', 'reload'], capture_output=True, text=True)
         return True, {
             'success': True,
-            'message': (f'Proxy do console VNC atualizado. '
-                        f'{incluidos} server block(s)receberam o include.'),
+            'message': (f'Proxy do console VNC atualizado ({snippet_name}). '
+                        f'{incluidos} server block(s) receberam o include.'),
         }
     except Exception as e:
         return False, {'success': False, 'message': f'Falha ao instalar o proxy do VNC: {e}'}

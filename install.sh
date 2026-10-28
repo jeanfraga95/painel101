@@ -794,6 +794,93 @@ reload_nginx_safe() {
     return 1
 }
 
+# ── Garante snippet+mapa do VNC namespaced pela porta do painel ────
+# Cada painel da VPS (porta propria) tem os SEUS arquivos:
+#   2083 -> vnc-location.conf / vnc-upstreams.conf        (nomes legados)
+#   2085 -> vnc-location_2085.conf / vnc-upstreams_2085.conf
+# Sem isso todos os paineis reescreviam o MESMO arquivo global ao iniciar e o
+# console VNC quebrava em todos menos no ultimo painel que subiu.
+ensure_vnc_files_for_port() {
+    local port="$1"
+    { [ -z "$port" ] || [ -d /etc/nginx ] ; } || return 0
+    [ -d /etc/nginx ] || return 0
+    local suf
+    if [ "$port" = "2083" ]; then suf=""; else suf="_${port}"; fi
+    local sn="/etc/nginx/snippets/vnc-location${suf}.conf"
+    local mp="/etc/nginx/conf.d/vnc-upstreams${suf}.conf"
+    mkdir -p /etc/nginx/snippets /etc/nginx/conf.d
+    if [ ! -f "$mp" ]; then
+        cat > "$mp" << VNCMAP
+# Mapa de servidores VNC: id do servidor -> backend websockify.
+# Gerado pelo painel (regenerado quando a lista de servidores muda).
+# default aponta para porta descartavel: um id desconhecido nao deve
+# acabar conectado em algum servidor real.
+map \$vnc_sid${suf} \$vnc_backend${suf} {
+    default        "127.0.0.1:1";
+}
+VNCMAP
+    fi
+    if [ ! -f "$sn" ]; then
+        cat > "$sn" << 'VNCSNIP'
+# ---- Console VNC (NoVNC) ---------------------------------------------------
+# O navegador nunca fala com o servidor VNC direto: passa pelo painel. O nginx
+# valida a sessao do Flask com auth_request antes de encaminhar, entao o
+# console fica inacessivel a quem nao estiver logado como admin - e a porta do
+# websockify no servidor so aceita o IP do painel.
+# {SUF} namespaça as variaveis por painel: cada painel da VPS (porta propria)
+# tem o seu snippet/mapa (vnc-location_2085.conf etc.), senao o ULTIMO painel
+# a iniciar sobrescrevia o arquivo global e o console dos OUTROS paineis
+# quebrava (401 "Sessao expirada" ou tela branca).
+location ~ ^/servers/vnc/(?<vnc_sid{SUF}>\d+)/(?<vnc_rest{SUF}>.*)$ {
+    auth_request /_vnc_authz{SUF};
+    error_page 401 = @vnc_unauth{SUF};
+    error_page 403 = @vnc_denied{SUF};
+
+    proxy_pass http://$vnc_backend{SUF}/$vnc_rest{SUF};
+
+    # Upgrade de WebSocket: o noVNC fala direto com o x11vnc por tras do
+    # websockify, entao o handshake tem que passar intacto.
+    proxy_http_version 1.1;
+    proxy_set_header Host              $host;
+    proxy_set_header Upgrade           $http_upgrade;
+    proxy_set_header Connection        "upgrade";
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $painel_proto;
+    proxy_set_header CF-Connecting-IP  $http_cf_connecting_ip;
+
+    # Console e sessao longa e ociosa. Com o timeout padrao de 60s a conexao
+    # cairia sozinha toda vez que o usuario parasse para digitar um comando.
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_buffering off;
+}
+
+location @vnc_unauth{SUF} {
+    default_type application/json;
+    return 401 '{"success":false,"message":"Sessao expirada. Faca login novamente."}';
+}
+
+location @vnc_denied{SUF} {
+    default_type application/json;
+    return 403 '{"success":false,"message":"Acesso negado: requer admin."}';
+}
+
+# Subrequisicao do auth_request. "internal" impede que alguem chame pela
+# internet e use isto para sondar sessao de terceiros.
+location = /_vnc_authz{SUF} {
+    internal;
+    proxy_pass http://127.0.0.1:__PANEL_PORT__/_vnc_authz{SUF};
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+    proxy_set_header Cookie           $http_cookie;
+    proxy_set_header X-Original-URI   $request_uri;
+}
+VNCSNIP
+        sed -i "s|{SUF}|${suf}|g; s|__PANEL_PORT__|${port}|g" "$sn"
+    fi
+}
+
 # ── Vhost generico de um painel adicional/demo ────────────────────
 # Uso: write_panel_vhost servico porta dominio
 # Sempre aponta a porta CERTA do servico. Idempotente: pode ser chamado
@@ -801,6 +888,12 @@ reload_nginx_safe() {
 write_panel_vhost() {
     local svc="$1" port="$2" dom="$3"
     { [ -z "$svc" ] || [ -z "$port" ] || [ -z "$dom" ]; } && return 1
+    # Snippet/mapa do VNC deste painel (namespaced pela porta) PRECISAM
+    # existir antes do nginx -t, senao o include apontaria para arquivo
+    # inexistente e o nginx inteiro ficaria sem recarregar.
+    ensure_vnc_files_for_port "$port"
+    local vnc_snip
+    if [ "$port" = "2083" ]; then vnc_snip="vnc-location.conf"; else vnc_snip="vnc-location_${port}.conf"; fi
     mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
     cat > "/etc/nginx/sites-available/${svc}" << PNLVHOST
 # Vhost exclusivo para ${dom} -> ${svc} (porta ${port})
@@ -810,7 +903,7 @@ server {
     listen [::]:80;
     server_name ${dom};
     include /etc/nginx/snippets/painel-security.conf;
-    include /etc/nginx/snippets/vnc-location.conf;
+    include /etc/nginx/snippets/${vnc_snip};
     # Instalador distribuido pelo proprio painel (mesmo com repo privado)
     location = /install.sh {
         alias /opt/painel-master/install.sh;
@@ -829,7 +922,7 @@ server {
     ssl_certificate /etc/ssl/certs/ssl-cert-snakeoil.pem;
     ssl_certificate_key /etc/ssl/private/ssl-cert-snakeoil.key;
     include /etc/nginx/snippets/painel-security.conf;
-    include /etc/nginx/snippets/vnc-location.conf;
+    include /etc/nginx/snippets/${vnc_snip};
     add_header Strict-Transport-Security "max-age=31536000" always;
     # Instalador distribuido pelo proprio painel (mesmo com repo privado)
     location = /install.sh {
@@ -1611,6 +1704,15 @@ remove_panel() {
     pkill -9 -f "${r_dir}/app\.py" 2>/dev/null || true
     sleep 2
 
+    # Arquivos VNC namespaced deste painel: se ficarem sem o vhost que define
+    # a variavel capturada, o nginx -t falha (unknown variable) e TODOS os
+    # paineis da maquina param de recarregar.
+    local r_port
+    r_port="$(grep "^${r_svc}|" "$REGISTRY_FILE" 2>/dev/null | head -1 | cut -d'|' -f3)"
+    if [ -n "$r_port" ] && [ "$r_port" != "2083" ]; then
+        rm -f "/etc/nginx/snippets/vnc-location_${r_port}.conf" \
+              "/etc/nginx/conf.d/vnc-upstreams_${r_port}.conf"
+    fi
     registry_del_service "$r_svc"
 
     # Remove vhosts nginx relacionados ao diretório/serviço
@@ -1681,6 +1783,12 @@ disable_demo() {
         [ -d /etc/nginx/sites-available ] && grep -l "$d" /etc/nginx/sites-available/* 2>/dev/null | xargs -r rm -f
         [ -d /etc/nginx/sites-enabled ] && grep -l "$d" /etc/nginx/sites-enabled/* 2>/dev/null | xargs -r rm -f
         rm -rf "$d"
+        local dport
+        dport="$(grep "^${svc}|" "$REGISTRY_FILE" 2>/dev/null | head -1 | cut -d'|' -f3)"
+        if [ -n "$dport" ] && [ "$dport" != "2083" ]; then
+            rm -f "/etc/nginx/snippets/vnc-location_${dport}.conf" \
+                  "/etc/nginx/conf.d/vnc-upstreams_${dport}.conf"
+        fi
         registry_del_service "$svc"
         log "Demo removido: $d"
     done
@@ -2084,6 +2192,34 @@ if [ "$MODE" = "update" ]; then
     if [ -f "$INSTALL_DIR/venv/bin/pip" ]; then
         info "Atualizando dependencias Python..."
         "$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt" -q 2>/dev/null || true
+    fi
+
+    # Sincroniza o codigo de TODOS os paineis (adicionais/demos), nao so do
+    # principal: cada painel tem o proprio clone em /opt e sem isto ficava
+    # para sempre com codigo antigo (mudancas no proxy do VNC, por exemplo,
+    # precisam chegar em todos).
+    registry_sync
+    registry_rebuild_from_systemd
+    if [ -f "$REGISTRY_FILE" ]; then
+        local usvc udir uport udom ukind
+        while IFS='|' read -r usvc udir uport udom ukind; do
+            [ -z "$usvc" ] && continue
+            [ "$usvc" = "$SERVICE_NAME" ] && continue
+            [ -d "$udir/.git" ] || continue
+            info "Sincronizando codigo de $usvc..."
+            if ( cd "$udir" \
+                 && git_auth fetch --all --prune 2>/dev/null \
+                 && { git reset --hard origin/main 2>/dev/null || git reset --hard origin/master 2>/dev/null; } \
+                 && git clean -fd 2>/dev/null ); then
+                log "Codigo atualizado: $usvc"
+                if [ -f "$udir/venv/bin/pip" ] && [ -f "$udir/requirements.txt" ]; then
+                    "$udir/venv/bin/pip" install -r "$udir/requirements.txt" -q 2>/dev/null || true
+                fi
+                systemctl restart "$usvc" 2>/dev/null || true
+            else
+                warn "Nao sincronizou $usvc (mantendo o codigo atual)"
+            fi
+        done < "$REGISTRY_FILE"
     fi
 
     # Reaplica o hardening do nginx (HTTPS real atras do Cloudflare, CSP,

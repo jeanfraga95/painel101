@@ -2263,7 +2263,14 @@ def panel_public_ip() -> str:
     O servidor so aceita conexao do VNC vinda deste IP, que e o caminho normal
     de acesso (pelo navegador, via este painel).
     """
-    return (os.environ.get('PANEL_PUBLIC_IP') or '200.234.207.46').strip()
+    ip = (os.environ.get('PANEL_PUBLIC_IP') or '').strip()
+    if ip:
+        return ip
+    # Sem env: NAO ha fallback fixo (um IP fixo no codigo apontaria para uma
+    # VPS qualquer e o firewall do servidor VNC liberaria o IP ERRADO, fazendo
+    # o console abrir preto/tela branca). O IP real e descoberto na hora da
+    # instalacao via SSH_CONNECTION (ver _panel_ip_from_ssh).
+    return ''
 
 
 @app.route('/servers/setup_vnc/<int:server_id>', methods=['POST'])
