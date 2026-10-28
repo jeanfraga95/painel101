@@ -2201,7 +2201,9 @@ if [ "$MODE" = "update" ]; then
     registry_sync
     registry_rebuild_from_systemd
     if [ -f "$REGISTRY_FILE" ]; then
-        local usvc udir uport udom ukind
+        # NOTA: este trecho roda em escopo de topo de script (modo update),
+        # entao NAO use 'local' aqui — bash reclama ("local: can only be
+        # used in a function"). As variaveis do while sao locais ao loop.
         while IFS='|' read -r usvc udir uport udom ukind; do
             [ -z "$usvc" ] && continue
             [ "$usvc" = "$SERVICE_NAME" ] && continue
